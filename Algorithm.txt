@@ -6,7 +6,7 @@ Octree-AnyGS(input_data, gaussian_type = 3DGS) # Start by running OctreeGS on in
 
 Foreach (camera_pose, gt_image) in input_data:
 
-    voxels = GetVoxels(camera_pose) # Get the correct voxels + LOD for a given view (should be implicitly selected by Octree-GS given camera_pose)
+    voxels = GetVoxels(camera_pose) # Get the correct voxels + LOD for a given view (voxels should be implicitly selected by Octree-AnyGS given camera_pose)
     renders = [N_RENDERS] # Collection of renders, each using a different subset of gaussian primitives
 
     For i=0 to N_RENDERS:

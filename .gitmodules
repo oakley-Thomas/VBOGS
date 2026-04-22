@@ -2,3 +2,7 @@
 	path = Octree-AnyGS
 	url = https://github.com/city-super/Octree-AnyGS.git
 	branch = main
+[submodule "vbgs"]
+	path = vbgs
+	url = https://github.com/VersesTech/vbgs.git
+	branch = main
