@@ -73,6 +73,36 @@ scene quality.
 Use `--write-config-only` to inspect the generated YAML without starting
 training.
 
+## M3 Point Cloud Export
+
+M3 exports a dense-ish world-frame stereo point cloud from the same KITTI-360
+drive using the `vbogs-torch` env:
+
+```bash
+bash -lc 'source scripts/envs.sh activate-torch >/dev/null && \
+python scripts/stereo_to_pointcloud.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --selection-metadata data/octree_anygs_colmap/2013_05_28_drive_0008_sync/metadata.json \
+  --write-ply'
+```
+
+That writes artifacts under `data/points_world/2013_05_28_drive_0008_sync/`:
+
+- `points_world.npz` with keys `xyz`, `rgb`, and `frame_id`
+- `points_world_metadata.json` with the matcher and filtering settings
+- `points_world.ply` when `--write-ply` is passed for quick viewer sanity checks
+
+The current implementation ships with an `sgbm` provider and a forward-looking
+`--matcher` interface so a future RAFT-Stereo backend can preserve the same
+output contract. The validity mask keeps only pixels that pass:
+
+- minimum disparity / depth bounds
+- left-right consistency
+- a local grayscale texture threshold
+
+Use `--pixel-step` and `--max-points-per-frame` to trade off density vs runtime
+and file size on the dev machine.
+
 ### Torch Stack
 
 The current `vbogs-torch` setup is intentionally pinned to a CUDA 12.8 PyTorch

@@ -71,12 +71,12 @@ Artifacts live under `outputs/kitti360/2013_05_28_drive_0008_sync/2026-04-22_15:
 
 Depends on: M1, stereo data source, stereo matcher choice.
 
-- [ ] Script `scripts/stereo_to_pointcloud.py` (runs in `vbogs-torch`)
-- [ ] Define a matcher abstraction / CLI flag (`--matcher`) so disparity can come from `sgbm`, `raft`, or another future provider while preserving the same `points_world.npz` output contract
-- [ ] For each stereo pair: disparity → depth → unproject → world-frame
-- [ ] Apply validity mask (left-right consistency, texture threshold)
-- [ ] Concat across frames; save `points_world.npz` with keys `xyz`, `rgb`, `frame_id`
-- [ ] Sanity check: visualize point cloud in a viewer; should match scene geometry
+- [x] Script `scripts/stereo_to_pointcloud.py` (runs in `vbogs-torch`)
+- [x] Define a matcher abstraction / CLI flag (`--matcher`) so disparity can come from `sgbm`, `raft`, or another future provider while preserving the same `points_world.npz` output contract
+- [x] For each stereo pair: disparity → depth → unproject → world-frame
+- [x] Apply validity mask (left-right consistency, texture threshold)
+- [x] Concat across frames; save `points_world.npz` with keys `xyz`, `rgb`, `frame_id`
+- [x] Sanity check: visualize point cloud in a viewer; should match scene geometry
 
 ### M4a — Point → anchor bucketing [LLM]
 
