@@ -52,11 +52,20 @@ Two conda envs required (JAX/PyTorch CUDA conflict is real; don't try to unify).
 
 Depends on: M1, stereo data source, training budget.
 
-- [ ] Prepare input in Octree-AnyGS's expected format (COLMAP-style posed RGB)
-- [ ] Pick a config from `Octree-AnyGS/config/` that stays within the `46 GB` VRAM budget
-- [ ] Run training to convergence
-- [ ] Save checkpoint (`.ply` + MLP weights)
-- [ ] Sanity render a held-out view; confirm photometric quality
+Local-dev note: the original scene-training budget was `46 GB`, but the
+repo now includes a conservative `16 GB` dev-machine workflow. Use the local
+path first, then scale the config back up on the server if needed.
+
+- [x] Prepare input in Octree-AnyGS's expected format (COLMAP-style posed RGB)
+- [x] Pick a config from `Octree-AnyGS/config/` that stays within the `46 GB` VRAM budget
+- [x] Run training to convergence
+- [x] Save checkpoint (`.ply` + MLP weights)
+- [x] Sanity render a held-out view; confirm photometric quality
+
+Completed on local dev machine with the conservative `16 GB` preset:
+`render_mode=RGB`, `add_prefilter=false`, `densification=false`,
+`resolution=4`, `feat_dim=16`, `base_layer=9`, `iterations=15000`.
+Artifacts live under `outputs/kitti360/2013_05_28_drive_0008_sync/2026-04-22_15:47:13`.
 
 ### M3 — Stereo → world point cloud [LLM]
 

@@ -20,6 +20,59 @@ bash scripts/envs.sh check-torch-stack
 bash scripts/envs.sh smoke-test-jax
 ```
 
+## M2 Training Workflow
+
+M2 now has a repo-owned local workflow for preparing KITTI-360 drive
+`2013_05_28_drive_0008_sync` into the COLMAP-style ingest that Octree-AnyGS
+expects and then launching a conservative LoD training run that fits inside a
+16 GB dev GPU budget.
+
+Prepare the dataset:
+
+```bash
+python scripts/prepare_kitti360_colmap.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --frame-step 10 \
+  --max-frames 160
+```
+
+That writes a prepared dataset under
+`data/octree_anygs_colmap/2013_05_28_drive_0008_sync/` with:
+
+- `images/`
+- `sparse/0/cameras.txt`
+- `sparse/0/images.txt`
+- `sparse/0/points3D.ply`
+
+Generate a 16 GB-safe config and launch training:
+
+```bash
+python scripts/train_octree_anygs.py \
+  --dataset-path data/octree_anygs_colmap/2013_05_28_drive_0008_sync \
+  --gpu 0
+```
+
+The default local preset intentionally trades fidelity for safety:
+
+- `resolution: 4`
+- `feat_dim: 16`
+- `base_layer: 9`
+- `iterations: 15000`
+- `render_mode: RGB`
+- `add_prefilter: false`
+- `densification: false`
+
+If you have headroom after a first successful run, the least risky upgrades are
+to lower `--resolution` from `4` to `2` and increase `--iterations`.
+
+The local preset also disables Octree-AnyGS densification because the current
+upstream stats path is incompatible with the installed `gsplat` tensor shapes
+on this machine. That keeps M2 stable on the dev box at the cost of some final
+scene quality.
+
+Use `--write-config-only` to inspect the generated YAML without starting
+training.
+
 ### Torch Stack
 
 The current `vbogs-torch` setup is intentionally pinned to a CUDA 12.8 PyTorch
