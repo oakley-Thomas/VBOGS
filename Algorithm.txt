@@ -1,23 +1,236 @@
-N_RENDERS = # of renders to compare for uncertainty calculation
-SUBSAMPLES = # of gaussian primitives to subsample (per voxel)
+# VBOGS — Octree-AnyGS + VBGS uncertainty head + next-best-view
+#
+# Primary scene repr : Octree-AnyGS (PyTorch, SGD-trained on posed RGB frames;
+#                      stereo is used to produce a depth cloud for Stage 2, not
+#                      as a training signal into Stage 1)
+# Uncertainty head   : per-anchor Variational Bayes GMM (vbgs, JAX)
+# Output             : next-best camera pose that maximally reduces uncertainty
+#
+# Terminology note: Octree-AnyGS stores anchors as a flat tensor, each with a
+# level l; the anchor's cell size is cur_size(l) = voxel_size / fork^l. There
+# is no separate "voxel" object — the anchor IS the voxel at its LOD. Below,
+# "anchor/voxel" are used interchangeably.
 
+# ---- Hyperparameters ---------------------------------------------------------
+K_INIT                   # initial # GMM components per anchor (default: n_offsets)
+K_MAX                    # cap on components per anchor
+K_GROWTH_FACTOR          # how to step K when under-modeled (e.g. K -> 2K)
+ELBO_IMPROVEMENT_TOL     # min per-point ELBO gain to accept a larger K
+VBEM_BATCH_SIZE          # points per VBEM sufficient-stat batch
+MIN_POINTS_PER_ANCHOR    # below this -> flag as unobserved (U_MAX)
+NBV_CANDIDATES           # set of candidate camera poses to score
 
-Octree-AnyGS(input_data, gaussian_type = 3DGS) # Start by running OctreeGS on input data to initialize gaussians
+# =============================================================================
+# STAGE 1 — Train the scene (unchanged upstream)
+# =============================================================================
+scene = Octree_AnyGS.train(input_data, gaussian_type=3DGS)
+# input_data = {(cam_pose_L, cam_pose_R, img_L, img_R, K_L, K_R, baseline)}
 
-Foreach (camera_pose, gt_image) in input_data:
+# =============================================================================
+# STAGE 2 — Build a 6D point cloud from stereo
+# =============================================================================
+points_world = []                                # (N, 6) = xyz + rgb
+Foreach (cam_L, cam_R, img_L, img_R, K_L, K_R, baseline) in input_data:
+    disparity = StereoMatch(img_L, img_R)        # SGBM / RAFT-Stereo / etc.
+    depth_L   = (K_L.fx * baseline) / disparity  # mask out invalid disparities
+    pts_cam   = Unproject(depth_L, K_L)          # (H*W, 3) in left-cam frame
+    pts_world = cam_L.transform(pts_cam)         # to world frame
+    rgb       = img_L.reshape(-1, 3)
+    points_world.append(concat(pts_world, rgb, axis=-1))
+points_world = concat(points_world)              # (sum N_i, 6)
 
-    voxels = GetVoxels(camera_pose) # Get the correct voxels + LOD for a given view (voxels should be implicitly selected by Octree-AnyGS given camera_pose)
-    renders = [N_RENDERS] # Collection of renders, each using a different subset of gaussian primitives
+# VBGS expects normalized data; reuse vbgs.data.utils.normalize_data.
+# KEEP BOTH: Stage 3 buckets points in WORLD coords (to match Octree-AnyGS's
+# grid) but fits VBGS in NORMALIZED coords (to match its prior scale).
+points_norm, norm_params = normalize_data(points_world)
 
-    For i=0 to N_RENDERS:
-        render_gaussians = {} # All gaussians needed to render an image from a given viewpoint
-        For voxel in voxels:
-            render_gaussians += voxel.GetGaussians(SUBSAMPLES) 
+# =============================================================================
+# STAGE 3 — Per-anchor VBGS fit (post-hoc uncertainty head)
+# =============================================================================
+# Point -> anchor assignment uses the SAME grid Octree-AnyGS uses to place
+# anchors (see scene/basic_model.py:octree_sample). Two points land in the same
+# anchor iff their integer grid coords at that anchor's level match:
+#
+#     cur_size(l)   = scene.voxel_size / scene.fork ** l
+#     grid_coord(p, l) = round((p - scene.init_pos) / cur_size(l))
+#     anchor a lives at grid coord  round((a.pos - scene.init_pos)/cur_size(a.level))
+#     # (the scene.padding offset that Octree-AnyGS adds when MATERIALIZING an
+#     # anchor position cancels out because we recompute grid_coord for both
+#     # sides -- no need to subtract padding here.)
 
-        renders[i] = Render(render_gaussians)
-        loss = ComputeLoss(renders[i], gt_image) # which loss function?
+# Real fields (pc = scene): pc._anchor [N,3] (world), pc._level [N,1] int,
+# pc.voxel_size, pc.fork, pc.init_pos, pc.n_offsets. No get_anchors() method.
+anchor_pos   = pc._anchor                         # [N, 3], world coords
+anchor_level = pc._level.squeeze(1)               # [N]
 
-    uncertainty_map = ComputeUncertainty(renders) # an uncertainty map for each pixel? gaussian? voxel?
-    distribution = ComputeDistribution(renders) # what does this distribution represent?
-    kl_divergence = KL(distribution, prior) # how do we determine the prior distribution (log-scale variance from distance to camera_pose)
-        
+# Precompute grid_coord per anchor, bucketed by level, for O(1) lookup.
+anchor_index = {}   # (level, grid_coord_tuple) -> anchor_id
+For i in range(N):
+    l  = anchor_level[i]
+    gc = round((anchor_pos[i] - pc.init_pos) / cur_size(l))
+    anchor_index[(l, tuple(gc))] = i
+
+# Bucket points to anchors. Bucketing is done in WORLD coords (points_world[:3])
+# to match Octree-AnyGS's grid; the FITTED data is the corresponding rows of
+# points_norm (VBGS expects normalized input).
+#
+# A point that falls into an anchor's cell at level l also falls into the
+# containing cell at every level <= l. We assign the point to EVERY anchor that
+# contains it, not just the finest: Octree-AnyGS picks a single LOD per view at
+# render time, so a coarse anchor's uncertainty must reflect what it would see
+# if it were the one chosen. Restricting to the finest anchor would starve
+# coarse anchors of data in well-sampled regions and make them look spuriously
+# uncertain — exactly when a far camera would select them.
+pts_by_anchor = defaultdict(list)
+For p_world, p_norm in zip(points_world, points_norm):
+    For l in range(scene.levels):                 # all levels, not just finest
+        gc = tuple(round((p_world[:3] - pc.init_pos) / cur_size(l)))
+        If (l, gc) in anchor_index:
+            pts_by_anchor[ anchor_index[(l, gc)] ].append(p_norm)
+
+#
+# Grow K until the mixture stops learning new structure. Signal: per-point
+# ELBO on the anchor's own points.
+# Caveat: the ELBO's KL term scales with K (Dirichlet on pi has dim K; per-
+# component Normal-Wishart KL sums over K). Per-point mean ELBO is therefore
+# a biased model-selection criterion. It's defensible as a pragmatic choice
+# (held-out log-likelihood or BIC would be cleaner; swap in later if needed).
+
+Function FitAnchor(pts_a, K):
+    mean_init   = init_means(pts_a, K)           # k-means++ or random_mean_init
+    prior_model = get_volume_delta_mixture(
+        n_components=K, mean_init=mean_init,
+        position_event_shape=(3,1), beta=0, learning_rate=1)
+    model = copy(prior_model)
+    prior_stats = space_stats = color_stats = None
+    For each batch in chunks(pts_a, VBEM_BATCH_SIZE):
+        model, prior_stats, space_stats, color_stats = fit_gmm_step(
+            prior_model, model, batch, VBEM_BATCH_SIZE,
+            prior_stats, space_stats, color_stats)
+    elbo_arr, _    = compute_elbo_delta(model, pts_a)   # (N,)
+    elbo_per_point = mean(elbo_arr)
+    Return model, elbo_per_point
+
+anchor_posterior = [None] * N
+For i in range(N):
+    pts_a = pts_by_anchor[i]
+    If |pts_a| < MIN_POINTS_PER_ANCHOR:
+        anchor_posterior[i] = None               # unobserved -> high uncertainty
+        continue
+
+    K = K_INIT                                   # default: scene.n_offsets
+    model, elbo = FitAnchor(pts_a, K)
+
+    While K < K_MAX:
+        K_next              = min(K_MAX, K_GROWTH_FACTOR(K))
+        model_next, elbo_nx = FitAnchor(pts_a, K_next)
+        If elbo_nx - elbo < ELBO_IMPROVEMENT_TOL:
+            Break                                # adding components no longer helps
+        model, elbo, K = model_next, elbo_nx, K_next
+
+    anchor_posterior[i] = model
+    # Optional: if final K hit K_MAX with ELBO still improving, flag anchor
+    # as under-modeled and let Octree-AnyGS densify it on a follow-up pass.
+
+# =============================================================================
+# STAGE 4 — Reduce posterior to a per-anchor uncertainty scalar
+# =============================================================================
+# Posterior per component: Normal-Wishart(mean, kappa, u, n) over (mu, Sigma)
+#   - kappa : pseudo-count on the mean     (high => confident location)
+#   - n     : dof of the Wishart           (high => confident covariance)
+#   - Dirichlet alpha on mixing weights pi (high => confident existence)
+# Differential entropy H(q) of Normal-Wishart has a closed form; use it or a
+# cheap surrogate. Aggregate over components weighted by E[pi].
+
+U = zeros(N)
+For i in range(N):
+    If anchor_posterior[i] is None:
+        U[i] = U_MAX                             # unseen anchor = maximally uncertain
+    Else:
+        q      = anchor_posterior[i]
+        pi_bar = E[q.mixture.prior]              # (K,)  expected mixing weights
+        H_k    = NormalWishartEntropy(q.likelihood) + DeltaEntropy(q.delta)
+        U[i]   = sum_k( pi_bar[k] * H_k[k] )     # expected posterior entropy
+        # Note: entropies are computed in NORMALIZED coords (shared across
+        # anchors), so comparisons across anchors are unit-consistent.
+
+# =============================================================================
+# STAGE 5 — Next-best-view selection
+# =============================================================================
+# Project per-anchor uncertainty through Octree-AnyGS's own LOD-selected
+# splatting to get a pixel-space "uncertainty image" per candidate pose, then
+# integrate. This automatically handles occlusion and LOD.
+#
+# Octree-AnyGS's render() wires colors from get_color_mlp() -- no aux channel
+# slot. We sidestep the MLP by calling the geometry path (generate_gaussians)
+# and substituting a scalar color tensor before rasterizing:
+
+Function render_scalar(cam, pc, per_anchor_scalar):
+    # 1. LOD mask selection (same as render()). At NBV time Octree-AnyGS is
+    #    past training; if pc.progressive is False, the iteration arg is
+    #    ignored. Passing a large value (or using set_anchor_mask_perlevel
+    #    with cur_level = pc.levels - 1) forces all levels to be active.
+    pc.set_anchor_mask(cam.camera_center, iteration=INT_MAX, resolution_scale=cam.resolution_scale)
+    visible_mask = pc._anchor_mask
+    # 2. Reuse geometry/opacity/MLP-mask from the normal path
+    xyz, _color, opacity, scaling, rot, _sh, selection_mask = \
+        pc.generate_gaussians(cam, visible_mask)
+    # 3. Per-Gaussian uncertainty: broadcast anchor scalar over n_offsets,
+    #    then apply the opacity-MLP mask (same mask generate_gaussians used).
+    u_per_anchor   = per_anchor_scalar[visible_mask]                # [M]
+    u_per_offset   = u_per_anchor.repeat_interleave(pc.n_offsets)   # [M*n_offsets]
+    u_per_gaussian = u_per_offset[selection_mask][:, None]          # [G, 1]
+    # 4. Rasterize (gsplat accepts arbitrary-dim colors). Use a zero
+    #    background so empty pixels contribute 0 to both the uncertainty and
+    #    alpha images -- this keeps the per-surface normalization in Stage 5
+    #    honest (pixels with no geometry have alpha=0 and are excluded).
+    unc_image, alpha_image, _ = gsplat.rasterization(
+        means=xyz, quats=rot, scales=scaling,
+        opacities=opacity.squeeze(-1),
+        colors=u_per_gaussian,
+        viewmats=cam.world_view_transform.T[None],
+        Ks=cam.K[None],
+        backgrounds=zeros(1),
+        width=cam.W, height=cam.H,
+        packed=False, sh_degree=None,            # raw scalar, not SH
+        render_mode=pc.render_mode)
+    Return unc_image[0, ..., 0], alpha_image[0, ..., 0]   # both (H, W)
+
+best_score, best_pose = -inf, None
+Foreach cam in NBV_CANDIDATES:
+    unc_image, alpha_image = render_scalar(cam, scene, U)
+    # Alpha-normalized score: expected posterior entropy per unit of visible
+    # surface. Rewards poses that see UNCERTAIN content, not poses that
+    # merely see LOTS of content (a close-up of a confident wall would
+    # otherwise dominate). eps guards against all-empty renders.
+    score = sum(unc_image) / (sum(alpha_image) + EPS)
+    # Optional: subtract a motion/cost term for reachability
+    # score -= lambda * TravelCost(current_pose, cam)
+
+    If score > best_score:
+        best_score, best_pose = score, cam
+
+Return best_pose
+
+# =============================================================================
+# Notes
+# =============================================================================
+# - Framework bridge: Octree-AnyGS is PyTorch, vbgs is JAX. Do the VBEM fit in
+#   a separate process / script and pass numpy arrays across. Don't try to
+#   share autograd graphs.
+# - Color model: vbgs uses raw RGB (delta MVN, fixed precision); Octree-AnyGS
+#   uses SH. That's fine here — we only need vbgs's *posterior parameters* for
+#   uncertainty, not its renders.
+# - Stereo depth quality dominates anchor-point-count sparsity at range. Mask
+#   out low-confidence disparities before unprojection (left-right consistency
+#   check, texture threshold).
+# - Continual variant: fit_gmm_step already supports streaming updates
+#   (prior_stats/space_stats/color_stats carry across batches) — use this if
+#   you want the uncertainty head to update as new frames arrive.
+# - Empty-region blindness: render_scalar only splats through existing anchors.
+#   Truly unobserved regions (no anchor at any LOD) contribute zero to the NBV
+#   score, so the current formulation cannot direct the camera toward
+#   never-seen volumes — only toward poorly-modeled ones. If exploration into
+#   empty space matters, pair this with a volumetric occupancy prior or a
+#   per-pixel "unknown ray" penalty; that's a follow-on extension, not part of
+#   this algorithm.
