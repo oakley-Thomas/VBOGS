@@ -8,17 +8,17 @@ Actionable plan derived from [Algorithm.txt](Algorithm.txt). Check items off as 
 
 These gate delegation. Each LLM task below needs its answer before it can run.
 
-- [x] **Stereo data source** — KITTI-360 perspective stereo (`image_00` / `image_01`); poses = shipped GT (fused GPS+IMU + laser); native KITTI-360 layout → needs adapter to Octree-AnyGS's COLMAP-style ingest. Specific drive TBD.
-- [ ] **Stereo matcher** — OpenCV SGBM (cheap, CPU) vs RAFT-Stereo (better, GPU)
-- [ ] **Octree-AnyGS training budget** — train-per-scene vs reuse a checkpoint
-- [ ] **NBV candidate pose set** — dense grid / sphere orbit / reachable set from planner
-- [ ] **Starting hyperparameters** (commit to values before M4b)
-  - [ ] `K_INIT` (default: `pc.n_offsets`, =10 in Octree-AnyGS default)
-  - [ ] `K_MAX` (suggested: `4 * K_INIT`)
-  - [ ] `K_GROWTH_FACTOR` (suggested: `K -> 2K`)
-  - [ ] `MIN_POINTS_PER_ANCHOR` (suggested: 20)
-  - [ ] `ELBO_IMPROVEMENT_TOL` (suggested: 0.01 nats/point)
-- [ ] **Entropy definition** — π-weighted per-component (default) vs total `H(q)`
+- [x] **Stereo data source** — KITTI-360 perspective stereo (`image_00` / `image_01`); poses = shipped GT (fused GPS+IMU + laser); native KITTI-360 layout → needs adapter to Octree-AnyGS's COLMAP-style ingest. Chosen drive: `2013_05_28_drive_0008_sync`.
+- [x] **Stereo matcher** — Start with OpenCV `StereoSGBM` as the baseline implementation. Keep the M3 interface provider-agnostic so we can later swap in RAFT-Stereo or another backend without changing downstream file formats.
+- [x] **Octree-AnyGS training budget** — hard cap: `46 GB` VRAM max for any training/inference step. Strategy: `train-per-scene` on the chosen KITTI-360 drive rather than reusing a checkpoint.
+- [x] **NBV candidate pose set** — reachable set from planner. Initial implementation may approximate this with a ground-vehicle local lattice, but the M6 interface should accept planner-produced candidate poses directly later.
+- [x] **Starting hyperparameters** (commit to values before M4b)
+  - [x] `K_INIT = pc.n_offsets = 10` (matching the current Octree-AnyGS default)
+  - [x] `K_MAX = 4 * K_INIT = 40`
+  - [x] `K_GROWTH_FACTOR = 2` (`K -> 2K`)
+  - [x] `MIN_POINTS_PER_ANCHOR = 20`
+  - [x] `ELBO_IMPROVEMENT_TOL = 0.01` nats/point
+- [x] **Entropy definition** — use π-weighted per-component entropy as the Stage 4/5 scalar uncertainty definition; do not use total mixture entropy `H(q)` in the initial implementation.
 
 ---
 
@@ -42,18 +42,18 @@ Each milestone is self-contained once its dependencies and decisions above are r
 
 Two conda envs required (JAX/PyTorch CUDA conflict is real; don't try to unify).
 
-- [ ] Create `vbogs-torch` env (Octree-AnyGS deps; see `Octree-AnyGS/environment.yml`)
-- [ ] Create `vbogs-jax` env (vbgs deps; see `vbgs/install_deps.sh`)
-- [ ] Smoke test: `vbogs-torch` runs `Octree-AnyGS/render.py --help`
-- [ ] Smoke test: `vbogs-jax` imports `vbgs.model.train.fit_gmm_step` without error
-- [ ] Document activation commands in a `scripts/envs.sh`
+- [x] Create `vbogs-torch` env (Octree-AnyGS deps; see `Octree-AnyGS/environment.yml`)
+- [x] Create `vbogs-jax` env (vbgs deps; see `vbgs/install_deps.sh`)
+- [x] Smoke test: `vbogs-torch` runs `Octree-AnyGS/render.py --help`
+- [x] Smoke test: `vbogs-jax` imports `vbgs.model.train.fit_gmm_step` without error
+- [x] Document activation commands in a `scripts/envs.sh`
 
 ### M2 — Train Octree-AnyGS [LLM, mostly ops]
 
 Depends on: M1, stereo data source, training budget.
 
 - [ ] Prepare input in Octree-AnyGS's expected format (COLMAP-style posed RGB)
-- [ ] Pick a config from `Octree-AnyGS/config/`
+- [ ] Pick a config from `Octree-AnyGS/config/` that stays within the `46 GB` VRAM budget
 - [ ] Run training to convergence
 - [ ] Save checkpoint (`.ply` + MLP weights)
 - [ ] Sanity render a held-out view; confirm photometric quality
@@ -63,6 +63,7 @@ Depends on: M1, stereo data source, training budget.
 Depends on: M1, stereo data source, stereo matcher choice.
 
 - [ ] Script `scripts/stereo_to_pointcloud.py` (runs in `vbogs-torch`)
+- [ ] Define a matcher abstraction / CLI flag (`--matcher`) so disparity can come from `sgbm`, `raft`, or another future provider while preserving the same `points_world.npz` output contract
 - [ ] For each stereo pair: disparity → depth → unproject → world-frame
 - [ ] Apply validity mask (left-right consistency, texture threshold)
 - [ ] Concat across frames; save `points_world.npz` with keys `xyz`, `rgb`, `frame_id`
@@ -117,7 +118,7 @@ Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_rend
 
 - [ ] Implement `render_scalar(cam, pc, per_anchor_scalar)` per Stage 5
 - [ ] Return `(unc_image, alpha_image)` — both needed for the score
-- [ ] Implement candidate pose generator (per chosen strategy)
+- [ ] Implement candidate pose generator for a planner-reachable set; first pass can be a ground-plane local lattice with yaw samples, but keep the input interface compatible with future planner-emitted poses
 - [ ] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
 - [ ] Return best pose + diagnostic dump of top-K candidates
 
