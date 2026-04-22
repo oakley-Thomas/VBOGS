@@ -1,0 +1,4 @@
+[submodule "Octree-AnyGS"]
+	path = Octree-AnyGS
+	url = https://github.com/city-super/Octree-AnyGS.git
+	branch = main
