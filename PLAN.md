@@ -8,7 +8,7 @@ Actionable plan derived from [Algorithm.txt](Algorithm.txt). Check items off as 
 
 These gate delegation. Each LLM task below needs its answer before it can run.
 
-- [ ] **Stereo data source** — dataset/rig, pose source (SLAM / GPS+IMU / GT), filesystem layout
+- [x] **Stereo data source** — KITTI-360 perspective stereo (`image_00` / `image_01`); poses = shipped GT (fused GPS+IMU + laser); native KITTI-360 layout → needs adapter to Octree-AnyGS's COLMAP-style ingest. Specific drive TBD.
 - [ ] **Stereo matcher** — OpenCV SGBM (cheap, CPU) vs RAFT-Stereo (better, GPU)
 - [ ] **Octree-AnyGS training budget** — train-per-scene vs reuse a checkpoint
 - [ ] **NBV candidate pose set** — dense grid / sphere orbit / reachable set from planner
