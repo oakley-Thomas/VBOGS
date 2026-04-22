@@ -1,0 +1,23 @@
+N_RENDERS = # of renders to compare for uncertainty calculation
+SUBSAMPLES = # of gaussian primitives to subsample (per voxel)
+
+
+Octree-AnyGS(input_data, gaussian_type = 3DGS) # Start by running OctreeGS on input data to initialize gaussians
+
+Foreach (camera_pose, gt_image) in input_data:
+
+    voxels = GetVoxels(camera_pose) # Get the correct voxels + LOD for a given view (should be implicitly selected by Octree-GS given camera_pose)
+    renders = [N_RENDERS] # Collection of renders, each using a different subset of gaussian primitives
+
+    For i=0 to N_RENDERS:
+        render_gaussians = {} # All gaussians needed to render an image from a given viewpoint
+        For voxel in voxels:
+            render_gaussians += voxel.GetGaussians(SUBSAMPLES) 
+
+        renders[i] = Render(render_gaussians)
+        loss = ComputeLoss(renders[i], gt_image) # which loss function?
+
+    uncertainty_map = ComputeUncertainty(renders) # an uncertainty map for each pixel? gaussian? voxel?
+    distribution = ComputeDistribution(renders) # what does this distribution represent?
+    kl_divergence = KL(distribution, prior) # how do we determine the prior distribution (log-scale variance from distance to camera_pose)
+        
