@@ -134,3 +134,62 @@ It verifies:
 - `torch_scatter` CUDA execution
 - `gsplat` import
 - `gaussian_renderer.render` import through `Octree-AnyGS`
+
+## M4 Point Bucketing And Anchor Fits
+
+M4 is split into:
+
+- `M4a` in `vbogs-torch`: bucket each stereo point into every Octree-AnyGS
+  anchor cell that contains it, while also writing the globally normalized
+  `(xyz, rgb)` rows that VBGS expects.
+- `M4b` in `vbogs-jax`: fit a post-hoc VBGS posterior per anchor from those
+  packed point assignments.
+
+Run M4a:
+
+```bash
+bash -lc 'source scripts/envs.sh activate-torch >/dev/null && \
+python scripts/bucket_points.py \
+  --drive 2013_05_28_drive_0008_sync'
+```
+
+This writes to `data/m4/2013_05_28_drive_0008_sync/`:
+
+- `points_norm.npz` with `points_norm` plus raw sidecar arrays
+- `pts_by_anchor.npz` with packed `anchor_offsets` / `point_indices`
+- `norm_params.json`
+- `bucket_metadata.json`
+
+The current dev-scene summary on the bundled artifacts is:
+
+- `12,792,935` stereo points
+- `267,830` anchors across `9` levels
+- `104,577` anchors with at least `20` assigned points
+
+Run a smoke test for M4b:
+
+```bash
+bash -lc 'source scripts/envs.sh activate-jax >/dev/null && \
+python scripts/fit_anchors.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --max-observed-anchors 5 \
+  --log-every 1'
+```
+
+Smoke runs write:
+
+- `anchor_posterior.smoke.npz`
+- `fit_metadata.smoke.json`
+
+Run the full M4b fit by omitting `--max-observed-anchors`; that writes:
+
+- `anchor_posterior.npz`
+- `fit_metadata.json`
+
+The initial hyperparameter defaults match `PLAN.md`:
+
+- `K_INIT=10`
+- `K_MAX=40`
+- `K_GROWTH_FACTOR=2`
+- `MIN_POINTS_PER_ANCHOR=20`
+- `ELBO_IMPROVEMENT_TOL=0.01`

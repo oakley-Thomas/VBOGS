@@ -84,14 +84,18 @@ Depends on: M2, M3. Runs in `vbogs-torch` (needs Octree-AnyGS checkpoint).
 
 Reference: [Octree-AnyGS/scene/basic_model.py:100-120](Octree-AnyGS/scene/basic_model.py#L100-L120) (`octree_sample` — grid discretization to match exactly).
 
-- [ ] Script `scripts/bucket_points.py`
-- [ ] Load checkpoint; read `pc._anchor`, `pc._level`, `pc.voxel_size`, `pc.fork`, `pc.init_pos`
-- [ ] Build `anchor_index: (level, grid_coord) -> anchor_id`
-- [ ] Bucket each world-frame point at **every** level it falls into (not just finest)
-- [ ] Apply `normalize_data` from vbgs to produce `points_norm`
-- [ ] Save `pts_by_anchor.npz`: per-anchor arrays of indices into `points_norm`
-- [ ] Save `points_norm.npz` + `norm_params.json`
-- [ ] Sanity check: print histogram of per-anchor point counts; inspect a few anchors
+- [x] Script `scripts/bucket_points.py`
+- [x] Load checkpoint; read `pc._anchor`, `pc._level`, `pc.voxel_size`, `pc.fork`, `pc.init_pos`
+- [x] Build `anchor_index: (level, grid_coord) -> anchor_id`
+- [x] Bucket each world-frame point at **every** level it falls into (not just finest)
+- [x] Apply `normalize_data` from vbgs to produce `points_norm`
+- [x] Save `pts_by_anchor.npz`: per-anchor arrays of indices into `points_norm`
+- [x] Save `points_norm.npz` + `norm_params.json`
+- [x] Sanity check: print histogram of per-anchor point counts; inspect a few anchors
+
+Completed on the bundled dev scene. Current M4a artifacts report `12,792,935`
+points, `267,830` anchors across `9` levels, and `104,577` anchors with at
+least `20` assigned points.
 
 ### M4b — Per-anchor VBGS fit [LLM, heaviest task]
 
@@ -99,13 +103,18 @@ Depends on: M4a, starting hyperparameters. Runs in `vbogs-jax`.
 
 Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`, `compute_elbo_delta`), [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) (`get_volume_delta_mixture`).
 
-- [ ] Script `scripts/fit_anchors.py`
-- [ ] Implement `FitAnchor(pts_a, K)` per Stage 3 of Algorithm.txt
-- [ ] Implement K-growth loop with ELBO comparison
-- [ ] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
-- [ ] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
+- [x] Script `scripts/fit_anchors.py`
+- [x] Implement `FitAnchor(pts_a, K)` per Stage 3 of Algorithm.txt
+- [x] Implement K-growth loop with ELBO comparison
+- [x] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
+- [x] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
 - [ ] Decide: loop vs `jax.vmap` across anchors (defer until N_anchors is known)
+
+Implementation is in place and smoke-tested in `vbogs-jax`, but the full-scene
+fit has not been run to completion yet. Current smoke artifacts live under
+`data/m4/2013_05_28_drive_0008_sync/` as `anchor_posterior.smoke.npz` and
+`fit_metadata.smoke.json`.
 
 ### M5 — Posterior → scalar uncertainty [LLM]
 
