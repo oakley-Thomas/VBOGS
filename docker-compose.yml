@@ -1,0 +1,44 @@
+services:
+  vbogs-torch:
+    build:
+      context: .
+      dockerfile: docker/torch.Dockerfile
+    image: vbogs/torch:local
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
+    volumes:
+      - vbogs-data:/workspace/VBOGS/data
+      - vbogs-outputs:/workspace/VBOGS/outputs
+      - vbogs-generated-configs:/workspace/VBOGS/generated_configs
+    command: sleep infinity
+
+  vbogs-jax:
+    build:
+      context: .
+      dockerfile: docker/jax.Dockerfile
+    image: vbogs/jax:local
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      JAX_PLATFORMS: cuda
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
+    volumes:
+      - vbogs-data:/workspace/VBOGS/data
+      - vbogs-outputs:/workspace/VBOGS/outputs
+      - vbogs-generated-configs:/workspace/VBOGS/generated_configs
+    command: sleep infinity
+
+volumes:
+  vbogs-data:
+  vbogs-outputs:
+  vbogs-generated-configs:

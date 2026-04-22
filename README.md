@@ -193,3 +193,99 @@ The initial hyperparameter defaults match `PLAN.md`:
 - `K_GROWTH_FACTOR=2`
 - `MIN_POINTS_PER_ANCHOR=20`
 - `ELBO_IMPROVEMENT_TOL=0.01`
+
+## Docker And Portainer Deployment
+
+The repo now includes a two-container Docker layout that mirrors the project's
+existing framework split:
+
+- `vbogs-torch` for M2, M3, and M4a
+- `vbogs-jax` for M4b onward
+
+The compose file is [docker-compose.yml](/home/oakley/ub/advanced_robotics/VBOGS/docker-compose.yml:1).
+It builds two images from:
+
+- [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
+- [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
+
+Both services mount the same named Docker volumes for:
+
+- `/workspace/VBOGS/data`
+- `/workspace/VBOGS/outputs`
+- `/workspace/VBOGS/generated_configs`
+
+That keeps the filesystem contract from `PLAN.md` intact: the torch-side jobs
+write `.npz` artifacts into `data/`, and the jax-side jobs read them back from
+the same shared storage.
+
+### Local Docker Compose
+
+Build the images:
+
+```bash
+docker compose build
+```
+
+Start the long-lived utility containers:
+
+```bash
+docker compose up -d
+```
+
+Sanity-check the GPU stacks:
+
+```bash
+docker compose exec vbogs-torch python scripts/check_torch_stack.py --repo-root /workspace/VBOGS
+docker compose exec vbogs-jax python -c "import jax; print(jax.devices())"
+```
+
+Run M4b inside the JAX container:
+
+```bash
+docker compose exec vbogs-jax python scripts/fit_anchors.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --device 0
+```
+
+Run a smoke test first if you want a fast confidence check:
+
+```bash
+docker compose exec vbogs-jax python scripts/fit_anchors.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --max-observed-anchors 5 \
+  --log-every 1 \
+  --device 0
+```
+
+### Portainer Stack
+
+For Portainer on your remote Quadro RTX 8000 host, use the same
+`docker-compose.yml` as a stack definition.
+
+Recommended flow:
+
+1. Clone this repo on the remote server so the Docker build context includes the
+   `Octree-AnyGS` and `vbgs` submodules.
+2. In Portainer, create a new stack and paste the contents of
+   `docker-compose.yml`, or point Portainer at this repo if your setup supports
+   Git-backed stacks.
+3. Build and deploy the stack.
+4. Open a console in the `vbogs-torch` and `vbogs-jax` containers to run the
+   same commands shown above.
+
+If your Portainer version does not automatically expose the NVIDIA GPU to the
+containers, enable GPU access in the container runtime settings or adjust the
+stack to your host's preferred NVIDIA device-request syntax before deploying.
+
+### Deployment Notes For M4b
+
+- `M4b` depends on `data/m4/<drive>/points_norm.npz` and
+  `data/m4/<drive>/pts_by_anchor.npz`, so make sure you either:
+  - run `M4a` inside `vbogs-torch`, or
+  - copy those artifacts into the shared `vbogs-data` Docker volume before
+    starting `fit_anchors.py`
+- The current implementation is serial over observed anchors, so the Quadro RTX
+  8000 is mainly useful for making the JAX fit stable and fast, not for
+  horizontal multi-container scaling yet.
+- `anchor_posterior.npz` and `fit_metadata.json` are written back into the same
+  `data/m4/<drive>/` directory and will remain available to both containers.
