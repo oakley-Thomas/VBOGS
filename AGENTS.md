@@ -6,7 +6,7 @@ Orientation for coding agents working on this repo.
 
 VBOGS combines Octree-AnyGS (scalable Gaussian Splatting with LOD) with Variational Bayes Gaussian Splatting (per-Gaussian Bayesian posteriors) to produce a scene representation with calibrated per-anchor uncertainty, used to pick **next-best views** for autonomous-vehicle mapping.
 
-It is **pre-implementation**: the root repo currently contains only the spec ([Algorithm.txt](Algorithm.txt)), the implementation plan ([PLAN.md](PLAN.md)), and two git submodules providing the upstream components. No `scripts/`, `vbogs/`, or tests exist yet — they will be built out per PLAN.md.
+It is **mid-implementation**: M1 through M4b now have repo-owned entry points and shared helpers, while later stages remain to be built out per [PLAN.md](PLAN.md).
 
 ## Read these first
 
@@ -24,6 +24,10 @@ VBOGS/
 ├── PLAN.md                # milestone checklist
 ├── AGENTS.md              # this file
 ├── README.md
+├── docker/                # container images for torch / jax workflows
+├── docker-compose.yml     # local + Portainer stack definition
+├── scripts/               # repo-owned pipeline / deployment entry points
+├── vbogs/                 # shared library helpers
 ├── Octree-AnyGS/          # submodule — DO NOT EDIT
 └── vbgs/                  # submodule — DO NOT EDIT
 ```
@@ -61,16 +65,16 @@ Both envs live alongside one another; each script declares which one it needs (s
 Code we write lives outside the submodules:
 
 ```
-scripts/          # entry points per PLAN milestone (stereo_to_pointcloud.py, ...)
-vbogs/            # shared library code (when enough accumulates to warrant it)
-tests/            # integration tests against small fixtures
+scripts/          # entry points per PLAN milestone and deployment helpers
+vbogs/            # shared library code
+tests/            # integration tests against small fixtures as they are added
 ```
-
-Create these as needed — don't scaffold empty dirs ahead of demand.
 
 - **Framework boundary is the filesystem.** PyTorch scripts read/write `.npz`; JAX scripts read/write `.npz`. No in-process IPC, no cross-framework tensor sharing.
 - **Coordinate frames matter.** Stage 3 buckets points in **world** coords (to match Octree-AnyGS's grid) but fits VBGS in **normalized** coords. Mixing these silently produces nonsense grid buckets. Make the frame explicit in variable names (`points_world` vs `points_norm`).
 - **Don't modify the submodules to add functionality.** Example: for `render_scalar`, write a sibling function in `vbogs/render.py` that imports and reuses `generate_gaussians` from Octree-AnyGS; do NOT edit `Octree-AnyGS/gaussian_renderer/render.py`.
+- **KITTI-360 source data lives under `data/KITTI-360/`.** In Portainer deployments this path is expected to be backed by a dedicated external volume mounted at `/workspace/VBOGS/data/KITTI-360`.
+- **Server rebuild workflow is repo-owned.** Prefer `bash scripts/update_server_stack.sh` on the GPU server after pulling changes instead of ad hoc container edits.
 
 ## Common pitfalls
 

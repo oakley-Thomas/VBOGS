@@ -20,6 +20,37 @@ bash scripts/envs.sh check-torch-stack
 bash scripts/envs.sh smoke-test-jax
 ```
 
+## Docker Hub / Portainer Quick Start
+
+If your main workflow is "build on the dev machine, deploy on the GPU server,"
+the shortest path is:
+
+```bash
+docker login
+bash scripts/publish_dockerhub.sh
+```
+
+That script builds both images, tags them with a UTC timestamp, pushes them to
+Docker Hub, and prints the exact image values to paste into the Portainer stack:
+
+- `VBOGS_TORCH_IMAGE=oakleyth/vbogs-torch:<timestamp>`
+- `VBOGS_JAX_IMAGE=oakleyth/vbogs-jax:<timestamp>`
+
+In Portainer:
+
+1. Open the stack.
+2. Update `VBOGS_TORCH_IMAGE` and `VBOGS_JAX_IMAGE` to the printed tags.
+3. Redeploy the stack.
+
+If you prefer to rebuild directly on the server after `git pull`, use:
+
+```bash
+bash scripts/update_server_stack.sh
+```
+
+The full deployment and volume-layout details are documented below in
+`Docker And Portainer Deployment`.
+
 ## M2 Training Workflow
 
 M2 now has a repo-owned local workflow for preparing KITTI-360 drive
@@ -257,6 +288,20 @@ compose file supports two workflows:
 - image-pull deployment for pinned Docker Hub / GHCR releases
 - server-side rebuilds after `git pull` when you want fast live iteration
 
+### Volume Layout
+
+The stack uses four Docker volumes:
+
+- `vbogs-data` mounted at `/workspace/VBOGS/data`
+- `KITTI-360` mounted at `/workspace/VBOGS/data/KITTI-360`
+- `vbogs-outputs` mounted at `/workspace/VBOGS/outputs`
+- `vbogs-generated-configs` mounted at `/workspace/VBOGS/generated_configs`
+
+`KITTI-360` is declared as an external volume in the compose file so Portainer
+can attach the named volume you created. It is mounted read/write in both
+containers. The other three volumes are repo-owned working volumes for derived
+artifacts and generated configs.
+
 Both services mount the same named Docker volumes for:
 
 - `/workspace/VBOGS/data`
@@ -308,6 +353,17 @@ in the URLs, and run:
 cp scripts/kitti360_download_manifest.example.json data/KITTI-360/download_manifest.json
 python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
 ```
+
+The downloader is manifest-driven on purpose. Each manifest entry can specify:
+
+- `name`
+- `url`
+- `archive_name`
+- `extract_to`
+- `strip_components`
+- `expected_paths`
+
+That keeps the code stable while you swap in the real KITTI download links.
 
 ### Build And Push To GHCR
 
@@ -409,8 +465,31 @@ docker compose exec vbogs-jax python scripts/fit_anchors.py \
 ### Portainer Stack
 
 For Portainer on your remote Quadro RTX 8000 host, use the same
-`docker-compose.yml` as a stack definition, but have Portainer pull the images
-instead of building them.
+`docker-compose.yml` as a stack definition. You now have two reasonable ways to
+operate it.
+
+**Option 1: Rebuild on the server**
+
+Use this when you expect frequent live updates and want the server clone to act
+like a rebuildable workspace.
+
+1. Make sure the server has a git clone of this repo and Docker build access.
+2. In Portainer, deploy the stack from that checkout or paste the compose file
+   into the Web editor.
+3. Confirm the external `KITTI-360` volume exists and is attached.
+4. After pulling repo changes on the server, run:
+
+```bash
+bash scripts/update_server_stack.sh
+```
+
+This rebuilds both images locally and recreates the containers while preserving
+the named volumes.
+
+**Option 2: Pull prebuilt images**
+
+Use this when you want pinned, reproducible deployments and do not want the
+server building images itself.
 
 Recommended flow:
 
