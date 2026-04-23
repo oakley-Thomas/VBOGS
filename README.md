@@ -37,6 +37,17 @@ The dataset-prep and stereo-export scripts auto-detect that layout by default.
 They also still accept `--raw-root`, `--poses-root`, and `--calibration-dir`
 overrides if your server stores the source data somewhere else.
 
+To bootstrap that tree from official KITTI/KITTI-360 downloads, fill in the
+URLs in [scripts/kitti360_download_manifest.example.json](/home/oakley/ub/advanced_robotics/VBOGS/scripts/kitti360_download_manifest.example.json),
+copy it to `data/KITTI-360/download_manifest.json`, and run:
+
+```bash
+python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
+```
+
+The downloader writes into `data/KITTI-360/`, verifies expected output paths,
+and supports both zip and tar-style archives.
+
 Prepare the dataset:
 
 ```bash
@@ -240,9 +251,16 @@ The current defaults are:
 - `oakleyth/vbogs-torch:latest`
 - `oakleyth/vbogs-jax:latest`
 
+Because both services now also include local `build:` definitions, the same
+compose file supports two workflows:
+
+- image-pull deployment for pinned Docker Hub / GHCR releases
+- server-side rebuilds after `git pull` when you want fast live iteration
+
 Both services mount the same named Docker volumes for:
 
 - `/workspace/VBOGS/data`
+- `/workspace/VBOGS/data/KITTI-360`
 - `/workspace/VBOGS/outputs`
 - `/workspace/VBOGS/generated_configs`
 
@@ -250,9 +268,50 @@ That keeps the filesystem contract from `PLAN.md` intact: the torch-side jobs
 write `.npz` artifacts into `data/`, and the jax-side jobs read them back from
 the same shared storage.
 
+For Portainer, the compose file expects an external named volume called
+`KITTI-360` and mounts it read/write at `/workspace/VBOGS/data/KITTI-360`
+inside both containers. That lets the large source dataset live in its own
+managed volume while the rest of `data/` continues to use `vbogs-data`.
+
+### Server Rebuild Workflow
+
+If the GPU server has a working clone of this repo and Docker build access, you
+can update the checkout and rebuild the stack in place:
+
+```bash
+bash scripts/update_server_stack.sh
+```
+
+That script will:
+
+- `git fetch` and `git pull --ff-only`
+- update submodules
+- rebuild `vbogs-torch` and `vbogs-jax`
+- recreate the containers with the existing named volumes
+
+Useful flags:
+
+```bash
+bash scripts/update_server_stack.sh --ref main
+bash scripts/update_server_stack.sh --skip-pull
+bash scripts/update_server_stack.sh --no-cache
+```
+
+This is the best fit when you expect lots of quick changes and want the server
+to behave like a rebuildable git workspace instead of a pure image-consumer.
+
+If you want to populate the Portainer-managed `KITTI-360` volume from inside a
+running container, copy the example manifest into the mounted data tree, fill
+in the URLs, and run:
+
+```bash
+cp scripts/kitti360_download_manifest.example.json data/KITTI-360/download_manifest.json
+python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
+```
+
 ### Build And Push To GHCR
 
-This is the recommended workflow for web-only Portainer access: build the
+This remains the better fit for pinned, reproducible deployments: build the
 images on a machine where Docker works cleanly, push them to GHCR, and let
 Portainer only pull them.
 
