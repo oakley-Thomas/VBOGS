@@ -27,7 +27,7 @@ scene = Octree_AnyGS.train(input_data, gaussian_type=3DGS)
 # input_data = {(cam_pose_L, cam_pose_R, img_L, img_R, K_L, K_R, baseline)}
 
 # =============================================================================
-# STAGE 2 — Build a 6D point cloud from stereo
+# STAGE 2 — Build a 6D point cloud from stereo (RGB PCD)
 # =============================================================================
 points_world = []                                # (N, 6) = xyz + rgb
 Foreach (cam_L, cam_R, img_L, img_R, K_L, K_R, baseline) in input_data:

@@ -27,6 +27,16 @@ M2 now has a repo-owned local workflow for preparing KITTI-360 drive
 expects and then launching a conservative LoD training run that fits inside a
 16 GB dev GPU budget.
 
+The repo's source KITTI-360 layout is now expected under:
+
+- `data/KITTI-360/data_2d_test/`
+- `data/KITTI-360/data_poses/`
+- `data/KITTI-360/calibration/`
+
+The dataset-prep and stereo-export scripts auto-detect that layout by default.
+They also still accept `--raw-root`, `--poses-root`, and `--calibration-dir`
+overrides if your server stores the source data somewhere else.
+
 Prepare the dataset:
 
 ```bash
@@ -102,6 +112,17 @@ output contract. The validity mask keeps only pixels that pass:
 
 Use `--pixel-step` and `--max-points-per-frame` to trade off density vs runtime
 and file size on the dev machine.
+
+If you need to point at a non-default KITTI-360 checkout on a server, pass the
+same input-root overrides here as in M2:
+
+```bash
+python scripts/stereo_to_pointcloud.py \
+  --raw-root /path/to/KITTI-360/data_2d_test \
+  --poses-root /path/to/KITTI-360/data_poses \
+  --calibration-dir /path/to/KITTI-360/calibration \
+  ...
+```
 
 ### Torch Stack
 
@@ -203,10 +224,21 @@ existing framework split:
 - `vbogs-jax` for M4b onward
 
 The compose file is [docker-compose.yml](/home/oakley/ub/advanced_robotics/VBOGS/docker-compose.yml:1).
-It builds two images from:
+It runs two images built from:
 
 - [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
 - [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
+
+The image names are parameterized through environment variables so Portainer can
+pull prebuilt images instead of trying to build them remotely:
+
+- `VBOGS_TORCH_IMAGE`
+- `VBOGS_JAX_IMAGE`
+
+The current defaults are:
+
+- `oakleyth/vbogs-torch:latest`
+- `oakleyth/vbogs-jax:latest`
 
 Both services mount the same named Docker volumes for:
 
@@ -218,12 +250,70 @@ That keeps the filesystem contract from `PLAN.md` intact: the torch-side jobs
 write `.npz` artifacts into `data/`, and the jax-side jobs read them back from
 the same shared storage.
 
-### Local Docker Compose
+### Build And Push To GHCR
+
+This is the recommended workflow for web-only Portainer access: build the
+images on a machine where Docker works cleanly, push them to GHCR, and let
+Portainer only pull them.
+
+If you are publishing to Docker Hub for Portainer instead of GHCR, the repo
+also includes a helper script that builds both images, tags them with a UTC
+timestamp, and pushes them:
+
+```bash
+bash scripts/publish_dockerhub.sh
+```
+
+By default it publishes:
+
+- `oakleyth/vbogs-torch:<timestamp>`
+- `oakleyth/vbogs-jax:<timestamp>`
+
+and prints the exact `VBOGS_TORCH_IMAGE` / `VBOGS_JAX_IMAGE` values to paste
+into the Portainer stack update. Pass `--push-latest` if you also want the
+`latest` tags updated.
+
+Authenticate to GHCR:
+
+```bash
+export GHCR_USER="oakley-Thomas"
+export GHCR_PAT="YOUR_GITHUB_PAT_WITH_PACKAGES_WRITE"
+printf '%s' "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+```
 
 Build the images:
 
 ```bash
-docker compose build
+docker build -f docker/torch.Dockerfile -t ghcr.io/oakley-thomas/vbogs-torch:latest .
+docker build -f docker/jax.Dockerfile -t ghcr.io/oakley-thomas/vbogs-jax:latest .
+```
+
+Push the images:
+
+```bash
+docker push ghcr.io/oakley-thomas/vbogs-torch:latest
+docker push ghcr.io/oakley-thomas/vbogs-jax:latest
+```
+
+If you want a pinned tag as well as `latest`, tag and push both:
+
+```bash
+export VBOGS_TAG="2026-04-22-m4b"
+
+docker tag ghcr.io/oakley-thomas/vbogs-torch:latest ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
+docker tag ghcr.io/oakley-thomas/vbogs-jax:latest ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
+
+docker push ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
+docker push ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
+```
+
+### Local Pull-Only Compose
+
+After the images are in GHCR, local compose can pull and run the same stack
+definition Portainer will use:
+
+```bash
+docker compose pull
 ```
 
 Start the long-lived utility containers:
@@ -260,22 +350,27 @@ docker compose exec vbogs-jax python scripts/fit_anchors.py \
 ### Portainer Stack
 
 For Portainer on your remote Quadro RTX 8000 host, use the same
-`docker-compose.yml` as a stack definition.
+`docker-compose.yml` as a stack definition, but have Portainer pull the images
+instead of building them.
 
 Recommended flow:
 
-1. Clone this repo on the remote server so the Docker build context includes the
-   `Octree-AnyGS` and `vbgs` submodules.
-2. In Portainer, create a new stack and paste the contents of
-   `docker-compose.yml`, or point Portainer at this repo if your setup supports
-   Git-backed stacks.
-3. Build and deploy the stack.
-4. Open a console in the `vbogs-torch` and `vbogs-jax` containers to run the
+1. Build and push both images to GHCR using the commands above.
+2. In Portainer, create a new stack from this repository or paste the compose
+   file into the Web editor.
+3. In the stack environment-variable section, set:
+   - `VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest`
+   - `VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest`
+4. If you pushed versioned tags, use those tags instead of `latest`.
+5. Deploy the stack. Portainer should pull the images rather than invoking a
+   remote build.
+6. Open a console in the `vbogs-torch` and `vbogs-jax` containers to run the
    same commands shown above.
 
-If your Portainer version does not automatically expose the NVIDIA GPU to the
-containers, enable GPU access in the container runtime settings or adjust the
-stack to your host's preferred NVIDIA device-request syntax before deploying.
+If the images are private, add GHCR registry credentials in Portainer first. If
+your Portainer version does not automatically expose the NVIDIA GPU to the
+containers, enable GPU access in the host runtime settings or adjust the stack
+to your host's preferred NVIDIA device-request syntax before deploying.
 
 ### Deployment Notes For M4b
 

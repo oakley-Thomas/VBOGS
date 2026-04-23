@@ -23,11 +23,18 @@ import json
 import math
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from vbogs.data_layout import resolve_kitti360_path
 
 
 @dataclass(frozen=True)
@@ -57,20 +64,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--raw-root",
         type=Path,
-        default=Path("data/data_2d_test"),
-        help="Root containing KITTI-360 rectified stereo images.",
+        default=None,
+        help="Root containing KITTI-360 rectified stereo images. Defaults to auto-detecting the repo layout.",
     )
     parser.add_argument(
         "--poses-root",
         type=Path,
-        default=Path("data/data_poses"),
-        help="Root containing KITTI-360 pose text files.",
+        default=None,
+        help="Root containing KITTI-360 pose text files. Defaults to auto-detecting the repo layout.",
     )
     parser.add_argument(
         "--calibration-dir",
         type=Path,
-        default=Path("data/calibration/calibration"),
-        help="Directory containing KITTI-360 calibration text files.",
+        default=None,
+        help="Directory containing KITTI-360 calibration text files. Defaults to auto-detecting the repo layout.",
     )
     parser.add_argument(
         "--output-root",
@@ -151,6 +158,12 @@ def parse_args() -> argparse.Namespace:
         help="Random seed used for point subsampling and random fallback.",
     )
     return parser.parse_args()
+
+
+def resolve_input_layout(args: argparse.Namespace) -> None:
+    args.raw_root = resolve_kitti360_path(args.raw_root, kind="raw")
+    args.poses_root = resolve_kitti360_path(args.poses_root, kind="poses")
+    args.calibration_dir = resolve_kitti360_path(args.calibration_dir, kind="calibration")
 
 
 def parse_perspective_file(path: Path) -> StereoCalibration:
@@ -549,6 +562,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
 
 def main() -> None:
     args = parse_args()
+    resolve_input_layout(args)
     dataset_dir = prepare_dataset(args)
     print(f"Prepared Octree-AnyGS dataset at: {dataset_dir}")
 

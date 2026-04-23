@@ -1,9 +1,6 @@
 services:
   vbogs-torch:
-    build:
-      context: .
-      dockerfile: docker/torch.Dockerfile
-    image: vbogs/torch:local
+    image: ${VBOGS_TORCH_IMAGE}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -23,10 +20,7 @@ services:
     command: sleep infinity
 
   vbogs-jax:
-    build:
-      context: .
-      dockerfile: docker/jax.Dockerfile
-    image: vbogs/jax:local
+    image: ${VBOGS_JAX_IMAGE}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
