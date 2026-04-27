@@ -65,7 +65,9 @@ path first, then scale the config back up on the server if needed.
 Completed on local dev machine with the conservative `16 GB` preset:
 `render_mode=RGB`, `add_prefilter=false`, `densification=false`,
 `resolution=4`, `feat_dim=16`, `base_layer=9`, `iterations=15000`.
-Artifacts live under `outputs/kitti360/2013_05_28_drive_0008_sync/2026-04-22_15:47:13`.
+New training runs live under `/data/OCTREE-ANYGS/<drive>/<timestamp>/`.
+The original local-dev artifact was
+`outputs/kitti360/2013_05_28_drive_0008_sync/2026-04-22_15:47:13`.
 
 ### M3 — Stereo → world point cloud [LLM]
 

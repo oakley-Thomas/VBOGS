@@ -106,6 +106,8 @@ LOCAL_16GB_CONFIG: Dict[str, Any] = {
     },
 }
 
+DEFAULT_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -123,7 +125,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-name",
         default="kitti360",
-        help="Dataset name stored in the generated config and output path.",
+        help=(
+            "Logical dataset name used by VBOGS. Octree-AnyGS output placement is "
+            "controlled by --output-root."
+        ),
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+        help=(
+            "Root directory for Octree-AnyGS training outputs. Runs are written to "
+            "`<output-root>/<scene-name>/<timestamp>/`."
+        ),
     )
     parser.add_argument(
         "--output-config",
@@ -197,7 +211,13 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params = cfg["model_params"]
     model_params["source_path"] = str(args.dataset_path.resolve())
     model_params["scene_name"] = scene_name
-    model_params["dataset_name"] = args.dataset_name
+    # Upstream Octree-AnyGS hardcodes outputs as:
+    #   outputs/<dataset_name>/<scene_name>/<timestamp>
+    # Supplying an absolute path here makes os.path.join ignore the leading
+    # "outputs" segment, giving VBOGS a repo-owned output root without editing
+    # the read-only submodule.
+    model_params["dataset_name"] = str(args.output_root.resolve())
+    model_params["vbogs_dataset_name"] = args.dataset_name
     model_params["resolution"] = args.resolution
     model_params["llffhold"] = args.llffhold
 
