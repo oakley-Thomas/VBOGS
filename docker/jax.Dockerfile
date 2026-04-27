@@ -18,12 +18,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     python -m pip install --upgrade pip setuptools wheel
 
+RUN python -m pip install numpy pyyaml
+
+ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
+ARG VBOGS_GIT_REF=main
+
+RUN git clone "${VBOGS_GIT_URL}" /workspace/VBOGS && \
+    cd /workspace/VBOGS && \
+    git fetch --tags origin && \
+    (git checkout "${VBOGS_GIT_REF}" || git checkout -B "${VBOGS_GIT_REF}" "origin/${VBOGS_GIT_REF}") && \
+    git submodule update --init --recursive
+
 WORKDIR /workspace/VBOGS
 
-COPY . /workspace/VBOGS
-
 RUN python -m pip install -e /workspace/VBOGS/vbgs[gpu]
-RUN python -m pip install numpy pyyaml
 
 ENV PYTHONPATH=/workspace/VBOGS:/workspace/VBOGS/vbgs
 ENV JAX_PLATFORMS=cuda

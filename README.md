@@ -271,6 +271,15 @@ It runs two images built from:
 - [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
 - [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
 
+Both Dockerfiles clone the project from GitHub during the image build instead
+of copying the local checkout into the image. The default source is:
+
+- `VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git`
+- `VBOGS_GIT_REF=main`
+
+Override `VBOGS_GIT_REF` in Portainer or your shell to rebuild images from a
+branch, tag, or reachable commit SHA.
+
 The image names are parameterized through environment variables so Portainer can
 pull prebuilt images instead of trying to build them remotely:
 
@@ -287,6 +296,61 @@ compose file supports two workflows:
 
 - image-pull deployment for pinned Docker Hub / GHCR releases
 - server-side rebuilds after `git pull` when you want fast live iteration
+
+### Build Images
+
+Build both images with the compose file:
+
+```bash
+docker compose build vbogs-torch vbogs-jax
+```
+
+By default, the build clones `https://github.com/oakley-Thomas/VBOGS.git` at
+`main`. To build from another branch, tag, or commit SHA, set
+`VBOGS_GIT_REF` before running the build:
+
+```bash
+VBOGS_GIT_REF=main docker compose build vbogs-torch vbogs-jax
+VBOGS_GIT_REF=<commit-sha> docker compose build vbogs-torch vbogs-jax
+```
+
+If you want to point the images at a fork or temporary remote, override
+`VBOGS_GIT_URL` too:
+
+```bash
+VBOGS_GIT_URL=https://github.com/<user>/<repo>.git \
+VBOGS_GIT_REF=<branch-or-commit> \
+docker compose build vbogs-torch vbogs-jax
+```
+
+To rebuild without using cached layers:
+
+```bash
+VBOGS_GIT_REF=<branch-or-commit> docker compose build --no-cache vbogs-torch vbogs-jax
+```
+
+You can also build the images directly with Docker. This is useful when tagging
+images for a registry:
+
+```bash
+docker build \
+  -f docker/torch.Dockerfile \
+  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
+  --build-arg VBOGS_GIT_REF=main \
+  -t oakleyth/vbogs-torch:latest \
+  .
+
+docker build \
+  -f docker/jax.Dockerfile \
+  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
+  --build-arg VBOGS_GIT_REF=main \
+  -t oakleyth/vbogs-jax:latest \
+  .
+```
+
+Because the source is cloned during the image build, only committed and pushed
+code can be built this way. Local uncommitted edits in your checkout are not
+copied into the image.
 
 ### Volume Layout
 
@@ -331,7 +395,7 @@ That script will:
 
 - `git fetch` and `git pull --ff-only`
 - update submodules
-- rebuild `vbogs-torch` and `vbogs-jax`
+- rebuild `vbogs-torch` and `vbogs-jax` from the exact pulled commit
 - recreate the containers with the existing named volumes
 
 Useful flags:
@@ -342,8 +406,10 @@ bash scripts/update_server_stack.sh --skip-pull
 bash scripts/update_server_stack.sh --no-cache
 ```
 
-This is the best fit when you expect lots of quick changes and want the server
-to behave like a rebuildable git workspace instead of a pure image-consumer.
+This is the best fit when you expect lots of quick committed changes and want
+the server to behave like a rebuildable git workspace instead of a pure
+image-consumer. Because image builds now clone from GitHub, commit and push code
+updates before rebuilding the stack.
 
 If you want to populate the Portainer-managed `KITTI-360` volume from inside a
 running container, copy the example manifest into the mounted data tree, fill
@@ -396,11 +462,20 @@ export GHCR_PAT="YOUR_GITHUB_PAT_WITH_PACKAGES_WRITE"
 printf '%s' "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 ```
 
-Build the images:
+Build the images from `main`:
 
 ```bash
-docker build -f docker/torch.Dockerfile -t ghcr.io/oakley-thomas/vbogs-torch:latest .
-docker build -f docker/jax.Dockerfile -t ghcr.io/oakley-thomas/vbogs-jax:latest .
+docker build \
+  -f docker/torch.Dockerfile \
+  --build-arg VBOGS_GIT_REF=main \
+  -t ghcr.io/oakley-thomas/vbogs-torch:latest \
+  .
+
+docker build \
+  -f docker/jax.Dockerfile \
+  --build-arg VBOGS_GIT_REF=main \
+  -t ghcr.io/oakley-thomas/vbogs-jax:latest \
+  .
 ```
 
 Push the images:
@@ -477,14 +552,16 @@ like a rebuildable workspace.
 2. In Portainer, deploy the stack from that checkout or paste the compose file
    into the Web editor.
 3. Confirm the external `KITTI-360` volume exists and is attached.
-4. After pulling repo changes on the server, run:
+4. Set `VBOGS_GIT_REF` in the Portainer stack environment if you want a branch,
+   tag, or commit other than `main`.
+5. After pulling repo changes on the server, run:
 
 ```bash
 bash scripts/update_server_stack.sh
 ```
 
-This rebuilds both images locally and recreates the containers while preserving
-the named volumes.
+This rebuilds both images locally from the pulled Git commit and recreates the
+containers while preserving the named volumes.
 
 **Option 2: Pull prebuilt images**
 

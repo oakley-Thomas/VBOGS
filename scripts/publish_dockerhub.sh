@@ -9,6 +9,8 @@ TORCH_IMAGE_NAME="${TORCH_IMAGE_NAME:-vbogs-torch}"
 JAX_IMAGE_NAME="${JAX_IMAGE_NAME:-vbogs-jax}"
 TIMESTAMP_TAG="${TIMESTAMP_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
 PUSH_LATEST="${PUSH_LATEST:-0}"
+PUSH_RETRIES="${PUSH_RETRIES:-4}"
+PUSH_RETRY_DELAY_SEC="${PUSH_RETRY_DELAY_SEC:-15}"
 
 usage() {
     cat <<EOF
@@ -31,6 +33,8 @@ Environment overrides:
   JAX_IMAGE_NAME
   TIMESTAMP_TAG
   PUSH_LATEST
+  PUSH_RETRIES
+  PUSH_RETRY_DELAY_SEC
 
 Examples:
   bash scripts/publish_dockerhub.sh
@@ -49,6 +53,27 @@ require_command() {
 
 log() {
     printf '[publish] %s\n' "$*"
+}
+
+push_with_retries() {
+    local image_ref="$1"
+    local attempt=1
+
+    while (( attempt <= PUSH_RETRIES )); do
+        log "Pushing ${image_ref} (attempt ${attempt}/${PUSH_RETRIES})"
+        if "${DOCKER_BIN}" push "${image_ref}"; then
+            return 0
+        fi
+
+        if (( attempt == PUSH_RETRIES )); then
+            echo "Failed to push ${image_ref} after ${PUSH_RETRIES} attempts" >&2
+            return 1
+        fi
+
+        log "Push failed for ${image_ref}; retrying in ${PUSH_RETRY_DELAY_SEC}s"
+        sleep "${PUSH_RETRY_DELAY_SEC}"
+        attempt=$((attempt + 1))
+    done
 }
 
 PUSH_IMAGES=1
@@ -109,18 +134,14 @@ if [[ "${PUSH_LATEST}" == "1" ]]; then
 fi
 
 if [[ "${PUSH_IMAGES}" == "1" ]]; then
-    log "Pushing ${TORCH_TAGGED_IMAGE}"
-    "${DOCKER_BIN}" push "${TORCH_TAGGED_IMAGE}"
+    push_with_retries "${TORCH_TAGGED_IMAGE}"
 
-    log "Pushing ${JAX_TAGGED_IMAGE}"
-    "${DOCKER_BIN}" push "${JAX_TAGGED_IMAGE}"
+    push_with_retries "${JAX_TAGGED_IMAGE}"
 
     if [[ "${PUSH_LATEST}" == "1" ]]; then
-        log "Pushing ${TORCH_IMAGE}:latest"
-        "${DOCKER_BIN}" push "${TORCH_IMAGE}:latest"
+        push_with_retries "${TORCH_IMAGE}:latest"
 
-        log "Pushing ${JAX_IMAGE}:latest"
-        "${DOCKER_BIN}" push "${JAX_IMAGE}:latest"
+        push_with_retries "${JAX_IMAGE}:latest"
     fi
 else
     log "Skipping push because --no-push was set"

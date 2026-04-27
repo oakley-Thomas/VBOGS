@@ -4,6 +4,9 @@ services:
     build:
       context: .
       dockerfile: docker/torch.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -37,6 +40,9 @@ services:
     build:
       context: .
       dockerfile: docker/jax.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true

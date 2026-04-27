@@ -99,6 +99,9 @@ if [[ "${NO_CACHE}" == "1" ]]; then
 fi
 
 log "Rebuilding docker images"
+VBOGS_GIT_REF="$(git rev-parse HEAD)"
+export VBOGS_GIT_REF
+log "Using VBOGS_GIT_REF=${VBOGS_GIT_REF}"
 run_compose build "${BUILD_ARGS[@]}" vbogs-torch vbogs-jax
 
 log "Recreating containers"
