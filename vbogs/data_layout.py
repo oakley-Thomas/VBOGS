@@ -12,6 +12,7 @@ from pathlib import Path
 def _candidate_paths(kind: str) -> list[Path]:
     if kind == "raw":
         return [
+            Path("data/KITTI-360/images"),
             Path("data/KITTI-360/data_2d_test"),
             Path("data/data_2d_test"),
         ]

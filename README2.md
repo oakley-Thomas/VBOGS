@@ -18,17 +18,42 @@ oakleyth/vbogs-vbogs-torch:latest
 oakleyth/vbogs-vbogs-jax:latest
 ```
 
+Run the docker compose
+```bash
+export VBOGS_TORCH_IMAGE=<name-of-torch-image>
+export VBOGS_JAX_IMAGE=<name-of-jax-image>
+
+# Example (if pulled from DockerHub)
+# export VBOGS_TORCH_IMAGE=oakleyth/vbogs-vbogs-torch:latest
+# export VBOGS_JAX_IMAGE=oakleyth/vbogs-vbogs-jax:latest
+
+# Add external volumes (if they do not exist)
+# docker volume create KITTI-360
+# docker volume create COLMAP
+# docker volume create OCTREE-ANYGS
+
+# Start stack
+docker compose up -d
+
+# Stop stack
+docker compose down
+```
+
 ## Usage
 
 0. Clone this repo (it is already git checked out in the images mentioned above)
 
 1. Download the dataset:
 ```bash
-ENV KITTI-CALIBRATION-LINK = <link-to-kitti-360-calibration>
-ENV KITTI-POSES-LINK = <link-to-kitti-360-poses>
-ENV KITTI-IMAGES = <link-to-kitti-360-images>
+export KITTI_CALIBRATION_LINK=<link-to-kitti-360-calibration>
+export KITTI_POSES_LINK=<link-to-kitti-360-poses>
+export KITTI_IMAGES=<link-to-kitti-360-images>
 
 # data will be downloaded to VBOGS/data/KITTI-360
+# archives are normalized to:
+#   data/KITTI-360/calibration/
+#   data/KITTI-360/data_poses/
+#   data/KITTI-360/images/
 cd data/
 ./download_kitti_360.sh
 ```

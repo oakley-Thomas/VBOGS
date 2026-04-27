@@ -9,6 +9,10 @@ DOWNLOADS_DIR="${KITTI_360_DOWNLOADS_DIR:-"${DATA_ROOT}/_downloads"}"
 usage() {
   cat <<'USAGE'
 Download and extract KITTI-360 archives into data/KITTI-360.
+Archives are normalized into this layout:
+  data/KITTI-360/calibration/
+  data/KITTI-360/data_poses/
+  data/KITTI-360/images/
 
 Required environment variables:
   KITTI_CALIBRATION_LINK   URL for KITTI-360 calibration archive
@@ -113,6 +117,101 @@ extract_archive() {
   esac
 }
 
+copy_dir_contents() {
+  local source="$1"
+  local destination="$2"
+
+  [[ -d "${source}" ]] || return 1
+  mkdir -p "${destination}"
+  cp -a "${source}/." "${destination}/"
+}
+
+copy_pose_drives_from() {
+  local source="$1"
+  local destination="$2"
+  local found=1
+  local drive_dir
+
+  [[ -d "${source}" ]] || return 1
+  while IFS= read -r -d '' drive_dir; do
+    mkdir -p "${destination}/$(basename "${drive_dir}")"
+    cp -a "${drive_dir}/." "${destination}/$(basename "${drive_dir}")/"
+    found=0
+  done < <(find "${source}" -mindepth 1 -maxdepth 1 -type d -name '2013_05_28_drive_*_sync' -print0)
+
+  return "${found}"
+}
+
+copy_image_drives_from() {
+  local source="$1"
+  local destination="$2"
+  local found=1
+  local drive_dir
+
+  [[ -d "${source}" ]] || return 1
+  while IFS= read -r -d '' drive_dir; do
+    if [[ -d "${drive_dir}/image_00" || -d "${drive_dir}/image_01" ]]; then
+      mkdir -p "${destination}/$(basename "${drive_dir}")"
+      cp -a "${drive_dir}/." "${destination}/$(basename "${drive_dir}")/"
+      found=0
+    fi
+  done < <(find "${source}" -mindepth 1 -maxdepth 1 -type d -name '2013_05_28_drive_*_sync' -print0)
+
+  return "${found}"
+}
+
+normalize_extraction() {
+  local label="$1"
+  local extraction_root="$2"
+  local target
+
+  case "${label}" in
+    calibration)
+      target="${DATA_ROOT}/calibration"
+      if copy_dir_contents "${extraction_root}/calibration" "${target}"; then
+        return 0
+      fi
+      if [[ -f "${extraction_root}/perspective.txt" ]]; then
+        copy_dir_contents "${extraction_root}" "${target}"
+        return 0
+      fi
+      if [[ -d "${extraction_root}/data_3d_semantics/train/2013_05_28_drive_0000_sync" ]]; then
+        die "calibration archive did not contain calibration files; check KITTI_CALIBRATION_LINK"
+      fi
+      copy_dir_contents "${extraction_root}" "${target}"
+      ;;
+    poses)
+      target="${DATA_ROOT}/data_poses"
+      if copy_dir_contents "${extraction_root}/data_poses" "${target}"; then
+        return 0
+      fi
+      if copy_pose_drives_from "${extraction_root}" "${target}"; then
+        return 0
+      fi
+      die "poses archive did not contain data_poses or drive pose folders"
+      ;;
+    images)
+      target="${DATA_ROOT}/images"
+      if copy_dir_contents "${extraction_root}/images" "${target}"; then
+        return 0
+      fi
+      if copy_image_drives_from "${extraction_root}/data_2d_raw" "${target}"; then
+        return 0
+      fi
+      if copy_image_drives_from "${extraction_root}/data_2d_test" "${target}"; then
+        return 0
+      fi
+      if copy_image_drives_from "${extraction_root}" "${target}"; then
+        return 0
+      fi
+      die "images archive did not contain images, data_2d_raw, data_2d_test, or drive image folders"
+      ;;
+    *)
+      die "unknown archive label: ${label}"
+      ;;
+  esac
+}
+
 split_urls() {
   tr ',\n' '  ' | xargs -n 1 printf '%s\n'
 }
@@ -120,20 +219,26 @@ split_urls() {
 process_url() {
   local label="$1"
   local url="$2"
-  local archive_name archive_path
+  local archive_name archive_path extraction_root
 
   [[ -n "${url}" ]] || die "missing URL for ${label}"
   archive_name="$(archive_name_from_url "${url}")"
   archive_path="${DOWNLOADS_DIR}/${archive_name}"
+  extraction_root="$(mktemp -d "${TMPDIR:-/tmp}/kitti360-${label}.XXXXXX")"
+  trap 'rm -rf "${extraction_root}"' RETURN
 
   echo
   echo "==> ${label}"
   download_archive "${url}" "${archive_path}"
-  extract_archive "${archive_path}" "${DATA_ROOT}"
+  extract_archive "${archive_path}" "${extraction_root}"
+  normalize_extraction "${label}" "${extraction_root}"
 
   if [[ "${KEEP_ARCHIVES:-1}" == "0" ]]; then
     rm -f "${archive_path}"
   fi
+
+  rm -rf "${extraction_root}"
+  trap - RETURN
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -160,6 +265,7 @@ mkdir -p "${DATA_ROOT}" "${DOWNLOADS_DIR}"
 
 echo "KITTI-360 data root : ${DATA_ROOT}"
 echo "Archive cache       : ${DOWNLOADS_DIR}"
+echo "Canonical layout    : calibration/, data_poses/, images/"
 
 process_url "calibration" "${calibration_url}"
 process_url "poses" "${poses_url}"
