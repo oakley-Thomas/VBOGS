@@ -235,3 +235,30 @@ Checkpoint files are written beside the final posterior:
 
 Smoke/partial runs use the `.smoke` names. A completed run writes
 `anchor_posterior.npz` and `fit_metadata.json`.
+
+### 7. Compute Per-Anchor Uncertainty
+
+This step is M5. It reduces the M4b posterior to one scalar uncertainty value
+per Octree-AnyGS anchor.
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
+python scripts/compute_uncertainty.py \
+  --drive "$DRIVE"
+```
+
+This writes:
+
+- `data/m4/$DRIVE/U.npy`
+- `data/m4/$DRIVE/uncertainty_components.npz`
+- `data/m4/$DRIVE/uncertainty_metadata.json`
+
+By default, `U` follows `Algorithm.txt`: pi-weighted component entropy using
+the Normal-Wishart spatial posterior plus the delta MVN entropy. Dirichlet
+entropy is saved as a diagnostic component but is not added to `U` unless you
+pass `--include-dirichlet-entropy`.
+
+Unobserved or unfitted anchors receive `U_MAX`, which defaults to the maximum
+finite fitted uncertainty in the posterior. Override it with `--u-max VALUE` if
+you want a fixed value.

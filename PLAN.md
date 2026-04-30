@@ -122,12 +122,12 @@ fit has not been run to completion yet. Current smoke artifacts live under
 
 Depends on: M4b, entropy definition.
 
-- [ ] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
-- [ ] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
-- [ ] Closed-form Dirichlet entropy from `alpha`
-- [ ] Closed-form delta MVN entropy
-- [ ] Combine per chosen definition; emit `U.npy` of shape `[N_anchors]`
-- [ ] Unobserved anchors → `U_MAX`
+- [x] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
+- [x] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
+- [x] Closed-form Dirichlet entropy from `alpha`
+- [x] Closed-form delta MVN entropy
+- [x] Combine per chosen definition; emit `U.npy` of shape `[N_anchors]`
+- [x] Unobserved anchors → `U_MAX`
 - [ ] Sanity check: plot histogram of `U`; tails should be fat, not uniform
 
 ### M6 — `render_scalar` + NBV loop [LLM]
