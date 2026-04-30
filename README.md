@@ -171,19 +171,20 @@ python scripts/stereo_to_pointcloud.py \
 
 ### Torch Stack
 
-The current `vbogs-torch` setup is intentionally pinned to a CUDA 12.8 PyTorch
+The current `vbogs-torch` setup is intentionally pinned to a CUDA 12.4 PyTorch
 wheel stack:
 
 - Python `3.10`
-- PyTorch `2.7.1+cu128`
-- torchvision `0.22.1+cu128`
-- torchaudio `2.7.1+cu128`
-- `torch_scatter` wheel matched to `torch 2.7 / cu128`
-- `gsplat` installed from the official `pt27cu128` wheel index
+- PyTorch `2.4.1+cu124`
+- torchvision `0.19.1+cu124`
+- torchaudio `2.4.1+cu124`
+- `torch_scatter` wheel matched to `torch 2.4 / cu124`
+- `gsplat` installed from the official `pt24cu124` wheel index
 
-This configuration is chosen because it works on the local RTX 5080 dev machine
-and is a reasonable deployment target for the Quadro RTX 8000 server, assuming
-the server's NVIDIA driver is new enough for CUDA 12.8-era PyTorch wheels.
+This configuration is chosen because gsplat publishes prebuilt wheels for this
+PyTorch/CUDA pair, avoiding first-run JIT compilation inside deployment
+containers. The server's NVIDIA driver still needs to be new enough for
+CUDA 12.4-era PyTorch wheels.
 
 ### Validation
 
@@ -198,7 +199,7 @@ It verifies:
 - CUDA visibility in PyTorch
 - a real CUDA tensor operation
 - `torch_scatter` CUDA execution
-- `gsplat` import
+- `gsplat` CUDA rasterization
 - `gaussian_renderer.render` import through `Octree-AnyGS`
 
 ## M4 Point Bucketing And Anchor Fits
