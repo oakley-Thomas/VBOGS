@@ -137,3 +137,49 @@ Useful size/runtime controls:
 
 For a quick visual check on a dev machine, use the friendly command first, then
 add `--write-ply` only after the point count looks reasonable.
+
+### 5. Assign Colored Points to Octree-AnyGS Buckets
+
+This step assigns the verified colored point cloud to the trained
+Octree-AnyGS anchors at every LOD level, then writes the normalized inputs used
+by the VBGS per-anchor fitting step.
+
+**Local conda workflow:**
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="data/OCTREE-ANYGS/$DRIVE/<timestamp>"
+
+python scripts/bucket_points.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --points-world "data/points_world/$DRIVE/points_world.npz" \
+  --output-root "data/m4/$DRIVE"
+```
+
+**Docker workflow:**
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="/data/OCTREE-ANYGS/$DRIVE/<timestamp>"
+
+python scripts/bucket_points.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --points-world "data/points_world/$DRIVE/points_world.npz" \
+  --output-root "data/m4/$DRIVE"
+```
+
+Replace `<timestamp>` with the Octree-AnyGS run directory from step 3. If you
+omit `--model-path`, the script uses the latest run under
+`/data/OCTREE-ANYGS/$DRIVE`.
+
+This writes:
+
+- `data/m4/$DRIVE/points_norm.npz`
+- `data/m4/$DRIVE/pts_by_anchor.npz`
+- `data/m4/$DRIVE/norm_params.json`
+- `data/m4/$DRIVE/bucket_metadata.json`
+
+Check the printed summary before continuing. You want a non-trivial number of
+anchors with at least `20` points; those are the anchors M4b will fit.
