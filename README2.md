@@ -262,3 +262,48 @@ pass `--include-dirichlet-entropy`.
 Unobserved or unfitted anchors receive `U_MAX`, which defaults to the maximum
 finite fitted uncertainty in the posterior. Override it with `--u-max VALUE` if
 you want a fixed value.
+
+### 8. Score Next-Best Views
+
+This step is M6. It renders the per-anchor uncertainty scalar through the
+trained Octree-AnyGS scene and ranks candidate views by alpha-normalized
+visible uncertainty.
+
+Score held-out test cameras:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="data/OCTREE-ANYGS/$DRIVE/<timestamp>"
+
+python scripts/score_nbv.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --u-path "data/m4/$DRIVE/U.npy" \
+  --candidate-source test \
+  --top-k 10 \
+  --save-top-images 3
+```
+
+Score a simple ground-plane lattice around a reference test camera:
+
+```bash
+python scripts/score_nbv.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --u-path "data/m4/$DRIVE/U.npy" \
+  --candidate-source lattice \
+  --reference-source test \
+  --reference-index 0 \
+  --lattice-radii 0,5,10 \
+  --lattice-yaws-deg -30,0,30 \
+  --top-k 10
+```
+
+This writes:
+
+- `data/m6/$DRIVE/nbv_scores.json`
+- optional `data/m6/$DRIVE/top_images/rank_*_unc.npy`
+- optional `data/m6/$DRIVE/top_images/rank_*_alpha.npy`
+
+The score is `sum(unc_image) / (sum(alpha_image) + EPS)`, matching the
+alpha-normalized NBV objective in `Algorithm.txt`.

@@ -136,11 +136,15 @@ Depends on: M2, M5, candidate pose set. Runs in `vbogs-torch`.
 
 Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_renderer/render.py), [Octree-AnyGS/scene/implicit_model/base_model.py:460-534](Octree-AnyGS/scene/implicit_model/base_model.py#L460-L534) (`generate_gaussians`).
 
-- [ ] Implement `render_scalar(cam, pc, per_anchor_scalar)` per Stage 5
-- [ ] Return `(unc_image, alpha_image)` — both needed for the score
-- [ ] Implement candidate pose generator for a planner-reachable set; first pass can be a ground-plane local lattice with yaw samples, but keep the input interface compatible with future planner-emitted poses
-- [ ] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
-- [ ] Return best pose + diagnostic dump of top-K candidates
+- [x] Implement `render_scalar(cam, pc, per_anchor_scalar)` per Stage 5
+- [x] Return `(unc_image, alpha_image)` — both needed for the score
+- [x] Implement candidate pose generator for a planner-reachable set; first pass can be a ground-plane local lattice with yaw samples, but keep the input interface compatible with future planner-emitted poses
+- [x] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
+- [x] Return best pose + diagnostic dump of top-K candidates
+
+Initial implementation lives in `vbogs/render.py` and `scripts/score_nbv.py`.
+It has syntax/CLI verification, but still needs a full torch/GPU render
+validation pass on a completed M5 `U.npy`.
 
 ### M7 — End-to-end viz + validation [you]
 
