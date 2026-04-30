@@ -1,4 +1,5 @@
 data/*
+!data/download_kitti_360.sh
 generated_configs/
 outputs/
 __pycache__/

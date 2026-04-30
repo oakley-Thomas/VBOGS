@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3.10-dev \
     git \
+    wget \
+    unzip \
     build-essential \
     cmake \
     ninja-build \

@@ -33,6 +33,12 @@ services:
       - type: volume
         source: vbogs-generated-configs
         target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
     command: sleep infinity
 
   vbogs-jax:
@@ -70,9 +76,19 @@ services:
       - type: volume
         source: vbogs-generated-configs
         target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
     command: sleep infinity
 
 volumes:
+  COLMAP:
+    external: true
+  OCTREE-ANYGS:
+    external: true
   KITTI-360:
     external: true
   vbogs-data:

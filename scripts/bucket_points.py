@@ -32,6 +32,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.io import normalize_data_numpy, pack_grouped_indices, save_json
 
+DEFAULT_OCTREE_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -46,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Octree-AnyGS run directory from M2. Defaults to the latest run under "
-            "`outputs/kitti360/<drive>/`."
+            "`/data/OCTREE-ANYGS/<drive>/`."
         ),
     )
     parser.add_argument(
@@ -89,7 +91,10 @@ def resolve_model_path(args: argparse.Namespace) -> Path:
     if args.model_path is not None:
         return args.model_path
 
-    root = Path("outputs") / "kitti360" / args.drive
+    root = DEFAULT_OCTREE_OUTPUT_ROOT / args.drive
+    if not root.exists():
+        raise FileNotFoundError(f"No Octree-AnyGS output directory found at {root}")
+
     candidates = sorted(
         path for path in root.iterdir() if path.is_dir() and (path / "config.yaml").exists()
     )

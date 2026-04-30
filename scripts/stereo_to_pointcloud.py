@@ -488,6 +488,7 @@ def unproject_to_world(
     calibration: StereoCalibration,
     c2w: np.ndarray,
     valid_mask: np.ndarray,
+    max_depth_m: float,
     max_points_per_frame: int,
     rng: np.random.Generator,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -498,6 +499,8 @@ def unproject_to_world(
     disparities = disparity_left[ys, xs]
     depth = (calibration.fx * calibration.baseline_m) / disparities
     depth_valid = np.isfinite(depth) & (depth > 0.0)
+    if max_depth_m > 0.0:
+        depth_valid &= depth <= max_depth_m
     ys = ys[depth_valid]
     xs = xs[depth_valid]
     depth = depth[depth_valid]
@@ -522,7 +525,6 @@ def unproject_to_world(
 def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
     from plyfile import PlyData, PlyElement
 
-    normals = np.zeros_like(xyz, dtype=np.float32)
     vertex_data = np.empty(
         xyz.shape[0],
         dtype=[
@@ -537,8 +539,15 @@ def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
             ("blue", "u1"),
         ],
     )
-    attributes = np.concatenate([xyz, normals, rgb], axis=1)
-    vertex_data[:] = list(map(tuple, attributes))
+    vertex_data["x"] = xyz[:, 0]
+    vertex_data["y"] = xyz[:, 1]
+    vertex_data["z"] = xyz[:, 2]
+    vertex_data["nx"] = 0.0
+    vertex_data["ny"] = 0.0
+    vertex_data["nz"] = 0.0
+    vertex_data["red"] = rgb[:, 0]
+    vertex_data["green"] = rgb[:, 1]
+    vertex_data["blue"] = rgb[:, 2]
     ply = PlyData([PlyElement.describe(vertex_data, "vertex")], text=False)
     path.parent.mkdir(parents=True, exist_ok=True)
     ply.write(path)
@@ -567,6 +576,8 @@ def export_points(args: argparse.Namespace) -> Path:
     if args.selection_metadata is not None:
         selected_frame_ids = load_selected_frames(args.selection_metadata)
         frames = select_frames_from_metadata(left_dir, right_dir, poses_by_frame, selected_frame_ids)
+        if args.max_frames:
+            frames = frames[: args.max_frames]
     else:
         frames = sample_drive_frames(left_dir, right_dir, poses_by_frame, args.frame_step, args.max_frames)
 
@@ -602,6 +613,7 @@ def export_points(args: argparse.Namespace) -> Path:
             calibration=calibration,
             c2w=frame.pose.c2w,
             valid_mask=valid_mask,
+            max_depth_m=args.max_depth_m,
             max_points_per_frame=args.max_points_per_frame,
             rng=rng,
         )

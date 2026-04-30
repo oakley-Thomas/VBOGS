@@ -89,7 +89,7 @@ python scripts/prepare_kitti360_colmap.py \
 ```
 
 That writes a prepared dataset under
-`data/octree_anygs_colmap/2013_05_28_drive_0008_sync/` with:
+`/data/COLMAP/2013_05_28_drive_0008_sync/` with:
 
 - `images/`
 - `sparse/0/cameras.txt`
@@ -100,9 +100,12 @@ Generate a 16 GB-safe config and launch training:
 
 ```bash
 python scripts/train_octree_anygs.py \
-  --dataset-path data/octree_anygs_colmap/2013_05_28_drive_0008_sync \
+  --dataset-path /data/COLMAP/2013_05_28_drive_0008_sync \
   --gpu 0
 ```
+
+By default, training runs are written under
+`/data/OCTREE-ANYGS/2013_05_28_drive_0008_sync/<timestamp>/`.
 
 The default local preset intentionally trades fidelity for safety:
 
@@ -134,7 +137,7 @@ drive using the `vbogs-torch` env:
 bash -lc 'source scripts/envs.sh activate-torch >/dev/null && \
 python scripts/stereo_to_pointcloud.py \
   --drive 2013_05_28_drive_0008_sync \
-  --selection-metadata data/octree_anygs_colmap/2013_05_28_drive_0008_sync/metadata.json \
+  --selection-metadata /data/COLMAP/2013_05_28_drive_0008_sync/metadata.json \
   --write-ply'
 ```
 
@@ -354,22 +357,26 @@ copied into the image.
 
 ### Volume Layout
 
-The stack uses four Docker volumes:
+The stack uses six Docker volumes:
 
 - `vbogs-data` mounted at `/workspace/VBOGS/data`
 - `KITTI-360` mounted at `/workspace/VBOGS/data/KITTI-360`
+- `COLMAP` mounted at `/data/COLMAP`
+- `OCTREE-ANYGS` mounted at `/data/OCTREE-ANYGS`
 - `vbogs-outputs` mounted at `/workspace/VBOGS/outputs`
 - `vbogs-generated-configs` mounted at `/workspace/VBOGS/generated_configs`
 
-`KITTI-360` is declared as an external volume in the compose file so Portainer
-can attach the named volume you created. It is mounted read/write in both
-containers. The other three volumes are repo-owned working volumes for derived
-artifacts and generated configs.
+`KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes in
+the compose file so Portainer can attach the named volumes you created. They
+are mounted read/write in both containers. The other three volumes are repo-owned
+working volumes for derived artifacts and generated configs.
 
 Both services mount the same named Docker volumes for:
 
 - `/workspace/VBOGS/data`
 - `/workspace/VBOGS/data/KITTI-360`
+- `/data/COLMAP`
+- `/data/OCTREE-ANYGS`
 - `/workspace/VBOGS/outputs`
 - `/workspace/VBOGS/generated_configs`
 

@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("data/octree_anygs_colmap"),
+        default=Path("/data/COLMAP"),
         help="Root directory for prepared Octree-AnyGS datasets.",
     )
     parser.add_argument(
