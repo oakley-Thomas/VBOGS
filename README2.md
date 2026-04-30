@@ -183,3 +183,55 @@ This writes:
 
 Check the printed summary before continuing. You want a non-trivial number of
 anchors with at least `20` points; those are the anchors M4b will fit.
+
+### 6. Fit Per-Anchor VBGS Posteriors
+
+This step is M4b. It runs in the JAX environment and consumes the M4a bucket
+artifacts from `data/m4/$DRIVE/`.
+
+Start with a checkpointed partial run:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
+python scripts/fit_anchors.py \
+  --drive "$DRIVE" \
+  --max-observed-anchors 500 \
+  --log-every 25 \
+  --checkpoint-every 100 \
+  --k-growth-min-points 512 \
+  --device 0
+```
+
+Resume the same run after an interruption:
+
+```bash
+python scripts/fit_anchors.py \
+  --drive "$DRIVE" \
+  --max-observed-anchors 500 \
+  --log-every 25 \
+  --checkpoint-every 100 \
+  --k-growth-min-points 512 \
+  --resume \
+  --device 0
+```
+
+For a full-scene run, omit `--max-observed-anchors` but keep checkpointing on:
+
+```bash
+python scripts/fit_anchors.py \
+  --drive "$DRIVE" \
+  --log-every 100 \
+  --checkpoint-every 500 \
+  --k-growth-min-points 512 \
+  --resume \
+  --device 0
+```
+
+Checkpoint files are written beside the final posterior:
+
+- `anchor_posterior.checkpoint.npz`
+- `fit_metadata.checkpoint.json`
+
+Smoke/partial runs use the `.smoke` names. A completed run writes
+`anchor_posterior.npz` and `fit_metadata.json`.
