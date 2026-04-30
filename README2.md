@@ -41,9 +41,9 @@ docker compose down
 
 ## Usage
 
-### Clone this repo (it is already git checked out in the images mentioned above)
+### 1. Clone this repo (it is already git checked out in the images mentioned above)
 
-### Download the dataset:
+### 2. Download the dataset:
 ```bash
 export KITTI_CALIBRATION_LINK=<link-to-kitti-360-calibration>
 export KITTI_POSES_LINK=<link-to-kitti-360-poses>
@@ -58,7 +58,7 @@ cd data/
 ./download_kitti_360.sh
 ```
 
-### Run Octree-AnyGS Training
+### 3. Run Octree-AnyGS Training
 
 **Local conda workflow:** Octree-AnyGS training runs are written to `data/OCTREE-ANYGS/$DRIVE/<timestamp>/`.
 
@@ -81,6 +81,8 @@ python scripts/train_octree_anygs.py \
 ```bash
 DRIVE=2013_05_28_drive_0009_sync
 
+python scripts/check_torch_stack.py --repo-root /workspace/VBOGS
+
 python scripts/prepare_kitti360_colmap.py \
   --drive "$DRIVE" \
   --frame-step 10 \
@@ -91,4 +93,47 @@ python scripts/train_octree_anygs.py \
   --gpu 0
 ```
 
-3.
+### 4. Create the Colored Point Cloud
+
+This step creates the M3 stereo point-cloud artifact used by anchor bucketing.
+It runs in the torch environment and writes:
+
+- `data/points_world/$DRIVE/points_world.npz` with `xyz`, `rgb`, and `frame_id`
+- `data/points_world/$DRIVE/points_world_metadata.json`
+- `data/points_world/$DRIVE/points_world.ply` when `--write-ply` is passed
+
+Full run, with a colored PLY sidecar for viewer inspection:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
+python scripts/stereo_to_pointcloud.py \
+  --drive "$DRIVE" \
+  --selection-metadata "data/COLMAP/$DRIVE/metadata.json" \
+  --write-ply
+```
+
+Dev-machine friendly run:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
+python scripts/stereo_to_pointcloud.py \
+  --drive "$DRIVE" \
+  --selection-metadata "data/COLMAP/$DRIVE/metadata.json" \
+  --max-frames 40 \
+  --pixel-step 2 \
+  --max-points-per-frame 50000 \
+  --max-depth-m 60
+```
+
+Useful size/runtime controls:
+
+- `--max-frames N` limits how many selected frames are processed.
+- `--pixel-step N` keeps every Nth valid pixel in x and y.
+- `--max-points-per-frame N` caps retained points per frame after filtering.
+- `--max-depth-m M` removes far stereo points before export.
+- `--write-ply` writes a colored `.ply`; omit it on memory-limited runs.
+
+For a quick visual check on a dev machine, use the friendly command first, then
+add `--write-ply` only after the point count looks reasonable.

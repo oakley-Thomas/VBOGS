@@ -75,8 +75,40 @@ def main() -> int:
     if argmax.shape != expected.shape:
         raise RuntimeError("torch_scatter returned an unexpected argmax shape")
 
+    # Exercise gsplat's lazy CUDA extension path, which a plain import does not
+    # cover. This mirrors the first renderer call in Octree-AnyGS training.
+    means = torch.tensor([[0.0, 0.0, 3.0]], dtype=torch.float32, device=device)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32, device=device)
+    scales = torch.tensor([[0.1, 0.1, 0.1]], dtype=torch.float32, device=device)
+    opacities = torch.tensor([0.9], dtype=torch.float32, device=device)
+    colors = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32, device=device)
+    viewmats = torch.eye(4, dtype=torch.float32, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[10.0, 0.0, 8.0], [0.0, 10.0, 8.0], [0.0, 0.0, 1.0]]],
+        dtype=torch.float32,
+        device=device,
+    )
+    render_colors, render_alphas, _info = gsplat.rasterization(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=16,
+        height=16,
+        render_mode="RGB",
+    )
+    if render_colors.shape[:3] != (1, 16, 16) or render_alphas.shape[:3] != (1, 16, 16):
+        raise RuntimeError(
+            "gsplat rasterization returned unexpected shapes: "
+            f"colors={tuple(render_colors.shape)}, alphas={tuple(render_alphas.shape)}"
+        )
+
     print("cuda_matmul=ok")
     print("torch_scatter_cuda=ok")
+    print("gsplat_rasterization=ok")
     print("gaussian_renderer_import=ok")
     print("torch_stack_check=ok")
     return 0
