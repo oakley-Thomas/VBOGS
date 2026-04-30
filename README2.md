@@ -307,3 +307,17 @@ This writes:
 
 The score is `sum(unc_image) / (sum(alpha_image) + EPS)`, matching the
 alpha-normalized NBV objective in `Algorithm.txt`.
+
+Create PNG diagnostics from the saved top images:
+
+```bash
+python scripts/visualize_m6.py \
+  --drive "$DRIVE" \
+  --make-overlay
+```
+
+This writes heatmaps and alpha masks under:
+
+```bash
+data/m6/$DRIVE/viz/
+```
