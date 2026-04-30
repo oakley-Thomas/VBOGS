@@ -41,9 +41,9 @@ docker compose down
 
 ## Usage
 
-0. Clone this repo (it is already git checked out in the images mentioned above)
+### Clone this repo (it is already git checked out in the images mentioned above)
 
-1. Download the dataset:
+### Download the dataset:
 ```bash
 export KITTI_CALIBRATION_LINK=<link-to-kitti-360-calibration>
 export KITTI_POSES_LINK=<link-to-kitti-360-poses>
@@ -58,22 +58,37 @@ cd data/
 ./download_kitti_360.sh
 ```
 
-2. Run Octree-AnyGS Training
-```bash
-DRIVE=2013_05_28_drive_0018_sync
+### Run Octree-AnyGS Training
 
-# COLMAP SFM - outputs written to VBOGS/data/COLMAP/<$DRIVE>
+**Local conda workflow:** Octree-AnyGS training runs are written to `data/OCTREE-ANYGS/$DRIVE/<timestamp>/`.
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
+python scripts/prepare_kitti360_colmap.py \
+  --drive "$DRIVE" \
+  --frame-step 10 \
+  --max-frames 160 \
+  --output-root data/COLMAP
+
+python scripts/train_octree_anygs.py \
+  --dataset-path "data/COLMAP/$DRIVE" \
+  --output-root data/OCTREE-ANYGS \
+  --gpu 0
+```
+
+**Docker workflow:** Octree-AnyGS training runs are written to `/data/OCTREE-ANYGS/$DRIVE/<timestamp>/`.
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
 python scripts/prepare_kitti360_colmap.py \
   --drive "$DRIVE" \
   --frame-step 10 \
   --max-frames 160
 
 python scripts/train_octree_anygs.py \
-  --dataset-path "data/COLMAP/$DRIVE" \
+  --dataset-path "/data/COLMAP/$DRIVE" \
   --gpu 0
 ```
-
-Octree-AnyGS training runs are written to `/data/OCTREE-ANYGS/$DRIVE/<timestamp>/`
-by default.
 
 3.
