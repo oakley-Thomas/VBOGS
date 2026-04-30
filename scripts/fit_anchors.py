@@ -164,6 +164,23 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Index into `jax.devices()` used for the fit.",
     )
+    parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="Split observed anchors into this many deterministic shards.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Shard index to fit, in [0, --num-shards).",
+    )
+    parser.add_argument(
+        "--merge-shards",
+        action="store_true",
+        help="Merge completed shard posterior files into the normal unsharded output.",
+    )
     return parser.parse_args()
 
 
@@ -189,6 +206,15 @@ def resolve_output_paths(output_root: Path, max_observed_anchors: int) -> Tuple[
         output_root / "anchor_posterior.npz",
         output_root / "fit_metadata.json",
     )
+
+
+def shard_suffix(shard_index: int, num_shards: int) -> str:
+    width = max(3, len(str(num_shards - 1)))
+    return f".shard_{shard_index:0{width}d}_of_{num_shards:0{width}d}"
+
+
+def apply_shard_suffix(path: Path, shard_index: int, num_shards: int) -> Path:
+    return path.with_name(f"{path.stem}{shard_suffix(shard_index, num_shards)}{path.suffix}")
 
 
 def resolve_checkpoint_paths(posterior_path: Path, metadata_path: Path) -> Tuple[Path, Path]:
@@ -229,6 +255,13 @@ def save_npz_atomic(path: Path, **arrays: np.ndarray) -> None:
     with tmp_path.open("wb") as handle:
         np.savez_compressed(handle, **arrays)
     tmp_path.replace(path)
+
+
+def validate_shard_args(num_shards: int, shard_index: int) -> None:
+    if num_shards <= 0:
+        raise ValueError("--num-shards must be positive")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise ValueError(f"--shard-index must be in [0, {num_shards}), got {shard_index}")
 
 
 def compute_mean_elbo(model, points_norm: np.ndarray, batch_size: int, compute_elbo_delta) -> float:
@@ -369,6 +402,7 @@ def build_metadata(
     n_anchors: int,
     m_obs: int,
     total_observed: int,
+    total_requested_observed: int,
     observed_point_counts: np.ndarray,
     k_growth_attempted: np.ndarray,
     fit_batch_size: np.ndarray,
@@ -390,6 +424,7 @@ def build_metadata(
         "observed_anchor_count": int(m_obs),
         "unobserved_anchor_count": int(n_anchors - total_observed),
         "observed_anchor_count_total": total_observed,
+        "requested_observed_anchor_count": int(total_requested_observed),
         "completed_anchor_count": completed_count,
         "remaining_anchor_count": int(m_obs - completed_count),
         "run_completed_anchor_count": int(run_completed_count),
@@ -416,6 +451,8 @@ def build_metadata(
         "completed_anchors_per_sec": completed_count / max(elapsed, 1e-6),
         "under_modeled_count": int(under_modeled[fit_completed].sum()) if completed_count else 0,
         "max_observed_anchors": args.max_observed_anchors,
+        "num_shards": args.num_shards,
+        "shard_index": args.shard_index,
         "checkpoint_every": args.checkpoint_every,
         "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
     }
@@ -524,8 +561,118 @@ def load_checkpoint(
     return int(fit_completed.sum())
 
 
+def expected_observed_anchor_ids_for_args(args: argparse.Namespace, pts_by_anchor_path: Path) -> np.ndarray:
+    pts_by_anchor_npz = load_npz(pts_by_anchor_path)
+    point_counts = np.asarray(pts_by_anchor_npz["point_counts"], dtype=np.int32)
+    expected = np.nonzero(point_counts >= args.min_points_per_anchor)[0].astype(np.int32)
+    if args.max_observed_anchors > 0:
+        expected = expected[: args.max_observed_anchors]
+    return expected
+
+
+def merge_shard_posteriors(
+    *,
+    posterior_path: Path,
+    metadata_path: Path,
+    num_shards: int,
+    expected_observed_anchor_ids: np.ndarray | None,
+    args: argparse.Namespace,
+) -> None:
+    if num_shards <= 1:
+        raise ValueError("--merge-shards requires --num-shards greater than 1")
+
+    shard_paths = [
+        apply_shard_suffix(posterior_path, shard_idx, num_shards)
+        for shard_idx in range(num_shards)
+    ]
+    missing = [path for path in shard_paths if not path.exists()]
+    if missing:
+        missing_text = "\n".join(f"  {path}" for path in missing)
+        raise FileNotFoundError(f"Cannot merge shards; missing posterior files:\n{missing_text}")
+
+    shards = [load_npz(path) for path in shard_paths]
+    reference = shards[0]
+    full_length_keys = ("is_observed", "point_count")
+    row_keys = (
+        "final_k",
+        "final_elbo",
+        "selected_gain",
+        "under_modeled",
+        "fit_batch_size",
+        "k_growth_attempted",
+        "fit_completed",
+        "alpha",
+        "spatial_mean",
+        "spatial_kappa",
+        "spatial_u",
+        "spatial_n",
+        "delta_mean",
+        "delta_kappa",
+        "delta_u",
+        "delta_n",
+    )
+    scalar_keys = ("k_init", "k_max", "min_points_per_anchor", "elbo_improvement_tol")
+
+    for shard_idx, shard in enumerate(shards):
+        for key in full_length_keys:
+            if not np.array_equal(shard[key], reference[key]):
+                raise ValueError(f"Shard {shard_idx} has mismatched `{key}`")
+        for key in scalar_keys:
+            if not np.array_equal(shard[key], reference[key]):
+                raise ValueError(f"Shard {shard_idx} has mismatched `{key}`")
+
+    observed_anchor_ids = np.concatenate([shard["observed_anchor_ids"].astype(np.int32) for shard in shards])
+    if np.unique(observed_anchor_ids).shape[0] != observed_anchor_ids.shape[0]:
+        raise ValueError("Shard files contain duplicate observed anchor ids")
+    order = np.argsort(observed_anchor_ids, kind="stable")
+    observed_anchor_ids = observed_anchor_ids[order]
+    if expected_observed_anchor_ids is not None and not np.array_equal(observed_anchor_ids, expected_observed_anchor_ids):
+        raise ValueError(
+            "Shard files do not cover the expected observed-anchor set. "
+            "Use the same --max-observed-anchors, --min-points-per-anchor, and --num-shards used for fitting."
+        )
+
+    merged: Dict[str, np.ndarray] = {
+        "is_observed": reference["is_observed"],
+        "observed_anchor_ids": observed_anchor_ids,
+        "point_count": reference["point_count"],
+    }
+    for key in row_keys:
+        merged[key] = np.concatenate([shard[key] for shard in shards], axis=0)[order]
+    for key in scalar_keys:
+        merged[key] = reference[key]
+
+    if not bool(np.all(merged["fit_completed"])):
+        incomplete = int((~merged["fit_completed"]).sum())
+        raise ValueError(f"Cannot merge shards; {incomplete:,} shard rows are incomplete")
+
+    save_npz_atomic(posterior_path, **merged)
+    metadata = {
+        "drive": args.drive,
+        "merged_from_shards": num_shards,
+        "shard_paths": [str(path) for path in shard_paths],
+        "posterior_path": str(posterior_path),
+        "anchor_count": int(reference["is_observed"].shape[0]),
+        "observed_anchor_count": int(observed_anchor_ids.shape[0]),
+        "completed_anchor_count": int(merged["fit_completed"].sum()),
+        "expected_observed_anchor_count": int(
+            expected_observed_anchor_ids.shape[0]
+            if expected_observed_anchor_ids is not None
+            else observed_anchor_ids.shape[0]
+        ),
+        "k_init": int(np.asarray(reference["k_init"])),
+        "k_max": int(np.asarray(reference["k_max"])),
+        "min_points_per_anchor": int(np.asarray(reference["min_points_per_anchor"])),
+        "elbo_improvement_tol": float(np.asarray(reference["elbo_improvement_tol"])),
+    }
+    save_json(metadata_path, metadata)
+    print(f"Merged {num_shards} shard posterior files into {posterior_path}")
+    print(f"Wrote {metadata_path}")
+
+
 def main() -> None:
     args = parse_args()
+    validate_shard_args(args.num_shards, args.shard_index)
     bucket_root = resolve_bucket_root(args).resolve()
     output_root = resolve_output_root(args, bucket_root).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -533,6 +680,21 @@ def main() -> None:
     points_norm_path = (args.points_norm or (bucket_root / "points_norm.npz")).resolve()
     pts_by_anchor_path = (args.pts_by_anchor or (bucket_root / "pts_by_anchor.npz")).resolve()
     posterior_path, metadata_path = resolve_output_paths(output_root, args.max_observed_anchors)
+    unsharded_posterior_path = posterior_path
+    unsharded_metadata_path = metadata_path
+    if args.merge_shards:
+        expected_observed_anchor_ids = expected_observed_anchor_ids_for_args(args, pts_by_anchor_path)
+        merge_shard_posteriors(
+            posterior_path=unsharded_posterior_path,
+            metadata_path=unsharded_metadata_path,
+            num_shards=args.num_shards,
+            expected_observed_anchor_ids=expected_observed_anchor_ids,
+            args=args,
+        )
+        return
+    if args.num_shards > 1:
+        posterior_path = apply_shard_suffix(posterior_path, args.shard_index, args.num_shards)
+        metadata_path = apply_shard_suffix(metadata_path, args.shard_index, args.num_shards)
     checkpoint_path, checkpoint_metadata_path = resolve_checkpoint_paths(posterior_path, metadata_path)
 
     add_vbgs_to_path(args.vbgs_root)
@@ -558,6 +720,9 @@ def main() -> None:
     observed_anchor_ids = np.nonzero(is_observed)[0].astype(np.int32)
     if args.max_observed_anchors > 0:
         observed_anchor_ids = observed_anchor_ids[: args.max_observed_anchors]
+    total_requested_observed = int(observed_anchor_ids.shape[0])
+    if args.num_shards > 1:
+        observed_anchor_ids = observed_anchor_ids[args.shard_index :: args.num_shards]
 
     print(f"Loaded {points_norm.shape[0]:,} normalized points")
     total_observed = int(is_observed.sum())
@@ -566,7 +731,12 @@ def main() -> None:
         f"MIN_POINTS_PER_ANCHOR={args.min_points_per_anchor}"
     )
     if args.max_observed_anchors > 0:
-        print(f"Processing the first {observed_anchor_ids.shape[0]:,} observed anchors for a smoke test")
+        print(f"Processing the first {total_requested_observed:,} observed anchors for a smoke test")
+    if args.num_shards > 1:
+        print(
+            f"Processing shard {args.shard_index}/{args.num_shards}: "
+            f"{observed_anchor_ids.shape[0]:,} of {total_requested_observed:,} requested observed anchors"
+        )
 
     m_obs = observed_anchor_ids.shape[0]
     final_k = np.zeros((m_obs,), dtype=np.int16)
@@ -655,6 +825,7 @@ def main() -> None:
             n_anchors=n_anchors,
             m_obs=m_obs,
             total_observed=total_observed,
+            total_requested_observed=total_requested_observed,
             observed_point_counts=observed_point_counts,
             k_growth_attempted=k_growth_attempted,
             fit_batch_size=fit_batch_size,

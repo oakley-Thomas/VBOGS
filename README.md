@@ -253,6 +253,22 @@ Run the full M4b fit by omitting `--max-observed-anchors`; that writes:
 - `anchor_posterior.npz`
 - `fit_metadata.json`
 
+For parallel M4b runs, split the observed-anchor loop into deterministic shards:
+
+```bash
+python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 0
+python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 1
+python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 2
+python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 3
+```
+
+Each shard writes `anchor_posterior.shard_XXX_of_YYY.npz` and matching metadata.
+After all shards complete, merge them into the normal M5 input:
+
+```bash
+python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --merge-shards
+```
+
 The initial hyperparameter defaults match `PLAN.md`:
 
 - `K_INIT=10`

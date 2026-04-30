@@ -110,6 +110,7 @@ Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`,
 - [x] Implement K-growth loop with ELBO comparison
 - [x] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
 - [x] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
+- [x] Deterministic shard mode for parallel anchor fitting, plus shard merge back to `anchor_posterior.npz`
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
 - [ ] Decide: loop vs `jax.vmap` across anchors (defer until N_anchors is known)
 
