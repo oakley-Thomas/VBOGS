@@ -30,8 +30,9 @@ docker login
 bash scripts/publish_dockerhub.sh
 ```
 
-That script builds both images, tags them with a UTC timestamp, pushes them to
-Docker Hub, and prints the exact image values to paste into the Portainer stack:
+That script builds the runtime images, tags them with a UTC timestamp, pushes
+them to Docker Hub, and prints the exact image values to paste into the
+Portainer stack:
 
 - `VBOGS_TORCH_IMAGE=oakleyth/vbogs-torch:<timestamp>`
 - `VBOGS_JAX_IMAGE=oakleyth/vbogs-jax:<timestamp>`
@@ -260,21 +261,81 @@ The initial hyperparameter defaults match `PLAN.md`:
 - `MIN_POINTS_PER_ANCHOR=20`
 - `ELBO_IMPROVEMENT_TOL=0.01`
 
+## Drive Pipeline Runner
+
+The repo includes a stack-contained orchestrator for the implemented pipeline
+stages: M2 dataset preparation/training, M3 stereo export, M4a anchor bucketing,
+and M4b VBGS fitting. The compose stack has a third service, `vbogs-pipeline`,
+that dispatches each stage into the correct sibling container:
+
+- `vbogs-torch`: prepare, train, stereo, bucket
+- `vbogs-jax`: fit
+- `vbogs-pipeline`: orchestration only
+
+In Portainer, set these stack environment variables and redeploy:
+
+```text
+VBOGS_DRIVE=2013_05_28_drive_0008_sync
+VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
+```
+
+The pipeline service uses Docker Compose labels to find the running
+`vbogs-torch` and `vbogs-jax` containers, then runs the stage commands inside
+them with `docker exec`. The data boundary remains the shared mounted volumes:
+
+- `/data/COLMAP/<drive>` for the prepared Octree-AnyGS dataset
+- `/data/OCTREE-ANYGS/<drive>/<timestamp>` for the trained model
+- `data/points_world/<drive>` for M3 point clouds
+- `data/m4/<drive>` for M4a/M4b artifacts
+
+For a short M4b smoke run instead of a full fit, set:
+
+```text
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
+```
+
+To resume from a later stage after replacing or fixing an artifact, set:
+
+```text
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
+```
+
+For a command audit without running the expensive stages:
+
+```text
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
+```
+
+When `VBOGS_PIPELINE_AUTORUN=0`, the pipeline service stays idle with
+`sleep infinity`. That is useful for keeping the service in the stack without
+accidentally relaunching a long training run on every redeploy.
+
+The pipeline service mounts `/var/run/docker.sock` so it can run commands in
+the sibling containers. This is what makes the workflow fully stack-contained,
+but it also means the service has Docker daemon access on the host.
+
+This runner intentionally stops at M4b today. M5 uncertainty computation and
+M6/M7 NBV visualization are still unchecked in [PLAN.md](PLAN.md), so there are
+no stable repo-owned entry points for the runner to call yet.
+
 ## Docker And Portainer Deployment
 
-The repo now includes a two-container Docker layout that mirrors the project's
-existing framework split:
+The repo now includes a Docker layout that mirrors the project's framework split
+and keeps orchestration inside the stack:
 
 - `vbogs-torch` for M2, M3, and M4a
 - `vbogs-jax` for M4b onward
+- `vbogs-pipeline` for stack-contained stage orchestration
 
 The compose file is [docker-compose.yml](/home/oakley/ub/advanced_robotics/VBOGS/docker-compose.yml:1).
-It runs two images built from:
+It runs images built from:
 
 - [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
 - [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
+- [docker/pipeline.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/pipeline.Dockerfile:1)
 
-Both Dockerfiles clone the project from GitHub during the image build instead
+The Dockerfiles clone the project from GitHub during the image build instead
 of copying the local checkout into the image. The default source is:
 
 - `VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git`
@@ -288,13 +349,15 @@ pull prebuilt images instead of trying to build them remotely:
 
 - `VBOGS_TORCH_IMAGE`
 - `VBOGS_JAX_IMAGE`
+- `VBOGS_PIPELINE_IMAGE`
 
 The current defaults are:
 
 - `oakleyth/vbogs-torch:latest`
 - `oakleyth/vbogs-jax:latest`
+- `oakleyth/vbogs-pipeline:latest`
 
-Because both services now also include local `build:` definitions, the same
+Because the services also include local `build:` definitions, the same
 compose file supports two workflows:
 
 - image-pull deployment for pinned Docker Hub / GHCR releases
@@ -302,10 +365,10 @@ compose file supports two workflows:
 
 ### Build Images
 
-Build both images with the compose file:
+Build the stack images with the compose file:
 
 ```bash
-docker compose build vbogs-torch vbogs-jax
+docker compose build vbogs-torch vbogs-jax vbogs-pipeline
 ```
 
 By default, the build clones `https://github.com/oakley-Thomas/VBOGS.git` at
@@ -313,8 +376,8 @@ By default, the build clones `https://github.com/oakley-Thomas/VBOGS.git` at
 `VBOGS_GIT_REF` before running the build:
 
 ```bash
-VBOGS_GIT_REF=main docker compose build vbogs-torch vbogs-jax
-VBOGS_GIT_REF=<commit-sha> docker compose build vbogs-torch vbogs-jax
+VBOGS_GIT_REF=main docker compose build vbogs-torch vbogs-jax vbogs-pipeline
+VBOGS_GIT_REF=<commit-sha> docker compose build vbogs-torch vbogs-jax vbogs-pipeline
 ```
 
 If you want to point the images at a fork or temporary remote, override
@@ -368,10 +431,11 @@ The stack uses six Docker volumes:
 
 `KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes in
 the compose file so Portainer can attach the named volumes you created. They
-are mounted read/write in both containers. The other three volumes are repo-owned
-working volumes for derived artifacts and generated configs.
+are mounted read/write in the Torch/JAX runtime containers. The other three
+volumes are repo-owned working volumes for derived artifacts and generated
+configs.
 
-Both services mount the same named Docker volumes for:
+The Torch and JAX services mount the same named Docker volumes for:
 
 - `/workspace/VBOGS/data`
 - `/workspace/VBOGS/data/KITTI-360`
@@ -577,12 +641,14 @@ server building images itself.
 
 Recommended flow:
 
-1. Build and push both images to GHCR using the commands above.
+1. Build and push the Torch, JAX, and pipeline images to GHCR using the
+   commands above.
 2. In Portainer, create a new stack from this repository or paste the compose
    file into the Web editor.
 3. In the stack environment-variable section, set:
    - `VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest`
    - `VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest`
+   - `VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest`
 4. If you pushed versioned tags, use those tags instead of `latest`.
 5. Deploy the stack. Portainer should pull the images rather than invoking a
    remote build.
