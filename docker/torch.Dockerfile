@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -26,13 +26,13 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 &
     python -m pip install --upgrade pip setuptools wheel
 
 RUN python -m pip install \
-    torch==2.4.1 \
-    torchvision==0.19.1 \
-    torchaudio==2.4.1 \
-    --index-url https://download.pytorch.org/whl/cu124
+    torch==2.7.1 \
+    torchvision==0.22.1 \
+    torchaudio==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 RUN python -m pip install torch_scatter \
-    -f https://data.pyg.org/whl/torch-2.4.0+cu124.html
+    -f https://data.pyg.org/whl/torch-2.7.1+cu128.html
 
 RUN python -m pip install \
     plyfile \
@@ -53,9 +53,9 @@ RUN python -m pip install \
 
 RUN python -m pip install rich && \
     python -m pip install gsplat \
-    --index-url https://docs.gsplat.studio/whl/pt24cu124
+    --index-url https://docs.gsplat.studio/whl/pt27cu128
 
-RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.4', torch.version.cuda; assert '+pt24cu124' in getattr(gsplat, '__version__', ''), getattr(gsplat, '__version__', 'unknown')"
+RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; assert '+pt27cu128' in getattr(gsplat, '__version__', ''), getattr(gsplat, '__version__', 'unknown')"
 
 ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
 ARG VBOGS_GIT_REF=main
