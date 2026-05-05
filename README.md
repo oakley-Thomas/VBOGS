@@ -341,6 +341,35 @@ The pipeline currently runs the implemented path through M4b:
 4. `bucket`: point-to-anchor bucketing
 5. `fit`: per-anchor VBGS posterior fitting
 
+### Top-Level Pipeline Config
+
+Main pipeline knobs live in [pipeline_config.yaml](pipeline_config.yaml). The
+runner loads this file by default and uses it for values such as:
+
+- drive id and Git ref
+- stage range, dry-run mode, and resume point
+- KITTI-360 input overrides
+- dataset-prep sampling
+- Octree-AnyGS training budget
+- stereo density/filtering
+- anchor checkpoint selection
+- VBGS fit mode, device, batching, and smoke-run cap
+
+Values from `VBOGS_PIPELINE_ARGS` or direct CLI flags override the YAML config.
+In Compose, set `VBOGS_PIPELINE_CONFIG` if you want to use a different config
+path:
+
+```text
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
+```
+
+`VBOGS_DRIVE` is also an override for `pipeline.drive`; omit it if the config
+file should be the only source of the drive id.
+
+For Portainer web-only deployments, the usual pattern is to commit a tuned
+`pipeline_config.yaml` on a branch, set `VBOGS_PIPELINE_GIT_REF` to that branch,
+and redeploy the stack.
+
 ### Local Docker Compose
 
 Use this when you have terminal access on the machine running Docker.
@@ -385,6 +414,7 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
 docker compose up --build vbogs-pipeline
@@ -398,6 +428,7 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
 docker compose up --build vbogs-pipeline
@@ -411,6 +442,7 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
 docker compose up --build vbogs-pipeline
@@ -483,6 +515,7 @@ VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
 ```text
 VBOGS_PIPELINE_AUTORUN=0
 VBOGS_DRIVE=2013_05_28_drive_0008_sync
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 VBOGS_PIPELINE_GIT_REF=
 VBOGS_PIPELINE_ARGS=
 ```
@@ -496,6 +529,7 @@ VBOGS_PIPELINE_ARGS=
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```
@@ -504,6 +538,7 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
 ```
@@ -512,6 +547,7 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 ```

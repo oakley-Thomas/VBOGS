@@ -29,6 +29,65 @@ from typing import Sequence
 STAGES = ("prepare", "train", "stereo", "bucket", "fit")
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
+DEFAULT_CONFIG = Path("pipeline_config.yaml")
+CONFIG_KEY_MAP = {
+    "pipeline": {
+        "drive": "drive",
+        "git_ref": "git_ref",
+        "start_at": "start_at",
+        "stop_after": "stop_after",
+        "dry_run": "dry_run",
+        "skip_up": "skip_up",
+    },
+    "inputs": {
+        "raw_root": "raw_root",
+        "poses_root": "poses_root",
+        "calibration_dir": "calibration_dir",
+    },
+    "prepare": {
+        "frame_step": "frame_step",
+        "max_frames": "max_frames",
+        "copy_mode": "copy_mode",
+        "seed_mode": "seed_mode",
+    },
+    "train": {
+        "gpu": "gpu",
+        "resolution": "resolution",
+        "iterations": "iterations",
+        "llffhold": "llffhold",
+        "feat_dim": "feat_dim",
+        "base_layer": "base_layer",
+        "visible_threshold": "visible_threshold",
+        "write_config_only": "write_config_only",
+    },
+    "stereo": {
+        "matcher": "matcher",
+        "pixel_step": "pixel_step",
+        "max_points_per_frame": "max_points_per_frame",
+        "write_ply": "write_ply",
+    },
+    "bucket": {
+        "model_path": "model_path",
+        "bucket_iteration": "bucket_iteration",
+    },
+    "fit": {
+        "jax_device": "jax_device",
+        "fit_mode": "fit_mode",
+        "batch_size": "batch_size",
+        "vmap_group_size": "vmap_group_size",
+        "log_every": "log_every",
+        "max_observed_anchors": "max_observed_anchors",
+    },
+    "orchestration": {
+        "compose_command": "compose_command",
+        "compose_file": "compose_file",
+        "project_name": "project_name",
+        "torch_container": "torch_container",
+        "jax_container": "jax_container",
+        "use_service_labels": "use_service_labels",
+        "label_project": "label_project",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -38,14 +97,66 @@ class PipelineStep:
     command: tuple[str, ...]
 
 
-def parse_args() -> argparse.Namespace:
+def load_config_defaults(config_path: Path | None) -> dict:
+    if config_path is None:
+        return {}
+    if not config_path.exists():
+        if config_path == DEFAULT_CONFIG:
+            return {}
+        raise FileNotFoundError(f"Pipeline config not found: {config_path}")
+    if not config_path.is_file():
+        raise ValueError(f"Pipeline config must be a file: {config_path}")
+
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "PyYAML is required to read pipeline config files. "
+            "Install `pyyaml` or run without --config."
+        ) from exc
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw_config = yaml.safe_load(handle) or {}
+    if not isinstance(raw_config, dict):
+        raise ValueError(f"Pipeline config must be a YAML mapping: {config_path}")
+
+    defaults = {}
+    for section, key_map in CONFIG_KEY_MAP.items():
+        raw_section = raw_config.get(section, {})
+        if raw_section is None:
+            continue
+        if not isinstance(raw_section, dict):
+            raise ValueError(f"`{section}` in {config_path} must be a mapping")
+        for config_key, arg_name in key_map.items():
+            if config_key in raw_section and raw_section[config_key] is not None:
+                defaults[arg_name] = raw_section[config_key]
+
+    return defaults
+
+
+def config_path_arg(raw_path: str) -> Path | None:
+    if raw_path == "":
+        return None
+    return Path(raw_path)
+
+
+def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--config",
+        type=config_path_arg,
+        default=DEFAULT_CONFIG,
+        help=(
+            "YAML config file used for pipeline defaults. CLI flags override it. "
+            "Defaults to `pipeline_config.yaml`; pass an empty string to disable."
+        ),
+    )
+    parser.add_argument(
         "--drive",
-        required=True,
+        default=None,
         help="KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`.",
     )
     parser.add_argument(
@@ -193,7 +304,23 @@ def parse_args() -> argparse.Namespace:
             "Optional smoke-test cap for M4b. Leave at 0 for the full fit."
         ),
     )
-    return parser.parse_args()
+    parser.set_defaults(**(config_defaults or {}))
+    return parser
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=config_path_arg, default=DEFAULT_CONFIG)
+    pre_args, _ = pre_parser.parse_known_args(argv)
+
+    config_path = pre_args.config
+    config_defaults = load_config_defaults(config_path)
+
+    parser = build_parser(config_defaults)
+    args = parser.parse_args(argv)
+    if not args.drive:
+        parser.error("--drive is required unless `pipeline.drive` is set in the config")
+    return args
 
 
 def maybe_path_args(args: argparse.Namespace) -> list[str]:
