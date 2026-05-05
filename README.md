@@ -416,7 +416,7 @@ Build and start the idle stack:
 VBOGS_TORCH_IMAGE=local/vbogs-torch \
 VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
-docker compose up -d --build
+docker compose up -d --build 
 ```
 
 Run a command audit first. This prints the stage commands without launching the
