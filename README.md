@@ -20,37 +20,20 @@ bash scripts/envs.sh check-torch-stack
 bash scripts/envs.sh smoke-test-jax
 ```
 
-## Docker Hub / Portainer Quick Start
+## Deployment Quick Start
 
-If your main workflow is "build on the dev machine, deploy on the GPU server,"
-the shortest path is:
+The Docker workflow uses one compose stack with three services:
 
-```bash
-docker login
-bash scripts/publish_dockerhub.sh
-```
+- `vbogs-torch` for Octree-AnyGS, stereo, and bucketing
+- `vbogs-jax` for VBGS anchor fitting
+- `vbogs-pipeline` for running the stages in order inside the stack
 
-That script builds the runtime images, tags them with a UTC timestamp, pushes
-them to Docker Hub, and prints the exact image values to paste into the
-Portainer stack:
+You can run the same `docker-compose.yml` locally with Docker Compose, or deploy
+it remotely through the Portainer web UI. The pipeline stops at M4b today
+because M5-M7 do not have stable repo-owned entry points yet.
 
-- `VBOGS_TORCH_IMAGE=oakleyth/vbogs-torch:<timestamp>`
-- `VBOGS_JAX_IMAGE=oakleyth/vbogs-jax:<timestamp>`
-
-In Portainer:
-
-1. Open the stack.
-2. Update `VBOGS_TORCH_IMAGE` and `VBOGS_JAX_IMAGE` to the printed tags.
-3. Redeploy the stack.
-
-If you prefer to rebuild directly on the server after `git pull`, use:
-
-```bash
-bash scripts/update_server_stack.sh
-```
-
-The full deployment and volume-layout details are documented below in
-`Docker And Portainer Deployment`.
+For local Docker Compose, see `Local Docker Compose` below. For a remote server
+where you only have Portainer web access, see `Remote Portainer Web UI`.
 
 ## M2 Training Workflow
 
@@ -319,356 +302,237 @@ This runner intentionally stops at M4b today. M5 uncertainty computation and
 M6/M7 NBV visualization are still unchecked in [PLAN.md](PLAN.md), so there are
 no stable repo-owned entry points for the runner to call yet.
 
-## Docker And Portainer Deployment
+## Docker Compose And Portainer Deployment
 
-The repo now includes a Docker layout that mirrors the project's framework split
-and keeps orchestration inside the stack:
+The compose stack is designed to be self-contained. `vbogs-pipeline` is a small
+orchestrator container that mounts `/var/run/docker.sock`, finds the sibling
+`vbogs-torch` and `vbogs-jax` containers by Compose labels, and runs each stage
+inside the correct runtime container. You do not need to manually run stage
+commands inside the Torch or JAX containers.
+
+The stack uses these services:
 
 - `vbogs-torch` for M2, M3, and M4a
-- `vbogs-jax` for M4b onward
-- `vbogs-pipeline` for stack-contained stage orchestration
+- `vbogs-jax` for M4b
+- `vbogs-pipeline` for stack-contained orchestration
 
-The compose file is [docker-compose.yml](/home/oakley/ub/advanced_robotics/VBOGS/docker-compose.yml:1).
-It runs images built from:
+The stack uses these Docker volumes:
 
-- [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
-- [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
-- [docker/pipeline.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/pipeline.Dockerfile:1)
+- `KITTI-360`, external, mounted at `/workspace/VBOGS/data/KITTI-360`
+- `COLMAP`, external, mounted at `/data/COLMAP`
+- `OCTREE-ANYGS`, external, mounted at `/data/OCTREE-ANYGS`
+- `vbogs-data`, compose-managed, mounted at `/workspace/VBOGS/data`
+- `vbogs-outputs`, compose-managed, mounted at `/workspace/VBOGS/outputs`
+- `vbogs-generated-configs`, compose-managed, mounted at `/workspace/VBOGS/generated_configs`
 
-The Dockerfiles clone the project from GitHub during the image build instead
-of copying the local checkout into the image. The default source is:
+`KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes, so
+they must exist before the stack starts. The source KITTI-360 volume must contain
+the expected layout:
 
-- `VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git`
-- `VBOGS_GIT_REF=main`
+- `/workspace/VBOGS/data/KITTI-360/data_2d_test/`
+- `/workspace/VBOGS/data/KITTI-360/data_poses/`
+- `/workspace/VBOGS/data/KITTI-360/calibration/`
 
-Override `VBOGS_GIT_REF` in Portainer or your shell to rebuild images from a
-branch, tag, or reachable commit SHA.
+The pipeline currently runs the implemented path through M4b:
 
-The image names are parameterized through environment variables so Portainer can
-pull prebuilt images instead of trying to build them remotely:
+1. `prepare`: KITTI-360 to Octree-AnyGS COLMAP-style dataset
+2. `train`: Octree-AnyGS training
+3. `stereo`: world-frame stereo point cloud
+4. `bucket`: point-to-anchor bucketing
+5. `fit`: per-anchor VBGS posterior fitting
 
-- `VBOGS_TORCH_IMAGE`
-- `VBOGS_JAX_IMAGE`
-- `VBOGS_PIPELINE_IMAGE`
+### Local Docker Compose
 
-The current defaults are:
+Use this when you have terminal access on the machine running Docker.
 
-- `oakleyth/vbogs-torch:latest`
-- `oakleyth/vbogs-jax:latest`
-- `oakleyth/vbogs-pipeline:latest`
-
-Because the services also include local `build:` definitions, the same
-compose file supports two workflows:
-
-- image-pull deployment for pinned Docker Hub / GHCR releases
-- server-side rebuilds after `git pull` when you want fast live iteration
-
-### Build Images
-
-Build the stack images with the compose file:
+Create the required external volumes once:
 
 ```bash
-docker compose build vbogs-torch vbogs-jax vbogs-pipeline
+docker volume create KITTI-360
+docker volume create COLMAP
+docker volume create OCTREE-ANYGS
 ```
 
-By default, the build clones `https://github.com/oakley-Thomas/VBOGS.git` at
-`main`. To build from another branch, tag, or commit SHA, set
-`VBOGS_GIT_REF` before running the build:
+Put the KITTI-360 data into the `KITTI-360` volume, or temporarily edit
+`docker-compose.yml` to bind-mount your local dataset directory to
+`/workspace/VBOGS/data/KITTI-360`. Named volumes are the better match for the
+remote Portainer workflow.
+
+One local copy pattern is:
 
 ```bash
-VBOGS_GIT_REF=main docker compose build vbogs-torch vbogs-jax vbogs-pipeline
-VBOGS_GIT_REF=<commit-sha> docker compose build vbogs-torch vbogs-jax vbogs-pipeline
+docker run --rm \
+  -v KITTI-360:/dst \
+  -v /path/to/KITTI-360:/src:ro \
+  alpine sh -c "cp -a /src/. /dst/"
 ```
 
-If you want to point the images at a fork or temporary remote, override
-`VBOGS_GIT_URL` too:
+Build and start the idle stack:
 
 ```bash
-VBOGS_GIT_URL=https://github.com/<user>/<repo>.git \
-VBOGS_GIT_REF=<branch-or-commit> \
-docker compose build vbogs-torch vbogs-jax
+VBOGS_TORCH_IMAGE=local/vbogs-torch \
+VBOGS_JAX_IMAGE=local/vbogs-jax \
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
+docker compose up -d --build
 ```
 
-To rebuild without using cached layers:
+Run a command audit first. This prints the stage commands without launching the
+expensive work:
 
 ```bash
-VBOGS_GIT_REF=<branch-or-commit> docker compose build --no-cache vbogs-torch vbogs-jax
+VBOGS_TORCH_IMAGE=local/vbogs-torch \
+VBOGS_JAX_IMAGE=local/vbogs-jax \
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
+VBOGS_DRIVE=2013_05_28_drive_0008_sync \
+VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
+docker compose up --build vbogs-pipeline
 ```
 
-You can also build the images directly with Docker. This is useful when tagging
-images for a registry:
+Run a short smoke fit:
 
 ```bash
-docker build \
-  -f docker/torch.Dockerfile \
-  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
-  --build-arg VBOGS_GIT_REF=main \
-  -t oakleyth/vbogs-torch:latest \
-  .
-
-docker build \
-  -f docker/jax.Dockerfile \
-  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
-  --build-arg VBOGS_GIT_REF=main \
-  -t oakleyth/vbogs-jax:latest \
-  .
+VBOGS_TORCH_IMAGE=local/vbogs-torch \
+VBOGS_JAX_IMAGE=local/vbogs-jax \
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
+VBOGS_DRIVE=2013_05_28_drive_0008_sync \
+VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
+docker compose up --build vbogs-pipeline
 ```
 
-Because the source is cloned during the image build, only committed and pushed
-code can be built this way. Local uncommitted edits in your checkout are not
-copied into the image.
-
-### Volume Layout
-
-The stack uses six Docker volumes:
-
-- `vbogs-data` mounted at `/workspace/VBOGS/data`
-- `KITTI-360` mounted at `/workspace/VBOGS/data/KITTI-360`
-- `COLMAP` mounted at `/data/COLMAP`
-- `OCTREE-ANYGS` mounted at `/data/OCTREE-ANYGS`
-- `vbogs-outputs` mounted at `/workspace/VBOGS/outputs`
-- `vbogs-generated-configs` mounted at `/workspace/VBOGS/generated_configs`
-
-`KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes in
-the compose file so Portainer can attach the named volumes you created. They
-are mounted read/write in the Torch/JAX runtime containers. The other three
-volumes are repo-owned working volumes for derived artifacts and generated
-configs.
-
-The Torch and JAX services mount the same named Docker volumes for:
-
-- `/workspace/VBOGS/data`
-- `/workspace/VBOGS/data/KITTI-360`
-- `/data/COLMAP`
-- `/data/OCTREE-ANYGS`
-- `/workspace/VBOGS/outputs`
-- `/workspace/VBOGS/generated_configs`
-
-That keeps the filesystem contract from `PLAN.md` intact: the torch-side jobs
-write `.npz` artifacts into `data/`, and the jax-side jobs read them back from
-the same shared storage.
-
-For Portainer, the compose file expects an external named volume called
-`KITTI-360` and mounts it read/write at `/workspace/VBOGS/data/KITTI-360`
-inside both containers. That lets the large source dataset live in its own
-managed volume while the rest of `data/` continues to use `vbogs-data`.
-
-### Server Rebuild Workflow
-
-If the GPU server has a working clone of this repo and Docker build access, you
-can update the checkout and rebuild the stack in place:
+Run the full implemented pipeline:
 
 ```bash
-bash scripts/update_server_stack.sh
+VBOGS_TORCH_IMAGE=local/vbogs-torch \
+VBOGS_JAX_IMAGE=local/vbogs-jax \
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
+VBOGS_DRIVE=2013_05_28_drive_0008_sync \
+VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
+docker compose up --build vbogs-pipeline
 ```
 
-That script will:
-
-- `git fetch` and `git pull --ff-only`
-- update submodules
-- rebuild `vbogs-torch` and `vbogs-jax` from the exact pulled commit
-- recreate the containers with the existing named volumes
-
-Useful flags:
+Resume from a later stage by changing only the pipeline args:
 
 ```bash
-bash scripts/update_server_stack.sh --ref main
-bash scripts/update_server_stack.sh --skip-pull
-bash scripts/update_server_stack.sh --no-cache
+VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --start-at bucket"
 ```
 
-This is the best fit when you expect lots of quick committed changes and want
-the server to behave like a rebuildable git workspace instead of a pure
-image-consumer. Because image builds now clone from GitHub, commit and push code
-updates before rebuilding the stack.
+After a one-shot pipeline run, set `VBOGS_PIPELINE_AUTORUN=0` or start the stack
+with no pipeline env overrides so redeploys do not relaunch training.
 
-If you want to populate the Portainer-managed `KITTI-360` volume from inside a
-running container, copy the example manifest into the mounted data tree, fill
-in the URLs, and run:
+Useful local checks:
 
 ```bash
-cp scripts/kitti360_download_manifest.example.json data/KITTI-360/download_manifest.json
-python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
-```
-
-The downloader is manifest-driven on purpose. Each manifest entry can specify:
-
-- `name`
-- `url`
-- `archive_name`
-- `extract_to`
-- `strip_components`
-- `expected_paths`
-
-That keeps the code stable while you swap in the real KITTI download links.
-
-### Build And Push To GHCR
-
-This remains the better fit for pinned, reproducible deployments: build the
-images on a machine where Docker works cleanly, push them to GHCR, and let
-Portainer only pull them.
-
-If you are publishing to Docker Hub for Portainer instead of GHCR, the repo
-also includes a helper script that builds both images, tags them with a UTC
-timestamp, and pushes them:
-
-```bash
-bash scripts/publish_dockerhub.sh
-```
-
-By default it publishes:
-
-- `oakleyth/vbogs-torch:<timestamp>`
-- `oakleyth/vbogs-jax:<timestamp>`
-
-and prints the exact `VBOGS_TORCH_IMAGE` / `VBOGS_JAX_IMAGE` values to paste
-into the Portainer stack update. Pass `--push-latest` if you also want the
-`latest` tags updated.
-
-Authenticate to GHCR:
-
-```bash
-export GHCR_USER="oakley-Thomas"
-export GHCR_PAT="YOUR_GITHUB_PAT_WITH_PACKAGES_WRITE"
-printf '%s' "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-```
-
-Build the images from `main`:
-
-```bash
-docker build \
-  -f docker/torch.Dockerfile \
-  --build-arg VBOGS_GIT_REF=main \
-  -t ghcr.io/oakley-thomas/vbogs-torch:latest \
-  .
-
-docker build \
-  -f docker/jax.Dockerfile \
-  --build-arg VBOGS_GIT_REF=main \
-  -t ghcr.io/oakley-thomas/vbogs-jax:latest \
-  .
-```
-
-Push the images:
-
-```bash
-docker push ghcr.io/oakley-thomas/vbogs-torch:latest
-docker push ghcr.io/oakley-thomas/vbogs-jax:latest
-```
-
-If you want a pinned tag as well as `latest`, tag and push both:
-
-```bash
-export VBOGS_TAG="2026-04-22-m4b"
-
-docker tag ghcr.io/oakley-thomas/vbogs-torch:latest ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
-docker tag ghcr.io/oakley-thomas/vbogs-jax:latest ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
-
-docker push ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
-docker push ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
-```
-
-### Local Pull-Only Compose
-
-After the images are in GHCR, local compose can pull and run the same stack
-definition Portainer will use:
-
-```bash
-docker compose pull
-```
-
-Start the long-lived utility containers:
-
-```bash
-docker compose up -d
-```
-
-Sanity-check the GPU stacks:
-
-```bash
+docker compose logs -f vbogs-pipeline
 docker compose exec vbogs-torch python scripts/check_torch_stack.py --repo-root /workspace/VBOGS
 docker compose exec vbogs-jax python -c "import jax; print(jax.devices())"
 ```
 
-Run M4b inside the JAX container:
+### Remote Portainer Web UI
 
-```bash
-docker compose exec vbogs-jax python scripts/fit_anchors.py \
-  --drive 2013_05_28_drive_0008_sync \
-  --device 0
+Use this when the remote GPU server is only available through the Portainer web
+GUI and you cannot run host terminal commands.
+
+1. In Portainer, create these volumes from `Volumes > Add volume`:
+   - `KITTI-360`
+   - `COLMAP`
+   - `OCTREE-ANYGS`
+
+2. Make sure the `KITTI-360` volume already contains the KITTI-360 source tree.
+   If your server administrator preloaded a different volume name, either rename
+   the volume in Portainer or edit the compose file's external volume name before
+   deploying. With only the Portainer web UI, assume the dataset must be
+   preloaded by an administrator, a storage plugin, or another managed transfer
+   path before the pipeline can run.
+
+3. In Portainer, create a stack from Git or the Web editor using
+   `docker-compose.yml`.
+
+4. In the stack environment variables, set image names. For a server-side build
+   from the Git ref in the Dockerfiles, local names are fine:
+
+```text
+VBOGS_TORCH_IMAGE=local/vbogs-torch
+VBOGS_JAX_IMAGE=local/vbogs-jax
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline
+VBOGS_GIT_REF=main
 ```
 
-Run a smoke test first if you want a fast confidence check:
+If Portainer should pull prebuilt registry images instead, set those image names
+instead and configure registry credentials in Portainer if the images are
+private:
 
-```bash
-docker compose exec vbogs-jax python scripts/fit_anchors.py \
-  --drive 2013_05_28_drive_0008_sync \
-  --max-observed-anchors 5 \
-  --log-every 1 \
-  --device 0
+```text
+VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest
+VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest
+VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
 ```
 
-### Portainer Stack
+5. Deploy the stack with the pipeline idle:
 
-For Portainer on your remote Quadro RTX 8000 host, use the same
-`docker-compose.yml` as a stack definition. You now have two reasonable ways to
-operate it.
-
-**Option 1: Rebuild on the server**
-
-Use this when you expect frequent live updates and want the server clone to act
-like a rebuildable workspace.
-
-1. Make sure the server has a git clone of this repo and Docker build access.
-2. In Portainer, deploy the stack from that checkout or paste the compose file
-   into the Web editor.
-3. Confirm the external `KITTI-360` volume exists and is attached.
-4. Set `VBOGS_GIT_REF` in the Portainer stack environment if you want a branch,
-   tag, or commit other than `main`.
-5. After pulling repo changes on the server, run:
-
-```bash
-bash scripts/update_server_stack.sh
+```text
+VBOGS_PIPELINE_AUTORUN=0
+VBOGS_DRIVE=2013_05_28_drive_0008_sync
+VBOGS_PIPELINE_ARGS=
 ```
 
-This rebuilds both images locally from the pulled Git commit and recreates the
-containers while preserving the named volumes.
+6. Check that `vbogs-torch`, `vbogs-jax`, and `vbogs-pipeline` are running.
+   Use Portainer's container logs for errors. The idle pipeline logs should say
+   it is waiting for `VBOGS_PIPELINE_AUTORUN=1`.
 
-**Option 2: Pull prebuilt images**
+7. For a dry-run command audit, edit the stack environment variables and
+   redeploy:
 
-Use this when you want pinned, reproducible deployments and do not want the
-server building images itself.
+```text
+VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
+```
 
-Recommended flow:
+8. For a short smoke fit, redeploy with:
 
-1. Build and push the Torch, JAX, and pipeline images to GHCR using the
-   commands above.
-2. In Portainer, create a new stack from this repository or paste the compose
-   file into the Web editor.
-3. In the stack environment-variable section, set:
-   - `VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest`
-   - `VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest`
-   - `VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest`
-4. If you pushed versioned tags, use those tags instead of `latest`.
-5. Deploy the stack. Portainer should pull the images rather than invoking a
-   remote build.
-6. Open a console in the `vbogs-torch` and `vbogs-jax` containers to run the
-   same commands shown above.
+```text
+VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
+```
 
-If the images are private, add GHCR registry credentials in Portainer first. If
-your Portainer version does not automatically expose the NVIDIA GPU to the
-containers, enable GPU access in the host runtime settings or adjust the stack
-to your host's preferred NVIDIA device-request syntax before deploying.
+9. For the full implemented pipeline, redeploy with:
 
-### Deployment Notes For M4b
+```text
+VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
+```
 
-- `M4b` depends on `data/m4/<drive>/points_norm.npz` and
-  `data/m4/<drive>/pts_by_anchor.npz`, so make sure you either:
-  - run `M4a` inside `vbogs-torch`, or
-  - copy those artifacts into the shared `vbogs-data` Docker volume before
-    starting `fit_anchors.py`
-- The current implementation is serial over observed anchors, so the Quadro RTX
-  8000 is mainly useful for making the JAX fit stable and fast, not for
-  horizontal multi-container scaling yet.
-- `anchor_posterior.npz` and `fit_metadata.json` are written back into the same
-  `data/m4/<drive>/` directory and will remain available to both containers.
+10. Watch `vbogs-pipeline` logs in Portainer. The orchestrator will print each
+    stage and the `docker exec` command it runs in the sibling container.
+
+11. After the run finishes, set `VBOGS_PIPELINE_AUTORUN=0` and redeploy so later
+    stack updates do not restart the expensive pipeline.
+
+To resume from a later stage through the web UI:
+
+```text
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
+```
+
+The pipeline service requires `/var/run/docker.sock` access. That is what makes
+the web-only Portainer workflow possible, but it gives `vbogs-pipeline` Docker
+daemon access on the host. If your Portainer policy blocks Docker socket mounts,
+this orchestration style will not work without a different scheduler.
+
+If the GPU is not visible inside `vbogs-torch` or `vbogs-jax`, check the
+container logs and confirm the Portainer host has the NVIDIA container runtime
+configured. The compose file requests all GPUs for the Torch and JAX services.
+
+### Deployment Notes
+
+- The source is cloned during image build, so image builds only see committed
+  and pushed code.
+- M4b depends on `data/m4/<drive>/points_norm.npz` and
+  `data/m4/<drive>/pts_by_anchor.npz`, produced by M4a in the same pipeline.
+- The current M4b implementation is serial or batched over observed anchors, so
+  the GPU is most useful for making the JAX fit stable and fast.
+- `anchor_posterior.npz` and `fit_metadata.json` are written to
+  `data/m4/<drive>/` and remain available to both runtime containers through the
+  shared `vbogs-data` volume.
