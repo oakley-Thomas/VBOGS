@@ -385,6 +385,7 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
 docker compose up --build vbogs-pipeline
 ```
@@ -397,6 +398,7 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
 docker compose up --build vbogs-pipeline
 ```
@@ -409,9 +411,15 @@ VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
+VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
 docker compose up --build vbogs-pipeline
 ```
+
+Set `VBOGS_PIPELINE_GIT_REF` to the VBOGS branch, tag, or commit that should be
+checked out inside the pipeline, Torch, and JAX containers immediately before
+the pipeline stages run. Leave it empty to use whatever ref was baked into the
+images.
 
 Resume from a later stage by changing only the pipeline args:
 
@@ -475,6 +483,7 @@ VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
 ```text
 VBOGS_PIPELINE_AUTORUN=0
 VBOGS_DRIVE=2013_05_28_drive_0008_sync
+VBOGS_PIPELINE_GIT_REF=
 VBOGS_PIPELINE_ARGS=
 ```
 
@@ -487,6 +496,7 @@ VBOGS_PIPELINE_ARGS=
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```
 
@@ -494,6 +504,7 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
 ```
 
@@ -501,6 +512,7 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 
 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
+VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 ```
 
@@ -513,8 +525,19 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 To resume from a later stage through the web UI:
 
 ```text
+VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
 ```
+
+`VBOGS_GIT_REF` controls the Git ref cloned when images are built.
+`VBOGS_PIPELINE_GIT_REF` controls the Git ref checked out in the already-running
+pipeline, Torch, and JAX containers immediately before a pipeline run. For
+branch testing, set both to the same branch when building from source in
+Portainer; if you are using prebuilt images, set `VBOGS_PIPELINE_GIT_REF` to the
+branch you want the stack to pull before running.
+If the branch lives in a fork instead of the default repository, set
+`VBOGS_GIT_URL` to that fork when building the images so `origin/<branch>` points
+at the right remote.
 
 The pipeline service requires `/var/run/docker.sock` access. That is what makes
 the web-only Portainer workflow possible, but it gives `vbogs-pipeline` Docker

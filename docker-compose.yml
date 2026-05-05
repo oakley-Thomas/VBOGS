@@ -100,6 +100,7 @@ services:
       VBOGS_DRIVE: ${VBOGS_DRIVE:-2013_05_28_drive_0008_sync}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
+      VBOGS_PIPELINE_GIT_REF: ${VBOGS_PIPELINE_GIT_REF:-}
     volumes:
       - type: bind
         source: /var/run/docker.sock
@@ -109,9 +110,15 @@ services:
       - -lc
       - |
         if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
+          if [ -n "${VBOGS_PIPELINE_GIT_REF:-}" ]; then
+            git fetch --tags origin
+            (git checkout "${VBOGS_PIPELINE_GIT_REF:-}" || git checkout -B "${VBOGS_PIPELINE_GIT_REF:-}" "origin/${VBOGS_PIPELINE_GIT_REF:-}")
+            git submodule update --init --recursive
+          fi
           python scripts/run_drive_pipeline.py \
             --drive "${VBOGS_DRIVE:-2013_05_28_drive_0008_sync}" \
             --use-service-labels \
+            --git-ref "${VBOGS_PIPELINE_GIT_REF:-}" \
             ${VBOGS_PIPELINE_ARGS:-}
         else
           echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."

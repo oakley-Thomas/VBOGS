@@ -119,6 +119,14 @@ def parse_args() -> argparse.Namespace:
         default="fit",
         help="Last stage to run.",
     )
+    parser.add_argument(
+        "--git-ref",
+        default="",
+        help=(
+            "Optional VBOGS branch, tag, or commit to check out inside the "
+            "Torch/JAX runtime containers before running stages."
+        ),
+    )
 
     input_group = parser.add_argument_group("KITTI-360 inputs")
     input_group.add_argument("--raw-root", type=Path, default=None)
@@ -421,12 +429,41 @@ def exec_prefix(args: argparse.Namespace, service: str) -> list[str]:
     return [*compose_base(args), "exec", "-T", service]
 
 
+def shell_exec_command(script: str) -> tuple[str, ...]:
+    return ("sh", "-lc", script)
+
+
+def git_update_script(git_ref: str) -> str:
+    quoted_ref = shlex.quote(git_ref)
+    return (
+        "set -e; "
+        "git fetch --tags origin; "
+        f"(git checkout {quoted_ref} || git checkout -B {quoted_ref} origin/{quoted_ref}); "
+        "git submodule update --init --recursive"
+    )
+
+
 def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
     printable = shlex.join(cmd)
     print(f"+ {printable}", flush=True)
     if dry_run:
         return
     subprocess.run(cmd, check=True)
+
+
+def update_runtime_repos(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
+    if not args.git_ref:
+        return
+    services = sorted({step.service for step in steps})
+    print(f"\n=== checkout VBOGS ref ({args.git_ref}) ===", flush=True)
+    for service in services:
+        run_command(
+            [
+                *exec_prefix(args, service),
+                *shell_exec_command(git_update_script(args.git_ref)),
+            ],
+            dry_run=args.dry_run,
+        )
 
 
 def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
@@ -447,6 +484,7 @@ def main() -> None:
     print(f"Drive: {args.drive}")
     print("Stages: " + ", ".join(step.name for step in steps))
     run_optional_up(args, steps)
+    update_runtime_repos(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)
