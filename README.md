@@ -3,623 +3,321 @@ Combining Octree-GS's scene scalability with Variational Bayes GS uncertainty fo
 
 ## Environment Notes
 
-VBOGS uses two separate conda environments because the PyTorch and JAX CUDA stacks
-conflict in practice:
+VBOGS uses two separate docker images, each with a corresponding conda environment
 
 - `vbogs-torch` for Octree-AnyGS, stereo, point bucketing, and rendering
 - `vbogs-jax` for VBGS fitting and posterior computations
 
-The repo helper script is [scripts/envs.sh](/home/oakley/ub/advanced_robotics/VBOGS/scripts/envs.sh:1).
-
-Common commands:
-
+Build the images locally
 ```bash
-bash scripts/envs.sh create-torch
-bash scripts/envs.sh create-jax
-bash scripts/envs.sh check-torch-stack
-bash scripts/envs.sh smoke-test-jax
+docker compose build vbogs-torch vbogs-jax
+```
+or pull them from DockerHub
+```bash
+oakleyth/vbogs-vbogs-torch:latest
+oakleyth/vbogs-vbogs-jax:latest
 ```
 
-## Docker Hub / Portainer Quick Start
-
-If your main workflow is "build on the dev machine, deploy on the GPU server,"
-the shortest path is:
-
+Run the docker compose
 ```bash
-docker login
-bash scripts/publish_dockerhub.sh
+export VBOGS_TORCH_IMAGE=<name-of-torch-image>
+export VBOGS_JAX_IMAGE=<name-of-jax-image>
+
+# Example (if pulled from DockerHub)
+# export VBOGS_TORCH_IMAGE=oakleyth/vbogs-vbogs-torch:latest
+# export VBOGS_JAX_IMAGE=oakleyth/vbogs-vbogs-jax:latest
+
+# Add external volumes (if they do not exist)
+# docker volume create KITTI-360
+# docker volume create COLMAP
+# docker volume create OCTREE-ANYGS
+
+# Start stack
+docker compose up -d
+
+# Stop stack
+docker compose down
 ```
 
-That script builds both images, tags them with a UTC timestamp, pushes them to
-Docker Hub, and prints the exact image values to paste into the Portainer stack:
+## Usage
 
-- `VBOGS_TORCH_IMAGE=oakleyth/vbogs-torch:<timestamp>`
-- `VBOGS_JAX_IMAGE=oakleyth/vbogs-jax:<timestamp>`
+### 1. Clone this repo (it is already git checked out in the images mentioned above)
 
-In Portainer:
-
-1. Open the stack.
-2. Update `VBOGS_TORCH_IMAGE` and `VBOGS_JAX_IMAGE` to the printed tags.
-3. Redeploy the stack.
-
-If you prefer to rebuild directly on the server after `git pull`, use:
-
+### 2. Download the dataset:
 ```bash
-bash scripts/update_server_stack.sh
+export KITTI_CALIBRATION_LINK=<link-to-kitti-360-calibration>
+export KITTI_POSES_LINK=<link-to-kitti-360-poses>
+export KITTI_IMAGES=<link-to-kitti-360-images>
+
+# data will be downloaded to VBOGS/data/KITTI-360
+# archives are normalized to:
+#   data/KITTI-360/calibration/
+#   data/KITTI-360/data_poses/
+#   data/KITTI-360/images/
+cd data/
+./download_kitti_360.sh
 ```
 
-The full deployment and volume-layout details are documented below in
-`Docker And Portainer Deployment`.
+### 3. Run Octree-AnyGS Training
 
-## M2 Training Workflow
-
-M2 now has a repo-owned local workflow for preparing KITTI-360 drive
-`2013_05_28_drive_0008_sync` into the COLMAP-style ingest that Octree-AnyGS
-expects and then launching a conservative LoD training run that fits inside a
-16 GB dev GPU budget.
-
-The repo's source KITTI-360 layout is now expected under:
-
-- `data/KITTI-360/data_2d_test/`
-- `data/KITTI-360/data_poses/`
-- `data/KITTI-360/calibration/`
-
-The dataset-prep and stereo-export scripts auto-detect that layout by default.
-They also still accept `--raw-root`, `--poses-root`, and `--calibration-dir`
-overrides if your server stores the source data somewhere else.
-
-To bootstrap that tree from official KITTI/KITTI-360 downloads, fill in the
-URLs in [scripts/kitti360_download_manifest.example.json](/home/oakley/ub/advanced_robotics/VBOGS/scripts/kitti360_download_manifest.example.json),
-copy it to `data/KITTI-360/download_manifest.json`, and run:
+**Local conda workflow:** Octree-AnyGS training runs are written to `data/OCTREE-ANYGS/$DRIVE/<timestamp>/`.
 
 ```bash
-python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
-```
+DRIVE=2013_05_28_drive_0009_sync
 
-The downloader writes into `data/KITTI-360/`, verifies expected output paths,
-and supports both zip and tar-style archives.
-
-Prepare the dataset:
-
-```bash
 python scripts/prepare_kitti360_colmap.py \
-  --drive 2013_05_28_drive_0008_sync \
+  --drive "$DRIVE" \
   --frame-step 10 \
-  --max-frames 160
-```
+  --max-frames 160 \
+  --output-root data/COLMAP
 
-That writes a prepared dataset under
-`/data/COLMAP/2013_05_28_drive_0008_sync/` with:
-
-- `images/`
-- `sparse/0/cameras.txt`
-- `sparse/0/images.txt`
-- `sparse/0/points3D.ply`
-
-Generate a 16 GB-safe config and launch training:
-
-```bash
 python scripts/train_octree_anygs.py \
-  --dataset-path /data/COLMAP/2013_05_28_drive_0008_sync \
+  --dataset-path "data/COLMAP/$DRIVE" \
+  --output-root data/OCTREE-ANYGS \
   --gpu 0
 ```
 
-By default, training runs are written under
-`/data/OCTREE-ANYGS/2013_05_28_drive_0008_sync/<timestamp>/`.
+**Docker workflow:** Octree-AnyGS training runs are written to `/data/OCTREE-ANYGS/$DRIVE/<timestamp>/`.
+```bash
+DRIVE=2013_05_28_drive_0009_sync
 
-The default local preset intentionally trades fidelity for safety:
+python scripts/check_torch_stack.py --repo-root /workspace/VBOGS
 
-- `resolution: 4`
-- `feat_dim: 16`
-- `base_layer: 9`
-- `iterations: 15000`
-- `render_mode: RGB`
-- `add_prefilter: false`
-- `densification: false`
+python scripts/prepare_kitti360_colmap.py \
+  --drive "$DRIVE" \
+  --frame-step 10 \
+  --max-frames 160
 
-If you have headroom after a first successful run, the least risky upgrades are
-to lower `--resolution` from `4` to `2` and increase `--iterations`.
+python scripts/train_octree_anygs.py \
+  --dataset-path "/data/COLMAP/$DRIVE" \
+  --gpu 0
+```
 
-The local preset also disables Octree-AnyGS densification because the current
-upstream stats path is incompatible with the installed `gsplat` tensor shapes
-on this machine. That keeps M2 stable on the dev box at the cost of some final
-scene quality.
+### 4. Create the Colored Point Cloud
 
-Use `--write-config-only` to inspect the generated YAML without starting
-training.
+This step creates the M3 stereo point-cloud artifact used by anchor bucketing.
+It runs in the torch environment and writes:
 
-## M3 Point Cloud Export
+- `data/points_world/$DRIVE/points_world.npz` with `xyz`, `rgb`, and `frame_id`
+- `data/points_world/$DRIVE/points_world_metadata.json`
+- `data/points_world/$DRIVE/points_world.ply` when `--write-ply` is passed
 
-M3 exports a dense-ish world-frame stereo point cloud from the same KITTI-360
-drive using the `vbogs-torch` env:
+Full run, with a colored PLY sidecar for viewer inspection:
 
 ```bash
-bash -lc 'source scripts/envs.sh activate-torch >/dev/null && \
+DRIVE=2013_05_28_drive_0009_sync
+
 python scripts/stereo_to_pointcloud.py \
-  --drive 2013_05_28_drive_0008_sync \
-  --selection-metadata /data/COLMAP/2013_05_28_drive_0008_sync/metadata.json \
-  --write-ply'
+  --drive "$DRIVE" \
+  --selection-metadata "data/COLMAP/$DRIVE/metadata.json" \
+  --write-ply
 ```
 
-That writes artifacts under `data/points_world/2013_05_28_drive_0008_sync/`:
-
-- `points_world.npz` with keys `xyz`, `rgb`, and `frame_id`
-- `points_world_metadata.json` with the matcher and filtering settings
-- `points_world.ply` when `--write-ply` is passed for quick viewer sanity checks
-
-The current implementation ships with an `sgbm` provider and a forward-looking
-`--matcher` interface so a future RAFT-Stereo backend can preserve the same
-output contract. The validity mask keeps only pixels that pass:
-
-- minimum disparity / depth bounds
-- left-right consistency
-- a local grayscale texture threshold
-
-Use `--pixel-step` and `--max-points-per-frame` to trade off density vs runtime
-and file size on the dev machine.
-
-If you need to point at a non-default KITTI-360 checkout on a server, pass the
-same input-root overrides here as in M2:
+Dev-machine friendly run:
 
 ```bash
+DRIVE=2013_05_28_drive_0009_sync
+
 python scripts/stereo_to_pointcloud.py \
-  --raw-root /path/to/KITTI-360/data_2d_test \
-  --poses-root /path/to/KITTI-360/data_poses \
-  --calibration-dir /path/to/KITTI-360/calibration \
-  ...
+  --drive "$DRIVE" \
+  --selection-metadata "data/COLMAP/$DRIVE/metadata.json" \
+  --max-frames 40 \
+  --pixel-step 2 \
+  --max-points-per-frame 50000 \
+  --max-depth-m 60
 ```
 
-### Torch Stack
+Useful size/runtime controls:
 
-The current `vbogs-torch` setup is intentionally pinned to a CUDA 12.4 PyTorch
-wheel stack:
+- `--max-frames N` limits how many selected frames are processed.
+- `--pixel-step N` keeps every Nth valid pixel in x and y.
+- `--max-points-per-frame N` caps retained points per frame after filtering.
+- `--max-depth-m M` removes far stereo points before export.
+- `--write-ply` writes a colored `.ply`; omit it on memory-limited runs.
 
-- Python `3.10`
-- PyTorch `2.4.1+cu124`
-- torchvision `0.19.1+cu124`
-- torchaudio `2.4.1+cu124`
-- `torch_scatter` wheel matched to `torch 2.4 / cu124`
-- `gsplat` installed from the official `pt24cu124` wheel index
+For a quick visual check on a dev machine, use the friendly command first, then
+add `--write-ply` only after the point count looks reasonable.
 
-This configuration is chosen because gsplat publishes prebuilt wheels for this
-PyTorch/CUDA pair, avoiding first-run JIT compilation inside deployment
-containers. The server's NVIDIA driver still needs to be new enough for
-CUDA 12.4-era PyTorch wheels.
+### 5. Assign Colored Points to Octree-AnyGS Buckets
 
-### Validation
+This step assigns the verified colored point cloud to the trained
+Octree-AnyGS anchors at every LOD level, then writes the normalized inputs used
+by the VBGS per-anchor fitting step.
 
-Use the following command after provisioning `vbogs-torch`:
+**Local conda workflow:**
 
 ```bash
-bash scripts/envs.sh check-torch-stack
-```
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="data/OCTREE-ANYGS/$DRIVE/<timestamp>"
 
-It verifies:
-
-- CUDA visibility in PyTorch
-- a real CUDA tensor operation
-- `torch_scatter` CUDA execution
-- `gsplat` CUDA rasterization
-- `gaussian_renderer.render` import through `Octree-AnyGS`
-
-## M4 Point Bucketing And Anchor Fits
-
-M4 is split into:
-
-- `M4a` in `vbogs-torch`: bucket each stereo point into every Octree-AnyGS
-  anchor cell that contains it, while also writing the globally normalized
-  `(xyz, rgb)` rows that VBGS expects.
-- `M4b` in `vbogs-jax`: fit a post-hoc VBGS posterior per anchor from those
-  packed point assignments.
-
-Run M4a:
-
-```bash
-bash -lc 'source scripts/envs.sh activate-torch >/dev/null && \
 python scripts/bucket_points.py \
-  --drive 2013_05_28_drive_0008_sync'
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --points-world "data/points_world/$DRIVE/points_world.npz" \
+  --output-root "data/m4/$DRIVE"
 ```
 
-This writes to `data/m4/2013_05_28_drive_0008_sync/`:
-
-- `points_norm.npz` with `points_norm` plus raw sidecar arrays
-- `pts_by_anchor.npz` with packed `anchor_offsets` / `point_indices`
-- `norm_params.json`
-- `bucket_metadata.json`
-
-The current dev-scene summary on the bundled artifacts is:
-
-- `12,792,935` stereo points
-- `267,830` anchors across `9` levels
-- `104,577` anchors with at least `20` assigned points
-
-Run a smoke test for M4b:
+**Docker workflow:**
 
 ```bash
-bash -lc 'source scripts/envs.sh activate-jax >/dev/null && \
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="/data/OCTREE-ANYGS/$DRIVE/<timestamp>"
+
+python scripts/bucket_points.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --points-world "data/points_world/$DRIVE/points_world.npz" \
+  --output-root "data/m4/$DRIVE"
+```
+
+Replace `<timestamp>` with the Octree-AnyGS run directory from step 3. If you
+omit `--model-path`, the script uses the latest run under
+`/data/OCTREE-ANYGS/$DRIVE`.
+
+This writes:
+
+- `data/m4/$DRIVE/points_norm.npz`
+- `data/m4/$DRIVE/pts_by_anchor.npz`
+- `data/m4/$DRIVE/norm_params.json`
+- `data/m4/$DRIVE/bucket_metadata.json`
+
+Check the printed summary before continuing. You want a non-trivial number of
+anchors with at least `20` points; those are the anchors M4b will fit.
+
+### 6. Fit Per-Anchor VBGS Posteriors
+
+This step is M4b. It runs in the JAX environment and consumes the M4a bucket
+artifacts from `data/m4/$DRIVE/`.
+
+Start with a checkpointed partial run:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+
 python scripts/fit_anchors.py \
-  --drive 2013_05_28_drive_0008_sync \
-  --max-observed-anchors 5 \
-  --log-every 1'
-```
-
-Smoke runs write:
-
-- `anchor_posterior.smoke.npz`
-- `fit_metadata.smoke.json`
-
-Run the full M4b fit by omitting `--max-observed-anchors`; that writes:
-
-- `anchor_posterior.npz`
-- `fit_metadata.json`
-
-For parallel M4b runs, split the observed-anchor loop into deterministic shards:
-
-```bash
-python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 0
-python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 1
-python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 2
-python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --shard-index 3
-```
-
-Each shard writes `anchor_posterior.shard_XXX_of_YYY.npz` and matching metadata.
-After all shards complete, merge them into the normal M5 input:
-
-```bash
-python scripts/fit_anchors.py --drive 2013_05_28_drive_0008_sync --num-shards 4 --merge-shards
-```
-
-The initial hyperparameter defaults match `PLAN.md`:
-
-- `K_INIT=10`
-- `K_MAX=40`
-- `K_GROWTH_FACTOR=2`
-- `MIN_POINTS_PER_ANCHOR=20`
-- `ELBO_IMPROVEMENT_TOL=0.01`
-
-## Docker And Portainer Deployment
-
-The repo now includes a two-container Docker layout that mirrors the project's
-existing framework split:
-
-- `vbogs-torch` for M2, M3, and M4a
-- `vbogs-jax` for M4b onward
-
-The compose file is [docker-compose.yml](/home/oakley/ub/advanced_robotics/VBOGS/docker-compose.yml:1).
-It runs two images built from:
-
-- [docker/torch.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/torch.Dockerfile:1)
-- [docker/jax.Dockerfile](/home/oakley/ub/advanced_robotics/VBOGS/docker/jax.Dockerfile:1)
-
-Both Dockerfiles clone the project from GitHub during the image build instead
-of copying the local checkout into the image. The default source is:
-
-- `VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git`
-- `VBOGS_GIT_REF=main`
-
-Override `VBOGS_GIT_REF` in Portainer or your shell to rebuild images from a
-branch, tag, or reachable commit SHA.
-
-The image names are parameterized through environment variables so Portainer can
-pull prebuilt images instead of trying to build them remotely:
-
-- `VBOGS_TORCH_IMAGE`
-- `VBOGS_JAX_IMAGE`
-
-The current defaults are:
-
-- `oakleyth/vbogs-torch:latest`
-- `oakleyth/vbogs-jax:latest`
-
-Because both services now also include local `build:` definitions, the same
-compose file supports two workflows:
-
-- image-pull deployment for pinned Docker Hub / GHCR releases
-- server-side rebuilds after `git pull` when you want fast live iteration
-
-### Build Images
-
-Build both images with the compose file:
-
-```bash
-docker compose build vbogs-torch vbogs-jax
-```
-
-By default, the build clones `https://github.com/oakley-Thomas/VBOGS.git` at
-`main`. To build from another branch, tag, or commit SHA, set
-`VBOGS_GIT_REF` before running the build:
-
-```bash
-VBOGS_GIT_REF=main docker compose build vbogs-torch vbogs-jax
-VBOGS_GIT_REF=<commit-sha> docker compose build vbogs-torch vbogs-jax
-```
-
-If you want to point the images at a fork or temporary remote, override
-`VBOGS_GIT_URL` too:
-
-```bash
-VBOGS_GIT_URL=https://github.com/<user>/<repo>.git \
-VBOGS_GIT_REF=<branch-or-commit> \
-docker compose build vbogs-torch vbogs-jax
-```
-
-To rebuild without using cached layers:
-
-```bash
-VBOGS_GIT_REF=<branch-or-commit> docker compose build --no-cache vbogs-torch vbogs-jax
-```
-
-You can also build the images directly with Docker. This is useful when tagging
-images for a registry:
-
-```bash
-docker build \
-  -f docker/torch.Dockerfile \
-  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
-  --build-arg VBOGS_GIT_REF=main \
-  -t oakleyth/vbogs-torch:latest \
-  .
-
-docker build \
-  -f docker/jax.Dockerfile \
-  --build-arg VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git \
-  --build-arg VBOGS_GIT_REF=main \
-  -t oakleyth/vbogs-jax:latest \
-  .
-```
-
-Because the source is cloned during the image build, only committed and pushed
-code can be built this way. Local uncommitted edits in your checkout are not
-copied into the image.
-
-### Volume Layout
-
-The stack uses six Docker volumes:
-
-- `vbogs-data` mounted at `/workspace/VBOGS/data`
-- `KITTI-360` mounted at `/workspace/VBOGS/data/KITTI-360`
-- `COLMAP` mounted at `/data/COLMAP`
-- `OCTREE-ANYGS` mounted at `/data/OCTREE-ANYGS`
-- `vbogs-outputs` mounted at `/workspace/VBOGS/outputs`
-- `vbogs-generated-configs` mounted at `/workspace/VBOGS/generated_configs`
-
-`KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes in
-the compose file so Portainer can attach the named volumes you created. They
-are mounted read/write in both containers. The other three volumes are repo-owned
-working volumes for derived artifacts and generated configs.
-
-Both services mount the same named Docker volumes for:
-
-- `/workspace/VBOGS/data`
-- `/workspace/VBOGS/data/KITTI-360`
-- `/data/COLMAP`
-- `/data/OCTREE-ANYGS`
-- `/workspace/VBOGS/outputs`
-- `/workspace/VBOGS/generated_configs`
-
-That keeps the filesystem contract from `PLAN.md` intact: the torch-side jobs
-write `.npz` artifacts into `data/`, and the jax-side jobs read them back from
-the same shared storage.
-
-For Portainer, the compose file expects an external named volume called
-`KITTI-360` and mounts it read/write at `/workspace/VBOGS/data/KITTI-360`
-inside both containers. That lets the large source dataset live in its own
-managed volume while the rest of `data/` continues to use `vbogs-data`.
-
-### Server Rebuild Workflow
-
-If the GPU server has a working clone of this repo and Docker build access, you
-can update the checkout and rebuild the stack in place:
-
-```bash
-bash scripts/update_server_stack.sh
-```
-
-That script will:
-
-- `git fetch` and `git pull --ff-only`
-- update submodules
-- rebuild `vbogs-torch` and `vbogs-jax` from the exact pulled commit
-- recreate the containers with the existing named volumes
-
-Useful flags:
-
-```bash
-bash scripts/update_server_stack.sh --ref main
-bash scripts/update_server_stack.sh --skip-pull
-bash scripts/update_server_stack.sh --no-cache
-```
-
-This is the best fit when you expect lots of quick committed changes and want
-the server to behave like a rebuildable git workspace instead of a pure
-image-consumer. Because image builds now clone from GitHub, commit and push code
-updates before rebuilding the stack.
-
-If you want to populate the Portainer-managed `KITTI-360` volume from inside a
-running container, copy the example manifest into the mounted data tree, fill
-in the URLs, and run:
-
-```bash
-cp scripts/kitti360_download_manifest.example.json data/KITTI-360/download_manifest.json
-python scripts/download_kitti360.py --manifest data/KITTI-360/download_manifest.json
-```
-
-The downloader is manifest-driven on purpose. Each manifest entry can specify:
-
-- `name`
-- `url`
-- `archive_name`
-- `extract_to`
-- `strip_components`
-- `expected_paths`
-
-That keeps the code stable while you swap in the real KITTI download links.
-
-### Build And Push To GHCR
-
-This remains the better fit for pinned, reproducible deployments: build the
-images on a machine where Docker works cleanly, push them to GHCR, and let
-Portainer only pull them.
-
-If you are publishing to Docker Hub for Portainer instead of GHCR, the repo
-also includes a helper script that builds both images, tags them with a UTC
-timestamp, and pushes them:
-
-```bash
-bash scripts/publish_dockerhub.sh
-```
-
-By default it publishes:
-
-- `oakleyth/vbogs-torch:<timestamp>`
-- `oakleyth/vbogs-jax:<timestamp>`
-
-and prints the exact `VBOGS_TORCH_IMAGE` / `VBOGS_JAX_IMAGE` values to paste
-into the Portainer stack update. Pass `--push-latest` if you also want the
-`latest` tags updated.
-
-Authenticate to GHCR:
-
-```bash
-export GHCR_USER="oakley-Thomas"
-export GHCR_PAT="YOUR_GITHUB_PAT_WITH_PACKAGES_WRITE"
-printf '%s' "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-```
-
-Build the images from `main`:
-
-```bash
-docker build \
-  -f docker/torch.Dockerfile \
-  --build-arg VBOGS_GIT_REF=main \
-  -t ghcr.io/oakley-thomas/vbogs-torch:latest \
-  .
-
-docker build \
-  -f docker/jax.Dockerfile \
-  --build-arg VBOGS_GIT_REF=main \
-  -t ghcr.io/oakley-thomas/vbogs-jax:latest \
-  .
-```
-
-Push the images:
-
-```bash
-docker push ghcr.io/oakley-thomas/vbogs-torch:latest
-docker push ghcr.io/oakley-thomas/vbogs-jax:latest
-```
-
-If you want a pinned tag as well as `latest`, tag and push both:
-
-```bash
-export VBOGS_TAG="2026-04-22-m4b"
-
-docker tag ghcr.io/oakley-thomas/vbogs-torch:latest ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
-docker tag ghcr.io/oakley-thomas/vbogs-jax:latest ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
-
-docker push ghcr.io/oakley-thomas/vbogs-torch:${VBOGS_TAG}
-docker push ghcr.io/oakley-thomas/vbogs-jax:${VBOGS_TAG}
-```
-
-### Local Pull-Only Compose
-
-After the images are in GHCR, local compose can pull and run the same stack
-definition Portainer will use:
-
-```bash
-docker compose pull
-```
-
-Start the long-lived utility containers:
-
-```bash
-docker compose up -d
-```
-
-Sanity-check the GPU stacks:
-
-```bash
-docker compose exec vbogs-torch python scripts/check_torch_stack.py --repo-root /workspace/VBOGS
-docker compose exec vbogs-jax python -c "import jax; print(jax.devices())"
-```
-
-Run M4b inside the JAX container:
-
-```bash
-docker compose exec vbogs-jax python scripts/fit_anchors.py \
-  --drive 2013_05_28_drive_0008_sync \
+  --drive "$DRIVE" \
+  --max-observed-anchors 500 \
+  --log-every 25 \
+  --checkpoint-every 100 \
+  --k-growth-min-points 512 \
   --device 0
 ```
 
-Run a smoke test first if you want a fast confidence check:
+Resume the same run after an interruption:
 
 ```bash
-docker compose exec vbogs-jax python scripts/fit_anchors.py \
-  --drive 2013_05_28_drive_0008_sync \
-  --max-observed-anchors 5 \
-  --log-every 1 \
+python scripts/fit_anchors.py \
+  --drive "$DRIVE" \
+  --max-observed-anchors 500 \
+  --log-every 25 \
+  --checkpoint-every 100 \
+  --k-growth-min-points 512 \
+  --resume \
   --device 0
 ```
 
-### Portainer Stack
-
-For Portainer on your remote Quadro RTX 8000 host, use the same
-`docker-compose.yml` as a stack definition. You now have two reasonable ways to
-operate it.
-
-**Option 1: Rebuild on the server**
-
-Use this when you expect frequent live updates and want the server clone to act
-like a rebuildable workspace.
-
-1. Make sure the server has a git clone of this repo and Docker build access.
-2. In Portainer, deploy the stack from that checkout or paste the compose file
-   into the Web editor.
-3. Confirm the external `KITTI-360` volume exists and is attached.
-4. Set `VBOGS_GIT_REF` in the Portainer stack environment if you want a branch,
-   tag, or commit other than `main`.
-5. After pulling repo changes on the server, run:
+For a full-scene run, omit `--max-observed-anchors` but keep checkpointing on:
 
 ```bash
-bash scripts/update_server_stack.sh
+python scripts/fit_anchors.py \
+  --drive "$DRIVE" \
+  --log-every 100 \
+  --checkpoint-every 500 \
+  --k-growth-min-points 512 \
+  --resume \
+  --device 0
 ```
 
-This rebuilds both images locally from the pulled Git commit and recreates the
-containers while preserving the named volumes.
+Checkpoint files are written beside the final posterior:
 
-**Option 2: Pull prebuilt images**
+- `anchor_posterior.checkpoint.npz`
+- `fit_metadata.checkpoint.json`
 
-Use this when you want pinned, reproducible deployments and do not want the
-server building images itself.
+Smoke/partial runs use the `.smoke` names. A completed run writes
+`anchor_posterior.npz` and `fit_metadata.json`.
 
-Recommended flow:
+### 7. Compute Per-Anchor Uncertainty
 
-1. Build and push both images to GHCR using the commands above.
-2. In Portainer, create a new stack from this repository or paste the compose
-   file into the Web editor.
-3. In the stack environment-variable section, set:
-   - `VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest`
-   - `VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest`
-4. If you pushed versioned tags, use those tags instead of `latest`.
-5. Deploy the stack. Portainer should pull the images rather than invoking a
-   remote build.
-6. Open a console in the `vbogs-torch` and `vbogs-jax` containers to run the
-   same commands shown above.
+This step is M5. It reduces the M4b posterior to one scalar uncertainty value
+per Octree-AnyGS anchor.
 
-If the images are private, add GHCR registry credentials in Portainer first. If
-your Portainer version does not automatically expose the NVIDIA GPU to the
-containers, enable GPU access in the host runtime settings or adjust the stack
-to your host's preferred NVIDIA device-request syntax before deploying.
+```bash
+DRIVE=2013_05_28_drive_0009_sync
 
-### Deployment Notes For M4b
+python scripts/compute_uncertainty.py \
+  --drive "$DRIVE"
+```
 
-- `M4b` depends on `data/m4/<drive>/points_norm.npz` and
-  `data/m4/<drive>/pts_by_anchor.npz`, so make sure you either:
-  - run `M4a` inside `vbogs-torch`, or
-  - copy those artifacts into the shared `vbogs-data` Docker volume before
-    starting `fit_anchors.py`
-- The current implementation is serial over observed anchors, so the Quadro RTX
-  8000 is mainly useful for making the JAX fit stable and fast, not for
-  horizontal multi-container scaling yet.
-- `anchor_posterior.npz` and `fit_metadata.json` are written back into the same
-  `data/m4/<drive>/` directory and will remain available to both containers.
+This writes:
+
+- `data/m4/$DRIVE/U.npy`
+- `data/m4/$DRIVE/uncertainty_components.npz`
+- `data/m4/$DRIVE/uncertainty_metadata.json`
+
+By default, `U` follows `Algorithm.txt`: pi-weighted component entropy using
+the Normal-Wishart spatial posterior plus the delta MVN entropy. Dirichlet
+entropy is saved as a diagnostic component but is not added to `U` unless you
+pass `--include-dirichlet-entropy`.
+
+Unobserved or unfitted anchors receive `U_MAX`, which defaults to the maximum
+finite fitted uncertainty in the posterior. Override it with `--u-max VALUE` if
+you want a fixed value.
+
+### 8. Score Next-Best Views
+
+This step is M6. It renders the per-anchor uncertainty scalar through the
+trained Octree-AnyGS scene and ranks candidate views by alpha-normalized
+visible uncertainty.
+
+Score held-out test cameras:
+
+```bash
+DRIVE=2013_05_28_drive_0009_sync
+MODEL_PATH="data/OCTREE-ANYGS/$DRIVE/<timestamp>"
+
+python scripts/score_nbv.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --u-path "data/m4/$DRIVE/U.npy" \
+  --candidate-source test \
+  --top-k 10 \
+  --save-top-images 3
+```
+
+Score a simple ground-plane lattice around a reference test camera:
+
+```bash
+python scripts/score_nbv.py \
+  --drive "$DRIVE" \
+  --model-path "$MODEL_PATH" \
+  --u-path "data/m4/$DRIVE/U.npy" \
+  --candidate-source lattice \
+  --reference-source test \
+  --reference-index 0 \
+  --lattice-radii 0,5,10 \
+  --lattice-yaws-deg -30,0,30 \
+  --top-k 10
+```
+
+This writes:
+
+- `data/m6/$DRIVE/nbv_scores.json`
+- optional `data/m6/$DRIVE/top_images/rank_*_unc.npy`
+- optional `data/m6/$DRIVE/top_images/rank_*_alpha.npy`
+
+The score is `sum(unc_image) / (sum(alpha_image) + EPS)`, matching the
+alpha-normalized NBV objective in `Algorithm.txt`.
+
+Create PNG diagnostics from the saved top images:
+
+```bash
+python scripts/visualize_m6.py \
+  --drive "$DRIVE" \
+  --make-overlay
+```
+
+This writes heatmaps and alpha masks under:
+
+```bash
+data/m6/$DRIVE/viz/
+```
