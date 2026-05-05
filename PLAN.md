@@ -129,7 +129,7 @@ Depends on: M4b, entropy definition.
 - [x] Closed-form delta MVN entropy
 - [x] Combine per chosen definition; emit `U.npy` of shape `[N_anchors]`
 - [x] Unobserved anchors → `U_MAX`
-- [ ] Sanity check: plot histogram of `U`; tails should be fat, not uniform
+- [x] Sanity check: plot histogram of `U`; tails should be fat, not uniform
 
 ### M6 — `render_scalar` + NBV loop [LLM]
 

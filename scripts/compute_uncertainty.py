@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 
-"""Reduce per-anchor VBGS posteriors to scalar uncertainty values.
-
-This is M5 from PLAN.md. It reads the M4b `anchor_posterior.npz` artifact and
-writes:
-
-- `U.npy`: one scalar uncertainty per Octree-AnyGS anchor
-- `uncertainty_components.npz`: diagnostic entropy terms
-- `uncertainty_metadata.json`: provenance and summary statistics
-"""
+"""Compute per-anchor scalar uncertainty from fitted VBGS posteriors."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any
 
 import numpy as np
 from scipy.special import digamma, gammaln
@@ -32,331 +25,381 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--drive",
         default="2013_05_28_drive_0008_sync",
-        help="Drive id used to resolve default input/output paths.",
+        help="Drive id used to resolve default paths.",
     )
     parser.add_argument(
         "--bucket-root",
         type=Path,
         default=None,
-        help="Directory containing M4/M5 artifacts. Defaults to `data/m4/<drive>`.",
+        help="Directory containing M4 artifacts. Defaults to `data/m4/<drive>`.",
     )
     parser.add_argument(
         "--posterior",
         type=Path,
         default=None,
-        help="Explicit path to `anchor_posterior.npz`. Defaults to full, then smoke posterior.",
+        help=(
+            "Posterior artifact to read. Defaults to full fit "
+            "`anchor_posterior.npz`, then smoke fit."
+        ),
     )
     parser.add_argument(
-        "--output-root",
+        "--output",
         type=Path,
         default=None,
-        help="Directory where M5 artifacts will be written. Defaults to the posterior directory.",
+        help="Output uncertainty array. Defaults to `<bucket-root>/U.npy`.",
     )
     parser.add_argument(
-        "--output-name",
-        default="U.npy",
-        help="Filename for the per-anchor uncertainty vector.",
+        "--components-output",
+        type=Path,
+        default=None,
+        help=(
+            "Optional diagnostic component artifact. Defaults to "
+            "`<bucket-root>/uncertainty_components.npz`."
+        ),
     )
     parser.add_argument(
-        "--components-name",
-        default="uncertainty_components.npz",
-        help="Filename for diagnostic entropy components.",
+        "--metadata-output",
+        type=Path,
+        default=None,
+        help="Metadata JSON path. Defaults to `<bucket-root>/uncertainty_metadata.json`.",
     )
     parser.add_argument(
-        "--metadata-name",
-        default="uncertainty_metadata.json",
-        help="Filename for summary metadata.",
+        "--histogram-output",
+        type=Path,
+        default=None,
+        help="Histogram PNG path. Defaults to `<bucket-root>/uncertainty_histogram.png`.",
+    )
+    parser.add_argument(
+        "--no-histogram",
+        action="store_true",
+        help="Skip writing the uncertainty histogram PNG.",
     )
     parser.add_argument(
         "--u-max",
         type=float,
         default=None,
         help=(
-            "Uncertainty assigned to unobserved/unfitted anchors. Defaults to the "
-            "maximum finite fitted uncertainty, or 1.0 if no fitted anchors exist."
-        ),
-    )
-    parser.add_argument(
-        "--include-dirichlet-entropy",
-        action="store_true",
-        help=(
-            "Add Dirichlet entropy of the mixture weights to U. Default is off to "
-            "match Algorithm.txt's pi-weighted per-component entropy definition."
+            "Value assigned to unobserved anchors. Defaults to the maximum "
+            "finite observed uncertainty."
         ),
     )
     parser.add_argument(
         "--eps",
         type=float,
-        default=1e-8,
-        help="Small positive floor used for numerical stability.",
-    )
-    parser.add_argument(
-        "--histogram-bins",
-        type=int,
-        default=64,
-        help="Number of bins used for the fitted-anchor uncertainty histogram diagnostic.",
+        default=1.0e-8,
+        help="Small positive floor used for logs and matrix eigenvalues.",
     )
     return parser.parse_args()
 
 
-def resolve_bucket_root(args: argparse.Namespace) -> Path:
-    if args.bucket_root is not None:
-        return args.bucket_root.resolve()
-    return (Path("data/m4") / args.drive).resolve()
+def resolve_bucket_root(drive: str, bucket_root: Path | None) -> Path:
+    if bucket_root is not None:
+        return bucket_root.resolve()
+    return (REPO_ROOT / "data" / "m4" / drive).resolve()
 
 
-def resolve_posterior_path(args: argparse.Namespace, bucket_root: Path) -> Path:
-    if args.posterior is not None:
-        return args.posterior.resolve()
-    full_path = bucket_root / "anchor_posterior.npz"
-    smoke_path = bucket_root / "anchor_posterior.smoke.npz"
-    if full_path.exists():
-        return full_path
-    if smoke_path.exists():
-        return smoke_path
+def resolve_posterior_path(bucket_root: Path, posterior: Path | None) -> Path:
+    if posterior is not None:
+        return posterior.resolve()
+    full = bucket_root / "anchor_posterior.npz"
+    if full.exists():
+        return full
+    smoke = bucket_root / "anchor_posterior.smoke.npz"
+    if smoke.exists():
+        return smoke
     raise FileNotFoundError(
         f"Could not find `anchor_posterior.npz` or `anchor_posterior.smoke.npz` under {bucket_root}"
     )
 
 
-def load_npz(path: Path) -> Dict[str, np.ndarray]:
-    with np.load(path) as data:
-        return {key: data[key] for key in data.files}
+def mvgammaln(x: np.ndarray, dim: int) -> np.ndarray:
+    offsets = 0.5 * np.arange(dim, dtype=np.float64)
+    return (
+        np.sum(gammaln(np.expand_dims(x, axis=-1) - offsets), axis=-1)
+        + dim * (dim - 1) * 0.25 * np.log(np.pi)
+    )
 
 
-def multigammaln(a: np.ndarray, dim: int) -> np.ndarray:
-    """Log multivariate gamma Gamma_dim(a), vectorized over `a`."""
-
-    result = dim * (dim - 1) * 0.25 * np.log(np.pi)
-    for idx in range(1, dim + 1):
-        result = result + gammaln(a + (1.0 - idx) * 0.5)
-    return result
+def mvdigamma(x: np.ndarray, dim: int) -> np.ndarray:
+    offsets = 0.5 * np.arange(dim, dtype=np.float64)
+    return np.sum(digamma(np.expand_dims(x, axis=-1) - offsets), axis=-1)
 
 
-def mvdigamma(a: np.ndarray, dim: int) -> np.ndarray:
-    """Multivariate digamma d/da log Gamma_dim(a), vectorized over `a`."""
-
-    result = np.zeros_like(a, dtype=np.float64)
-    for idx in range(1, dim + 1):
-        result = result + digamma(a + (1.0 - idx) * 0.5)
-    return result
-
-
-def safe_logdet(matrix: np.ndarray, eps: float) -> np.ndarray:
-    """Return logdet for a stack of SPD-ish matrices with diagonal jitter."""
-
-    matrix = np.asarray(matrix, dtype=np.float64)
-    dim = matrix.shape[-1]
-    eye = np.eye(dim, dtype=np.float64)
-    sign, logdet = np.linalg.slogdet(matrix + eps * eye)
-    if np.any(sign <= 0):
-        repaired = np.array(matrix, copy=True)
-        repaired += (eps * 100.0) * eye
-        sign, logdet = np.linalg.slogdet(repaired)
-    return np.where(sign > 0, logdet, np.nan)
+def logdet_posdef(mats: np.ndarray, eps: float) -> tuple[np.ndarray, int]:
+    mats = 0.5 * (mats + np.swapaxes(mats, -1, -2))
+    sign, logdet = np.linalg.slogdet(mats)
+    bad = (~np.isfinite(logdet)) | (sign <= 0)
+    fallback_count = int(np.count_nonzero(bad))
+    if fallback_count:
+        eigvals = np.linalg.eigvalsh(mats[bad])
+        logdet = logdet.copy()
+        logdet[bad] = np.sum(np.log(np.clip(eigvals, eps, None)), axis=-1)
+    return logdet, fallback_count
 
 
-def normal_wishart_entropy(kappa: np.ndarray, u: np.ndarray, n: np.ndarray, eps: float) -> np.ndarray:
-    """Entropy H[q(mu, precision)] for VBGS's Normal-Wishart posterior.
+def normal_wishart_entropy(
+    kappa: np.ndarray,
+    u: np.ndarray,
+    n: np.ndarray,
+    *,
+    eps: float,
+) -> tuple[np.ndarray, int]:
+    """Joint entropy of Normal-Wishart q(mu, Lambda)."""
 
-    VBGS parameterization:
-      precision Lambda ~ Wishart(n, U)
-      mu | Lambda ~ Normal(mean, (kappa Lambda)^-1)
-      E[Lambda] = n U
-    """
-
-    kappa = np.clip(np.asarray(kappa, dtype=np.float64).reshape(kappa.shape[0], -1)[:, 0], eps, np.inf)
-    n = np.clip(np.asarray(n, dtype=np.float64).reshape(n.shape[0], -1)[:, 0], eps, np.inf)
-    u = np.asarray(u, dtype=np.float64)
     dim = int(u.shape[-1])
+    kappa = np.clip(np.asarray(kappa, dtype=np.float64), eps, None)
+    n = np.clip(np.asarray(n, dtype=np.float64), dim + eps, None)
+    logdet_u, fallback_count = logdet_posdef(np.asarray(u, dtype=np.float64), eps)
 
-    logdet_u = safe_logdet(u, eps)
-    e_logdet_precision = dim * np.log(2.0) + logdet_u + mvdigamma(n * 0.5, dim)
-
+    expected_logdet_lambda = dim * np.log(2.0) + logdet_u + mvdigamma(n / 2.0, dim)
     wishart_entropy = (
-        -0.5 * (n - dim - 1.0) * e_logdet_precision
+        -0.5 * (n - dim - 1.0) * expected_logdet_lambda
         + 0.5 * n * dim
         + 0.5 * n * dim * np.log(2.0)
         + 0.5 * n * logdet_u
-        + multigammaln(n * 0.5, dim)
+        + mvgammaln(n / 2.0, dim)
     )
-    normal_given_precision_entropy = 0.5 * (
-        dim * (1.0 + np.log(2.0 * np.pi)) - dim * np.log(kappa) - e_logdet_precision
+    normal_entropy = (
+        0.5 * dim * (1.0 + np.log(2.0 * np.pi))
+        - 0.5 * dim * np.log(kappa)
+        - 0.5 * expected_logdet_lambda
     )
-    return wishart_entropy + normal_given_precision_entropy
+    return wishart_entropy + normal_entropy, fallback_count
 
 
-def delta_mvn_entropy(kappa: np.ndarray, u: np.ndarray, n: np.ndarray, eps: float) -> np.ndarray:
-    """Entropy of the delta mean using covariance (kappa * E[precision])^-1."""
+def delta_mvn_entropy(
+    kappa: np.ndarray,
+    u: np.ndarray,
+    n: np.ndarray,
+    *,
+    eps: float,
+) -> tuple[np.ndarray, int]:
+    """Entropy of the delta posterior mean using E[precision] = n * U."""
 
-    kappa = np.clip(np.asarray(kappa, dtype=np.float64).reshape(kappa.shape[0], -1)[:, 0], eps, np.inf)
-    n = np.clip(np.asarray(n, dtype=np.float64).reshape(n.shape[0], -1)[:, 0], eps, np.inf)
-    u = np.asarray(u, dtype=np.float64)
     dim = int(u.shape[-1])
-    logdet_precision = dim * np.log(n) + safe_logdet(u, eps)
-    return 0.5 * (dim * (1.0 + np.log(2.0 * np.pi)) - dim * np.log(kappa) - logdet_precision)
+    kappa = np.clip(np.asarray(kappa, dtype=np.float64), eps, None)
+    n = np.clip(np.asarray(n, dtype=np.float64), eps, None)
+    logdet_u, fallback_count = logdet_posdef(np.asarray(u, dtype=np.float64), eps)
+    logdet_cov = -logdet_u - dim * np.log(n) - dim * np.log(kappa)
+    entropy = 0.5 * (dim * (1.0 + np.log(2.0 * np.pi)) + logdet_cov)
+    return entropy, fallback_count
 
 
-def dirichlet_entropy(alpha: np.ndarray, eps: float) -> np.ndarray:
-    alpha = np.clip(np.asarray(alpha, dtype=np.float64), eps, np.inf)
-    alpha0 = alpha.sum(axis=-1)
+def dirichlet_entropy(alpha: np.ndarray, *, eps: float) -> np.ndarray:
+    alpha = np.clip(np.asarray(alpha, dtype=np.float64), eps, None)
+    alpha0 = np.sum(alpha, axis=-1)
     k = alpha.shape[-1]
-    log_beta = np.sum(gammaln(alpha), axis=-1) - gammaln(alpha0)
-    return log_beta + (alpha0 - k) * digamma(alpha0) - np.sum((alpha - 1.0) * digamma(alpha), axis=-1)
+    log_b = np.sum(gammaln(alpha), axis=-1) - gammaln(alpha0)
+    return log_b + (alpha0 - k) * digamma(alpha0) - np.sum(
+        (alpha - 1.0) * digamma(alpha),
+        axis=-1,
+    )
 
 
-def compute_uncertainty(posterior: Dict[str, np.ndarray], *, eps: float, include_dirichlet_entropy: bool) -> Dict[str, np.ndarray]:
+def compute_uncertainty(posterior: Any, *, u_max: float | None, eps: float) -> dict[str, np.ndarray | float | int]:
     is_observed = np.asarray(posterior["is_observed"], dtype=bool)
     observed_anchor_ids = np.asarray(posterior["observed_anchor_ids"], dtype=np.int64)
     final_k = np.asarray(posterior["final_k"], dtype=np.int32)
     fit_completed = np.asarray(
-        posterior.get("fit_completed", np.isfinite(posterior["final_elbo"])),
+        posterior["fit_completed"] if "fit_completed" in posterior else final_k > 0,
         dtype=bool,
     )
-    n_anchors = int(is_observed.shape[0])
-    n_rows = int(observed_anchor_ids.shape[0])
 
-    u_observed = np.full((n_rows,), np.nan, dtype=np.float64)
-    spatial_entropy_observed = np.full((n_rows,), np.nan, dtype=np.float64)
-    delta_entropy_observed = np.full((n_rows,), np.nan, dtype=np.float64)
-    dirichlet_entropy_observed = np.full((n_rows,), np.nan, dtype=np.float64)
-    effective_components = np.zeros((n_rows,), dtype=np.int32)
-
-    for row_idx in range(n_rows):
-        if not fit_completed[row_idx] or final_k[row_idx] <= 0:
-            continue
-        k = int(final_k[row_idx])
-        effective_components[row_idx] = k
-
-        alpha = np.asarray(posterior["alpha"][row_idx, :k], dtype=np.float64)
-        weights = alpha / np.clip(alpha.sum(), eps, np.inf)
-
-        spatial_entropy = normal_wishart_entropy(
-            posterior["spatial_kappa"][row_idx, :k],
-            posterior["spatial_u"][row_idx, :k],
-            posterior["spatial_n"][row_idx, :k],
-            eps,
+    anchor_count = int(is_observed.shape[0])
+    observed_count = int(observed_anchor_ids.shape[0])
+    if final_k.shape[0] != observed_count:
+        raise ValueError(
+            f"`final_k` length {final_k.shape[0]} does not match observed rows {observed_count}"
         )
-        delta_entropy = delta_mvn_entropy(
-            posterior["delta_kappa"][row_idx, :k],
-            posterior["delta_u"][row_idx, :k],
-            posterior["delta_n"][row_idx, :k],
-            eps,
+
+    alpha = np.asarray(posterior["alpha"], dtype=np.float64)
+    spatial_kappa = np.squeeze(np.asarray(posterior["spatial_kappa"], dtype=np.float64), axis=(-1, -2))
+    spatial_u = np.asarray(posterior["spatial_u"], dtype=np.float64)
+    spatial_n = np.squeeze(np.asarray(posterior["spatial_n"], dtype=np.float64), axis=(-1, -2))
+    delta_kappa = np.squeeze(np.asarray(posterior["delta_kappa"], dtype=np.float64), axis=(-1, -2))
+    delta_u = np.asarray(posterior["delta_u"], dtype=np.float64)
+    delta_n = np.squeeze(np.asarray(posterior["delta_n"], dtype=np.float64), axis=(-1, -2))
+
+    if alpha.shape[0] != observed_count:
+        raise ValueError(
+            f"`alpha` row count {alpha.shape[0]} does not match observed rows {observed_count}"
         )
-        dir_entropy = float(dirichlet_entropy(alpha[None, :], eps)[0])
-        combined_components = spatial_entropy + delta_entropy
-        u_value = float(np.sum(weights * combined_components))
-        if include_dirichlet_entropy:
-            u_value += dir_entropy
 
-        u_observed[row_idx] = u_value
-        spatial_entropy_observed[row_idx] = float(np.sum(weights * spatial_entropy))
-        delta_entropy_observed[row_idx] = float(np.sum(weights * delta_entropy))
-        dirichlet_entropy_observed[row_idx] = dir_entropy
+    max_k = int(alpha.shape[1])
+    if fit_completed.shape[0] != observed_count:
+        raise ValueError(
+            f"`fit_completed` length {fit_completed.shape[0]} does not match observed rows {observed_count}"
+        )
 
-    u = np.full((n_anchors,), np.nan, dtype=np.float64)
-    completed_anchor_ids = observed_anchor_ids[fit_completed]
-    u[completed_anchor_ids] = u_observed[fit_completed]
+    active_mask = (np.arange(max_k)[None, :] < final_k[:, None]) & fit_completed[:, None]
+    matrix_active_mask = active_mask[:, :, None, None]
+    safe_spatial_u = np.where(
+        matrix_active_mask,
+        spatial_u,
+        np.eye(spatial_u.shape[-1], dtype=np.float64),
+    )
+    safe_delta_u = np.where(
+        matrix_active_mask,
+        delta_u,
+        np.eye(delta_u.shape[-1], dtype=np.float64),
+    )
+    safe_spatial_kappa = np.where(active_mask, spatial_kappa, 1.0)
+    safe_spatial_n = np.where(active_mask, spatial_n, spatial_u.shape[-1] + 2.0)
+    safe_delta_kappa = np.where(active_mask, delta_kappa, 1.0)
+    safe_delta_n = np.where(active_mask, delta_n, delta_u.shape[-1] + 2.0)
+
+    spatial_entropy, spatial_fallbacks = normal_wishart_entropy(
+        safe_spatial_kappa,
+        safe_spatial_u,
+        safe_spatial_n,
+        eps=eps,
+    )
+    delta_entropy, delta_fallbacks = delta_mvn_entropy(
+        safe_delta_kappa,
+        safe_delta_u,
+        safe_delta_n,
+        eps=eps,
+    )
+    component_entropy = spatial_entropy + delta_entropy
+
+    active_alpha = np.where(active_mask, alpha, 0.0)
+    alpha_sum = np.sum(active_alpha, axis=1, keepdims=True)
+    weights = np.divide(
+        active_alpha,
+        np.clip(alpha_sum, eps, None),
+        out=np.zeros_like(active_alpha),
+        where=alpha_sum > 0,
+    )
+
+    observed_u = np.full(observed_count, np.nan, dtype=np.float64)
+    observed_u[fit_completed] = np.sum(
+        np.where(active_mask, weights * component_entropy, 0.0),
+        axis=1,
+    )[fit_completed]
+    finite_observed = observed_u[np.isfinite(observed_u)]
+    if finite_observed.size == 0:
+        default_u_max = 1.0
+    else:
+        default_u_max = float(np.max(finite_observed))
+    unobserved_value = float(default_u_max if u_max is None else u_max)
+
+    uncertainty = np.full(anchor_count, unobserved_value, dtype=np.float32)
+    uncertainty[observed_anchor_ids[fit_completed]] = observed_u[fit_completed].astype(np.float32)
+
+    dirichlet_h = np.full(observed_count, np.nan, dtype=np.float32)
+    for row in range(observed_count):
+        k = int(final_k[row])
+        if k > 0:
+            dirichlet_h[row] = np.float32(dirichlet_entropy(alpha[row, :k], eps=eps))
 
     return {
-        "U": u,
-        "u_observed": u_observed,
-        "spatial_entropy_observed": spatial_entropy_observed,
-        "delta_entropy_observed": delta_entropy_observed,
-        "dirichlet_entropy_observed": dirichlet_entropy_observed,
-        "effective_components": effective_components,
-        "is_observed": is_observed,
+        "uncertainty": uncertainty,
+        "observed_uncertainty": observed_u.astype(np.float32),
         "fit_completed": fit_completed,
-        "observed_anchor_ids": observed_anchor_ids,
+        "weights": weights.astype(np.float32),
+        "spatial_entropy": np.where(active_mask, spatial_entropy, np.nan).astype(np.float32),
+        "delta_entropy": np.where(active_mask, delta_entropy, np.nan).astype(np.float32),
+        "component_entropy": np.where(active_mask, component_entropy, np.nan).astype(np.float32),
+        "dirichlet_entropy": dirichlet_h,
+        "unobserved_value": unobserved_value,
+        "spatial_logdet_fallbacks": spatial_fallbacks,
+        "delta_logdet_fallbacks": delta_fallbacks,
     }
 
 
-def fill_unobserved(u: np.ndarray, fitted_mask: np.ndarray, explicit_u_max: float | None) -> Tuple[np.ndarray, float]:
-    finite_fitted = np.isfinite(u) & fitted_mask
-    if explicit_u_max is not None:
-        u_max = float(explicit_u_max)
-    elif finite_fitted.any():
-        u_max = float(np.nanmax(u[finite_fitted]))
-    else:
-        u_max = 1.0
-    filled = np.array(u, copy=True)
-    filled[~finite_fitted] = u_max
-    return filled.astype(np.float32), u_max
+def write_histogram(path: Path, uncertainty: np.ndarray, is_observed: np.ndarray) -> None:
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    finite = uncertainty[np.isfinite(uncertainty)]
+    observed = uncertainty[is_observed & np.isfinite(uncertainty)]
+    plt.figure(figsize=(8, 5))
+    if finite.size:
+        plt.hist(finite, bins=80, alpha=0.55, label="all anchors")
+    if observed.size:
+        plt.hist(observed, bins=80, alpha=0.55, label="observed anchors")
+    plt.xlabel("uncertainty")
+    plt.ylabel("anchor count")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.close()
+
+
+def summarize(values: np.ndarray) -> dict[str, float]:
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return {"min": 0.0, "p50": 0.0, "p90": 0.0, "p98": 0.0, "max": 0.0}
+    return {
+        "min": float(np.min(finite)),
+        "p50": float(np.percentile(finite, 50)),
+        "p90": float(np.percentile(finite, 90)),
+        "p98": float(np.percentile(finite, 98)),
+        "max": float(np.max(finite)),
+    }
 
 
 def main() -> None:
     args = parse_args()
-    bucket_root = resolve_bucket_root(args)
-    posterior_path = resolve_posterior_path(args, bucket_root)
-    output_root = (args.output_root or posterior_path.parent).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+    bucket_root = resolve_bucket_root(args.drive, args.bucket_root)
+    posterior_path = resolve_posterior_path(bucket_root, args.posterior)
+    output_path = (args.output or (bucket_root / "U.npy")).resolve()
+    components_path = (args.components_output or (bucket_root / "uncertainty_components.npz")).resolve()
+    metadata_path = (args.metadata_output or (bucket_root / "uncertainty_metadata.json")).resolve()
+    histogram_path = (args.histogram_output or (bucket_root / "uncertainty_histogram.png")).resolve()
 
-    posterior = load_npz(posterior_path)
-    components = compute_uncertainty(
-        posterior,
-        eps=args.eps,
-        include_dirichlet_entropy=args.include_dirichlet_entropy,
-    )
+    print(f"Loading posterior: {posterior_path}")
+    posterior = np.load(posterior_path)
+    result = compute_uncertainty(posterior, u_max=args.u_max, eps=args.eps)
 
-    n_anchors = int(components["U"].shape[0])
-    fitted_anchor_mask = np.zeros((n_anchors,), dtype=bool)
-    fitted_anchor_mask[components["observed_anchor_ids"][components["fit_completed"]]] = True
-    u_filled, u_max = fill_unobserved(components["U"], fitted_anchor_mask, args.u_max)
+    uncertainty = np.asarray(result["uncertainty"], dtype=np.float32)
+    is_observed = np.asarray(posterior["is_observed"], dtype=bool)
+    observed_anchor_ids = np.asarray(posterior["observed_anchor_ids"], dtype=np.int64)
 
-    output_path = output_root / args.output_name
-    components_path = output_root / args.components_name
-    metadata_path = output_root / args.metadata_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, uncertainty)
 
-    np.save(output_path, u_filled)
-    finite_fitted = u_filled[fitted_anchor_mask]
-    if finite_fitted.size and args.histogram_bins > 0:
-        hist_counts, hist_edges = np.histogram(finite_fitted, bins=args.histogram_bins)
-    else:
-        hist_counts = np.zeros((0,), dtype=np.int64)
-        hist_edges = np.zeros((0,), dtype=np.float32)
-
+    components_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         components_path,
-        U_raw=components["U"].astype(np.float32),
-        U=u_filled,
-        u_observed=components["u_observed"].astype(np.float32),
-        spatial_entropy_observed=components["spatial_entropy_observed"].astype(np.float32),
-        delta_entropy_observed=components["delta_entropy_observed"].astype(np.float32),
-        dirichlet_entropy_observed=components["dirichlet_entropy_observed"].astype(np.float32),
-        effective_components=components["effective_components"],
-        observed_anchor_ids=components["observed_anchor_ids"],
-        fit_completed=components["fit_completed"],
-        fitted_anchor_mask=fitted_anchor_mask,
-        u_max=np.array(u_max, dtype=np.float32),
-        histogram_counts=hist_counts,
-        histogram_edges=hist_edges.astype(np.float32),
+        observed_anchor_ids=observed_anchor_ids,
+        observed_uncertainty=result["observed_uncertainty"],
+        weights=result["weights"],
+        spatial_entropy=result["spatial_entropy"],
+        delta_entropy=result["delta_entropy"],
+        component_entropy=result["component_entropy"],
+        dirichlet_entropy=result["dirichlet_entropy"],
+        unobserved_value=np.array(result["unobserved_value"], dtype=np.float32),
     )
+
+    if not args.no_histogram:
+        write_histogram(histogram_path, uncertainty, is_observed)
 
     metadata = {
         "drive": args.drive,
         "posterior_path": str(posterior_path),
-        "output_U": str(output_path),
+        "output_path": str(output_path),
         "components_path": str(components_path),
-        "anchor_count": n_anchors,
-        "observed_anchor_rows": int(components["observed_anchor_ids"].shape[0]),
-        "fitted_anchor_count": int(fitted_anchor_mask.sum()),
-        "u_max": u_max,
-        "include_dirichlet_entropy": bool(args.include_dirichlet_entropy),
-        "u_fitted_min": float(np.min(finite_fitted)) if finite_fitted.size else None,
-        "u_fitted_p50": float(np.percentile(finite_fitted, 50)) if finite_fitted.size else None,
-        "u_fitted_p90": float(np.percentile(finite_fitted, 90)) if finite_fitted.size else None,
-        "u_fitted_p99": float(np.percentile(finite_fitted, 99)) if finite_fitted.size else None,
-        "u_fitted_max": float(np.max(finite_fitted)) if finite_fitted.size else None,
-        "histogram_bins": int(args.histogram_bins),
+        "histogram_path": None if args.no_histogram else str(histogram_path),
+        "anchor_count": int(uncertainty.shape[0]),
+        "observed_anchor_count": int(observed_anchor_ids.shape[0]),
+        "unobserved_anchor_count": int(uncertainty.shape[0] - observed_anchor_ids.shape[0]),
+        "unobserved_value": float(result["unobserved_value"]),
+        "spatial_logdet_fallbacks": int(result["spatial_logdet_fallbacks"]),
+        "delta_logdet_fallbacks": int(result["delta_logdet_fallbacks"]),
+        "all_summary": summarize(uncertainty),
+        "observed_summary": summarize(uncertainty[observed_anchor_ids]),
     }
     save_json(metadata_path, metadata)
 
     print(f"Wrote {output_path}")
     print(f"Wrote {components_path}")
     print(f"Wrote {metadata_path}")
+    if not args.no_histogram:
+        print(f"Wrote {histogram_path}")
     print(
-        f"Fitted anchors: {metadata['fitted_anchor_count']:,} / {n_anchors:,} | "
-        f"U range={metadata['u_fitted_min']} .. {metadata['u_fitted_max']} | U_MAX={u_max}"
+        "Uncertainty summary: "
+        + json.dumps(metadata["all_summary"], sort_keys=True)
     )
 
 

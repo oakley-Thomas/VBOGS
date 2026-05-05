@@ -1,0 +1,74 @@
+# Top-level VBOGS pipeline configuration.
+#
+# `scripts/run_drive_pipeline.py` loads this file by default. Values here become
+# CLI defaults; anything passed through `VBOGS_PIPELINE_ARGS` or direct CLI flags
+# still wins.
+
+pipeline:
+  drive: 2013_05_28_drive_0008_sync
+  git_ref: Uncertainty-Visualization
+  start_at: prepare
+  stop_after: inspect
+  dry_run: false
+
+inputs:
+  # Leave null to use the repo/container default KITTI-360 layout.
+  raw_root: null
+  poses_root: null
+  calibration_dir: null
+
+prepare:
+  frame_step: 10
+  max_frames: 0
+  copy_mode: symlink
+  seed_mode: stereo
+
+train:
+  gpu: "0"
+  resolution: 4
+  iterations: 15000
+  llffhold: 8
+  feat_dim: 16
+  base_layer: 9
+  visible_threshold: 0.02
+  write_config_only: false
+
+stereo:
+  matcher: sgbm
+  pixel_step: 1
+  max_points_per_frame: 250000
+  write_ply: false
+
+bucket:
+  # Leave null to use the latest Octree-AnyGS run under /data/OCTREE-ANYGS/<drive>.
+  model_path: null
+  bucket_iteration: -1
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 100
+  # 0 means full fit. Use 5 for a quick smoke run.
+  max_observed_anchors: 0
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null
+
+uncertainty:
+  # Leave null to assign unobserved anchors the maximum finite observed U.
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  # 0 means render every camera in the selected split. Use 1 for a smoke run.
+  max_views: 0
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null
