@@ -58,3 +58,17 @@ inspect:
   sample_points: 5
   anchor_id: null
   export_ply: null
+
+uncertainty:
+  # Leave null to assign unobserved anchors the maximum finite observed U.
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  # 0 means render every camera in the selected split. Use 1 for a smoke run.
+  max_views: 0
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null

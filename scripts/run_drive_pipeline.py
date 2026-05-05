@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-STAGES = ("prepare", "train", "stereo", "bucket", "fit", "inspect")
+STAGES = ("prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "render")
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("pipeline_config.yaml")
@@ -83,6 +83,18 @@ CONFIG_KEY_MAP = {
         "sample_points": "inspect_sample_points",
         "anchor_id": "inspect_anchor_id",
         "export_ply": "inspect_export_ply",
+    },
+    "uncertainty": {
+        "u_max": "uncertainty_u_max",
+        "no_histogram": "uncertainty_no_histogram",
+    },
+    "render": {
+        "split": "render_split",
+        "max_views": "render_max_views",
+        "colormap": "render_colormap",
+        "vmin": "render_vmin",
+        "vmax": "render_vmax",
+        "output_dir": "render_output_dir",
     },
     "orchestration": {
         "compose_command": "compose_command",
@@ -340,6 +352,52 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Optional PLY export path for --inspect-anchor-id assigned points."
         ),
     )
+
+    uncertainty_group = parser.add_argument_group("uncertainty computation")
+    uncertainty_group.add_argument(
+        "--uncertainty-u-max",
+        type=float,
+        default=None,
+        help=(
+            "Value assigned to unobserved anchors. Defaults to the maximum "
+            "finite observed uncertainty."
+        ),
+    )
+    uncertainty_group.add_argument(
+        "--uncertainty-no-histogram",
+        action="store_true",
+        help="Skip writing the M5 uncertainty histogram PNG.",
+    )
+
+    render_group = parser.add_argument_group("uncertainty rendering")
+    render_group.add_argument(
+        "--render-split",
+        choices=("train", "test", "both"),
+        default="both",
+        help="Camera split rendered by the final diagnostic stage.",
+    )
+    render_group.add_argument(
+        "--render-max-views",
+        type=int,
+        default=0,
+        help="Optional cap per split for render smoke tests. `0` renders all views.",
+    )
+    render_group.add_argument(
+        "--render-colormap",
+        default="turbo",
+        help="Matplotlib colormap for rendered uncertainty heatmaps.",
+    )
+    render_group.add_argument("--render-vmin", type=float, default=None)
+    render_group.add_argument("--render-vmax", type=float, default=None)
+    render_group.add_argument(
+        "--render-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional render output root. Defaults to "
+            "`outputs/uncertainty_views/<drive>` in the Torch container."
+        ),
+    )
     parser.set_defaults(**(config_defaults or {}))
     return parser
 
@@ -493,6 +551,35 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *maybe_option("--export-ply", args.inspect_export_ply),
     )
 
+    uncertainty_cmd = (
+        "python",
+        "scripts/compute_uncertainty.py",
+        "--drive",
+        args.drive,
+        "--bucket-root",
+        bucket_root,
+        "--posterior",
+        f"{bucket_root}/{posterior_name}",
+        *maybe_option("--u-max", args.uncertainty_u_max),
+        *(("--no-histogram",) if args.uncertainty_no_histogram else ()),
+    )
+
+    render_cmd = (
+        "python",
+        "scripts/render_uncertainty_views.py",
+        "--drive",
+        args.drive,
+        "--split",
+        args.render_split,
+        "--max-views",
+        str(args.render_max_views),
+        "--colormap",
+        args.render_colormap,
+        *maybe_option("--vmin", args.render_vmin),
+        *maybe_option("--vmax", args.render_vmax),
+        *maybe_option("--output-dir", args.render_output_dir),
+    )
+
     return [
         PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
@@ -500,6 +587,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         PipelineStep("bucket", TORCH_SERVICE, bucket_cmd),
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
         PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
+        PipelineStep("uncertainty", JAX_SERVICE, uncertainty_cmd),
+        PipelineStep("render", TORCH_SERVICE, render_cmd),
     ]
 
 

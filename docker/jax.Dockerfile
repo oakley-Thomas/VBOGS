@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     python -m pip install --upgrade pip setuptools wheel
 
-RUN python -m pip install numpy pyyaml
+RUN python -m pip install numpy pyyaml scipy
 
 ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
 ARG VBOGS_GIT_REF=main

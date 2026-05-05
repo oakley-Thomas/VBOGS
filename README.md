@@ -25,13 +25,15 @@ bash scripts/envs.sh smoke-test-jax
 The Docker workflow uses one compose stack with three services:
 
 - `vbogs-torch` for Octree-AnyGS, stereo, and bucketing
-- `vbogs-jax` for VBGS anchor fitting and fit inspection
+- `vbogs-jax` for VBGS anchor fitting, fit inspection, and uncertainty scalar
+  computation
 - `vbogs-pipeline` for running the stages in order inside the stack
 
 You can run the same `docker-compose.yml` locally with Docker Compose, or deploy
-it remotely through the Portainer web UI. The pipeline runs through M4b and its
-fit-inspection helper today because M5-M7 do not have stable repo-owned entry
-points yet.
+it remotely through the Portainer web UI. The default pipeline still stops
+after the M4b fit-inspection helper to force a manual posterior sanity check,
+but M5 uncertainty computation and M7 side-by-side diagnostic rendering now have
+repo-owned entry points.
 
 For local Docker Compose, see `Local Docker Compose` below. For a remote server
 where you only have Portainer web access, see `Remote Portainer Web UI`.
@@ -300,10 +302,15 @@ The pipeline service mounts `/var/run/docker.sock` so it can run commands in
 the sibling containers. This is what makes the workflow fully stack-contained,
 but it also means the service has Docker daemon access on the host.
 
-This runner intentionally stops after the M4b fit-inspection summary today. M5
-uncertainty computation and M6/M7 NBV visualization are still unchecked in
-[PLAN.md](PLAN.md), so there are no stable repo-owned entry points for the
-runner to call yet.
+This runner defaults to stopping after the M4b fit-inspection summary so you can
+perform the required manual validation before M5. To continue from a completed
+fit into uncertainty computation and side-by-side rendering, run with:
+
+```text
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at uncertainty --stop-after render --render-max-views 1
+```
+
+Remove `--render-max-views 1` after the smoke render succeeds.
 
 ## Docker Compose And Portainer Deployment
 
@@ -336,7 +343,7 @@ the expected layout:
 - `/workspace/VBOGS/data/KITTI-360/data_poses/`
 - `/workspace/VBOGS/data/KITTI-360/calibration/`
 
-The pipeline currently runs the implemented path through M4b:
+The pipeline currently supports these stages:
 
 1. `prepare`: KITTI-360 to Octree-AnyGS COLMAP-style dataset
 2. `train`: Octree-AnyGS training
@@ -344,6 +351,8 @@ The pipeline currently runs the implemented path through M4b:
 4. `bucket`: point-to-anchor bucketing
 5. `fit`: per-anchor VBGS posterior fitting
 6. `inspect`: noninteractive fit summary and anchor candidates for manual review
+7. `uncertainty`: M5 posterior-to-scalar reduction, writing `U.npy`
+8. `render`: RGB plus uncertainty-map side-by-side diagnostic images
 
 ### Top-Level Pipeline Config
 
@@ -600,3 +609,8 @@ configured. The compose file requests all GPUs for the Torch and JAX services.
 - `anchor_posterior.npz` and `fit_metadata.json` are written to
   `data/m4/<drive>/` and remain available to both runtime containers through the
   shared `vbogs-data` volume.
+- M5 writes `U.npy`, `uncertainty_components.npz`,
+  `uncertainty_metadata.json`, and `uncertainty_histogram.png` to
+  `data/m4/<drive>/`.
+- The render stage consumes `U.npy` in `vbogs-torch` and writes images under
+  `outputs/uncertainty_views/<drive>/`.
