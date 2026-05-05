@@ -8,7 +8,7 @@ The framework boundary stays explicit:
 
 - `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
   point-to-anchor bucketing.
-- `vbogs-jax` runs per-anchor VBGS fitting.
+- `vbogs-jax` runs per-anchor VBGS fitting and fit inspection.
 
 Data moves only through the shared stack volumes mounted at the same paths in
 both containers.
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-STAGES = ("prepare", "train", "stereo", "bucket", "fit")
+STAGES = ("prepare", "train", "stereo", "bucket", "fit", "inspect")
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("pipeline_config.yaml")
@@ -77,6 +77,12 @@ CONFIG_KEY_MAP = {
         "vmap_group_size": "vmap_group_size",
         "log_every": "log_every",
         "max_observed_anchors": "max_observed_anchors",
+    },
+    "inspect": {
+        "top_k": "inspect_top_k",
+        "sample_points": "inspect_sample_points",
+        "anchor_id": "inspect_anchor_id",
+        "export_ply": "inspect_export_ply",
     },
     "orchestration": {
         "compose_command": "compose_command",
@@ -227,7 +233,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--stop-after",
         choices=STAGES,
-        default="fit",
+        default="inspect",
         help="Last stage to run.",
     )
     parser.add_argument(
@@ -304,6 +310,36 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Optional smoke-test cap for M4b. Leave at 0 for the full fit."
         ),
     )
+
+    inspect_group = parser.add_argument_group("anchor fit inspection")
+    inspect_group.add_argument(
+        "--inspect-top-k",
+        type=int,
+        default=5,
+        help="How many anchors to show per M4b inspection heuristic list.",
+    )
+    inspect_group.add_argument(
+        "--inspect-sample-points",
+        type=int,
+        default=5,
+        help=(
+            "How many assigned points to print if --inspect-anchor-id is used."
+        ),
+    )
+    inspect_group.add_argument(
+        "--inspect-anchor-id",
+        type=int,
+        default=None,
+        help="Optional explicit anchor id for the final fit inspection stage.",
+    )
+    inspect_group.add_argument(
+        "--inspect-export-ply",
+        type=Path,
+        default=None,
+        help=(
+            "Optional PLY export path for --inspect-anchor-id assigned points."
+        ),
+    )
     parser.set_defaults(**(config_defaults or {}))
     return parser
 
@@ -345,6 +381,7 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     dataset_path = f"/data/COLMAP/{args.drive}"
     selection_metadata = f"{dataset_path}/metadata.json"
+    bucket_root = f"data/m4/{args.drive}"
 
     prepare_cmd = (
         "python",
@@ -434,12 +471,35 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.max_observed_anchors),
     )
 
+    posterior_name = (
+        "anchor_posterior.smoke.npz"
+        if args.max_observed_anchors > 0
+        else "anchor_posterior.npz"
+    )
+    inspect_cmd = (
+        "python",
+        "scripts/inspect_anchor_fits.py",
+        "--drive",
+        args.drive,
+        "--bucket-root",
+        bucket_root,
+        "--posterior",
+        f"{bucket_root}/{posterior_name}",
+        "--top-k",
+        str(args.inspect_top_k),
+        "--sample-points",
+        str(args.inspect_sample_points),
+        *maybe_option("--anchor-id", args.inspect_anchor_id),
+        *maybe_option("--export-ply", args.inspect_export_ply),
+    )
+
     return [
         PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
         PipelineStep("stereo", TORCH_SERVICE, stereo_cmd),
         PipelineStep("bucket", TORCH_SERVICE, bucket_cmd),
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
+        PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
     ]
 
 

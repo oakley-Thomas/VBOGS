@@ -8,7 +8,7 @@ pipeline:
   drive: 2013_05_28_drive_0008_sync
   git_ref: main
   start_at: prepare
-  stop_after: fit
+  stop_after: inspect
   dry_run: false
 
 inputs:
@@ -52,3 +52,9 @@ fit:
   log_every: 100
   # 0 means full fit. Use 5 for a quick smoke run.
   max_observed_anchors: 0
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null

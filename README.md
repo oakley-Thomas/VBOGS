@@ -25,12 +25,13 @@ bash scripts/envs.sh smoke-test-jax
 The Docker workflow uses one compose stack with three services:
 
 - `vbogs-torch` for Octree-AnyGS, stereo, and bucketing
-- `vbogs-jax` for VBGS anchor fitting
+- `vbogs-jax` for VBGS anchor fitting and fit inspection
 - `vbogs-pipeline` for running the stages in order inside the stack
 
 You can run the same `docker-compose.yml` locally with Docker Compose, or deploy
-it remotely through the Portainer web UI. The pipeline stops at M4b today
-because M5-M7 do not have stable repo-owned entry points yet.
+it remotely through the Portainer web UI. The pipeline runs through M4b and its
+fit-inspection helper today because M5-M7 do not have stable repo-owned entry
+points yet.
 
 For local Docker Compose, see `Local Docker Compose` below. For a remote server
 where you only have Portainer web access, see `Remote Portainer Web UI`.
@@ -248,11 +249,12 @@ The initial hyperparameter defaults match `PLAN.md`:
 
 The repo includes a stack-contained orchestrator for the implemented pipeline
 stages: M2 dataset preparation/training, M3 stereo export, M4a anchor bucketing,
-and M4b VBGS fitting. The compose stack has a third service, `vbogs-pipeline`,
-that dispatches each stage into the correct sibling container:
+M4b VBGS fitting, and the M4b fit-inspection summary. The compose stack has a
+third service, `vbogs-pipeline`, that dispatches each stage into the correct
+sibling container:
 
 - `vbogs-torch`: prepare, train, stereo, bucket
-- `vbogs-jax`: fit
+- `vbogs-jax`: fit, inspect
 - `vbogs-pipeline`: orchestration only
 
 In Portainer, set these stack environment variables and redeploy:
@@ -298,9 +300,10 @@ The pipeline service mounts `/var/run/docker.sock` so it can run commands in
 the sibling containers. This is what makes the workflow fully stack-contained,
 but it also means the service has Docker daemon access on the host.
 
-This runner intentionally stops at M4b today. M5 uncertainty computation and
-M6/M7 NBV visualization are still unchecked in [PLAN.md](PLAN.md), so there are
-no stable repo-owned entry points for the runner to call yet.
+This runner intentionally stops after the M4b fit-inspection summary today. M5
+uncertainty computation and M6/M7 NBV visualization are still unchecked in
+[PLAN.md](PLAN.md), so there are no stable repo-owned entry points for the
+runner to call yet.
 
 ## Docker Compose And Portainer Deployment
 
@@ -313,7 +316,7 @@ commands inside the Torch or JAX containers.
 The stack uses these services:
 
 - `vbogs-torch` for M2, M3, and M4a
-- `vbogs-jax` for M4b
+- `vbogs-jax` for M4b fitting and inspection
 - `vbogs-pipeline` for stack-contained orchestration
 
 The stack uses these Docker volumes:
@@ -340,6 +343,7 @@ The pipeline currently runs the implemented path through M4b:
 3. `stereo`: world-frame stereo point cloud
 4. `bucket`: point-to-anchor bucketing
 5. `fit`: per-anchor VBGS posterior fitting
+6. `inspect`: noninteractive fit summary and anchor candidates for manual review
 
 ### Top-Level Pipeline Config
 
@@ -354,6 +358,7 @@ runner loads this file by default and uses it for values such as:
 - stereo density/filtering
 - anchor checkpoint selection
 - VBGS fit mode, device, batching, and smoke-run cap
+- M4b inspection output size and optional explicit anchor export
 
 Values from `VBOGS_PIPELINE_ARGS` or direct CLI flags override the YAML config.
 In Compose, set `VBOGS_PIPELINE_CONFIG` if you want to use a different config
