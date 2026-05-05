@@ -6,7 +6,7 @@
 
 pipeline:
   drive: 2013_05_28_drive_0008_sync
-  git_ref: Uncertainty-Visualization
+  git_ref: main
   start_at: prepare
   stop_after: inspect
   dry_run: false
