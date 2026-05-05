@@ -6,12 +6,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TORCH_ENV_NAME="${TORCH_ENV_NAME:-vbogs-torch}"
 JAX_ENV_NAME="${JAX_ENV_NAME:-vbogs-jax}"
 TORCH_PYTHON_VERSION="${TORCH_PYTHON_VERSION:-3.10}"
-TORCH_VERSION="${TORCH_VERSION:-2.7.1}"
-TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.22.1}"
-TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.7.1}"
-TORCH_CUDA_TAG="${TORCH_CUDA_TAG:-cu128}"
-PYG_TORCH_VERSION="${PYG_TORCH_VERSION:-2.7.0}"
-GSPLAT_WHEEL_TAG="${GSPLAT_WHEEL_TAG:-pt27cu128}"
+TORCH_VERSION="${TORCH_VERSION:-2.4.1}"
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.19.1}"
+TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.4.1}"
+TORCH_CUDA_TAG="${TORCH_CUDA_TAG:-cu124}"
+PYG_TORCH_VERSION="${PYG_TORCH_VERSION:-2.4.0}"
+GSPLAT_WHEEL_TAG="${GSPLAT_WHEEL_TAG:-pt24cu124}"
 
 TORCH_COMMON_PIP_PACKAGES=(
     plyfile
@@ -62,8 +62,9 @@ create_torch_env() {
         -f "https://data.pyg.org/whl/torch-${PYG_TORCH_VERSION}+${TORCH_CUDA_TAG}.html"
 
     pip install "${TORCH_COMMON_PIP_PACKAGES[@]}"
-    pip install rich gsplat \
-        --extra-index-url "https://docs.gsplat.studio/whl/${GSPLAT_WHEEL_TAG}"
+    pip install rich
+    pip install gsplat \
+        --index-url "https://docs.gsplat.studio/whl/${GSPLAT_WHEEL_TAG}"
 }
 
 create_jax_env() {

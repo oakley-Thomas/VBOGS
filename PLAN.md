@@ -110,6 +110,7 @@ Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`,
 - [x] Implement K-growth loop with ELBO comparison
 - [x] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
 - [x] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
+- [x] Deterministic shard mode for parallel anchor fitting, plus shard merge back to `anchor_posterior.npz`
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
 - [ ] Decide: loop vs `jax.vmap` across anchors (defer until N_anchors is known)
 
@@ -122,12 +123,12 @@ fit has not been run to completion yet. Current smoke artifacts live under
 
 Depends on: M4b, entropy definition.
 
-- [ ] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
-- [ ] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
-- [ ] Closed-form Dirichlet entropy from `alpha`
-- [ ] Closed-form delta MVN entropy
-- [ ] Combine per chosen definition; emit `U.npy` of shape `[N_anchors]`
-- [ ] Unobserved anchors → `U_MAX`
+- [x] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
+- [x] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
+- [x] Closed-form Dirichlet entropy from `alpha`
+- [x] Closed-form delta MVN entropy
+- [x] Combine per chosen definition; emit `U.npy` of shape `[N_anchors]`
+- [x] Unobserved anchors → `U_MAX`
 - [ ] Sanity check: plot histogram of `U`; tails should be fat, not uniform
 
 ### M6 — `render_scalar` + NBV loop [LLM]
@@ -136,11 +137,15 @@ Depends on: M2, M5, candidate pose set. Runs in `vbogs-torch`.
 
 Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_renderer/render.py), [Octree-AnyGS/scene/implicit_model/base_model.py:460-534](Octree-AnyGS/scene/implicit_model/base_model.py#L460-L534) (`generate_gaussians`).
 
-- [ ] Implement `render_scalar(cam, pc, per_anchor_scalar)` per Stage 5
-- [ ] Return `(unc_image, alpha_image)` — both needed for the score
-- [ ] Implement candidate pose generator for a planner-reachable set; first pass can be a ground-plane local lattice with yaw samples, but keep the input interface compatible with future planner-emitted poses
-- [ ] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
-- [ ] Return best pose + diagnostic dump of top-K candidates
+- [x] Implement `render_scalar(cam, pc, per_anchor_scalar)` per Stage 5
+- [x] Return `(unc_image, alpha_image)` — both needed for the score
+- [x] Implement candidate pose generator for a planner-reachable set; first pass can be a ground-plane local lattice with yaw samples, but keep the input interface compatible with future planner-emitted poses
+- [x] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
+- [x] Return best pose + diagnostic dump of top-K candidates
+
+Initial implementation lives in `vbogs/render.py` and `scripts/score_nbv.py`.
+It has syntax/CLI verification, but still needs a full torch/GPU render
+validation pass on a completed M5 `U.npy`.
 
 ### M7 — End-to-end viz + validation [you]
 
