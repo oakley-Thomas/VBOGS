@@ -11,7 +11,7 @@ TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.22.1}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.7.1}"
 TORCH_CUDA_TAG="${TORCH_CUDA_TAG:-cu128}"
 PYG_TORCH_VERSION="${PYG_TORCH_VERSION:-2.7.1}"
-GSPLAT_WHEEL_TAG="${GSPLAT_WHEEL_TAG:-pt27cu128}"
+GSPLAT_INSTALL_SPEC="${GSPLAT_INSTALL_SPEC:-git+https://github.com/nerfstudio-project/gsplat.git}"
 
 TORCH_COMMON_PIP_PACKAGES=(
     plyfile
@@ -63,8 +63,7 @@ create_torch_env() {
 
     pip install "${TORCH_COMMON_PIP_PACKAGES[@]}"
     pip install rich
-    pip install gsplat \
-        --index-url "https://docs.gsplat.studio/whl/${GSPLAT_WHEEL_TAG}"
+    pip install --no-build-isolation "${GSPLAT_INSTALL_SPEC}"
 }
 
 create_jax_env() {

@@ -51,11 +51,13 @@ RUN python -m pip install \
     pyyaml \
     ninja
 
-RUN python -m pip install rich && \
-    python -m pip install gsplat \
-    --index-url https://docs.gsplat.studio/whl/pt27cu128
+ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;12.0"
 
-RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; assert '+pt27cu128' in getattr(gsplat, '__version__', ''), getattr(gsplat, '__version__', 'unknown')"
+RUN python -m pip install rich && \
+    python -m pip install --no-build-isolation \
+    git+https://github.com/nerfstudio-project/gsplat.git
+
+RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 
 ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
 ARG VBOGS_GIT_REF=main
