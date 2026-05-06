@@ -49,6 +49,7 @@ CONFIG_KEY_MAP = {
         "max_frames": "max_frames",
         "copy_mode": "copy_mode",
         "seed_mode": "seed_mode",
+        "colmap_root": "colmap_root",
     },
     "train": {
         "gpu": "gpu",
@@ -275,6 +276,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         choices=("stereo", "random"),
         default="stereo",
     )
+    prep_group.add_argument(
+        "--colmap-root",
+        type=Path,
+        default=Path("/data/COLMAP"),
+        help=(
+            "Root directory where the prepared Octree-AnyGS COLMAP-style dataset "
+            "is written and later read by train/stereo stages."
+        ),
+    )
 
     train_group = parser.add_argument_group("Octree-AnyGS training")
     train_group.add_argument("--gpu", default="0")
@@ -437,7 +447,7 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
 
 
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
-    dataset_path = f"/data/COLMAP/{args.drive}"
+    dataset_path = str(args.colmap_root / args.drive)
     selection_metadata = f"{dataset_path}/metadata.json"
     bucket_root = f"data/m4/{args.drive}"
 
@@ -454,6 +464,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.copy_mode,
         "--seed-mode",
         args.seed_mode,
+        "--output-root",
+        str(args.colmap_root),
         *maybe_path_args(args),
     )
 

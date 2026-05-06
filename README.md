@@ -525,6 +525,22 @@ GUI and you cannot run host terminal commands.
    preloaded by an administrator, a storage plugin, or another managed transfer
    path before the pipeline can run.
 
+   The prep stage supports two common source layouts inside the mounted volume:
+
+   - newer layout:
+     `/workspace/VBOGS/data/KITTI-360/data_2d_test/`,
+     `/workspace/VBOGS/data/KITTI-360/data_poses/`,
+     `/workspace/VBOGS/data/KITTI-360/calibration/`
+   - older layout:
+     `/workspace/VBOGS/data/KITTI-360/images/`,
+     `/workspace/VBOGS/data/KITTI-360/data_poses/`,
+     `/workspace/VBOGS/data/KITTI-360/calibration/`
+
+   If your volume uses the older `images/` layout, pass explicit input-root
+   overrides through `VBOGS_PIPELINE_ARGS`. The pipeline container itself does
+   not mount the KITTI-360 volume, so verify the paths from `vbogs-torch` if
+   you need to inspect the source tree in Portainer.
+
 3. In Portainer, create a stack from Git or the Web editor using
    `docker-compose.yml`.
 
@@ -568,8 +584,8 @@ VBOGS_PIPELINE_ARGS=
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
-VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
+VBOGS_PIPELINE_GIT_REF=
+VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --dry-run
 ```
 
 8. For a short smoke fit, redeploy with:
@@ -577,8 +593,8 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
-VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
+VBOGS_PIPELINE_GIT_REF=
+VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
 ```
 
 9. For the full implemented pipeline, redeploy with:
@@ -586,8 +602,8 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
-VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
+VBOGS_PIPELINE_GIT_REF=
+VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0
 ```
 
 10. Watch `vbogs-pipeline` logs in Portainer. The orchestrator will print each
@@ -599,8 +615,8 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 To resume from a later stage through the web UI:
 
 ```text
-VBOGS_PIPELINE_GIT_REF=main
-VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
+VBOGS_PIPELINE_GIT_REF=
+VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --start-at bucket
 ```
 
 `VBOGS_GIT_REF` controls the Git ref cloned when images are built.
@@ -612,6 +628,11 @@ branch you want the stack to pull before running.
 If the branch lives in a fork instead of the default repository, set
 `VBOGS_GIT_URL` to that fork when building the images so `origin/<branch>` points
 at the right remote.
+
+When you are deploying prebuilt images from Docker Hub, set
+`VBOGS_PIPELINE_GIT_REF=` empty to disable the runtime `git fetch` / checkout
+step. The default `pipeline_config.yaml` still carries `git_ref: main`, which
+is useful for source-built images but can fail in pull-only deployments.
 
 The pipeline service requires `/var/run/docker.sock` access. That is what makes
 the web-only Portainer workflow possible, but it gives `vbogs-pipeline` Docker
