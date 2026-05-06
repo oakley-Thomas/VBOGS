@@ -48,8 +48,13 @@ fit:
   jax_device: 0
   fit_mode: batched
   batch_size: 5000
+  batch_buckets: 64,128,256,512,1024,2048,4096,8192,10000,16384,32768,65536,131072,262144,524288
   vmap_group_size: 64
+  k_max: 40
+  k_growth_min_points: 256
   log_every: 100
+  # 0 means exact unbounded fits. 10000 keeps dense-anchor tail runtime bounded.
+  max_points_per_anchor: 10000
   # 0 means full fit. Use 5 for a quick smoke run.
   max_observed_anchors: 0
 

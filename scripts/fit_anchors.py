@@ -31,7 +31,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from vbogs.io import save_json, unpack_group_slice
+from vbogs.io import cap_group_counts, save_json, select_group_values
+
+
+DEFAULT_BATCH_BUCKETS = (
+    "64,128,256,512,1024,2048,4096,8192,10000,16384,"
+    "32768,65536,131072,262144,524288"
+)
+SAMPLING_METHOD = "deterministic_random_without_replacement"
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--batch-buckets",
-        default="64,128,256,512,1024,2048,4096,5000",
+        default=DEFAULT_BATCH_BUCKETS,
         help=(
             "Comma-separated point-count buckets for `--fit-mode batched`. "
             "Each anchor is padded to the smallest bucket that fits its point count."
@@ -150,6 +157,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Optional cap for smoke tests; 0 processes all observed anchors.",
+    )
+    parser.add_argument(
+        "--max-points-per-anchor",
+        type=int,
+        default=0,
+        help=(
+            "Optional cap on points used to fit each observed anchor. Dense anchors "
+            "are deterministically subsampled; 0 uses every assigned point."
+        ),
     )
     parser.add_argument(
         "--vbgs-root",
@@ -231,6 +247,27 @@ def bucket_for_count(count: int, buckets: Tuple[int, ...]) -> int:
         if count <= bucket:
             return bucket
     return count
+
+
+def select_anchor_point_indices(
+    anchor_offsets: np.ndarray,
+    point_indices: np.ndarray,
+    anchor_id: int,
+    *,
+    max_points_per_anchor: int,
+    seed: int,
+) -> np.ndarray:
+    return select_group_values(
+        anchor_offsets,
+        point_indices,
+        int(anchor_id),
+        max_values_per_group=max_points_per_anchor,
+        seed=seed,
+    )
+
+
+def cap_point_counts(point_counts: np.ndarray, max_points_per_anchor: int) -> np.ndarray:
+    return cap_group_counts(point_counts, max_points_per_anchor)
 
 
 def compute_mean_elbo(model, points_norm: np.ndarray, batch_size: int, compute_elbo_delta) -> float:
@@ -571,13 +608,21 @@ def build_padded_anchor_batch(
     anchor_offsets: np.ndarray,
     point_indices: np.ndarray,
     points_norm: np.ndarray,
+    max_points_per_anchor: int,
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     data_padded = np.zeros((anchor_ids.shape[0], bucket_size, points_norm.shape[1]), dtype=np.float32)
     valid_mask = np.zeros((anchor_ids.shape[0], bucket_size), dtype=bool)
     valid_counts = np.zeros((anchor_ids.shape[0],), dtype=np.int32)
 
     for row, anchor_id in enumerate(anchor_ids.tolist()):
-        anchor_point_indices = unpack_group_slice(anchor_offsets, point_indices, int(anchor_id))
+        anchor_point_indices = select_anchor_point_indices(
+            anchor_offsets,
+            point_indices,
+            int(anchor_id),
+            max_points_per_anchor=max_points_per_anchor,
+            seed=seed,
+        )
         count = min(anchor_point_indices.shape[0], bucket_size)
         if count <= 0:
             continue
@@ -597,6 +642,7 @@ def fit_batched_anchor_group(
     anchor_offsets: np.ndarray,
     point_indices: np.ndarray,
     points_norm: np.ndarray,
+    max_points_per_anchor: int,
     k_max: int,
     MultivariateNormal,
     Multinomial,
@@ -610,6 +656,8 @@ def fit_batched_anchor_group(
         anchor_offsets=anchor_offsets,
         point_indices=point_indices,
         points_norm=points_norm,
+        max_points_per_anchor=max_points_per_anchor,
+        seed=seed,
     )
     mean_init = init_batched_means(
         anchor_ids=anchor_ids,
@@ -694,6 +742,12 @@ def main() -> None:
     batch_buckets = parse_batch_buckets(args.batch_buckets, args.batch_size)
     if args.vmap_group_size <= 0:
         raise ValueError("--vmap-group-size must be positive")
+    if args.max_points_per_anchor < 0:
+        raise ValueError("--max-points-per-anchor must be non-negative")
+    if 0 < args.max_points_per_anchor < args.min_points_per_anchor:
+        raise ValueError(
+            "--max-points-per-anchor must be 0 or at least --min-points-per-anchor"
+        )
 
     points_norm_npz = load_npz(points_norm_path)
     pts_by_anchor_npz = load_npz(pts_by_anchor_path)
@@ -738,12 +792,40 @@ def main() -> None:
     fit_batch_size = np.zeros((m_obs,), dtype=np.int32)
     k_growth_attempted = np.zeros((m_obs,), dtype=bool)
 
-    observed_point_counts = point_counts[observed_anchor_ids]
+    raw_observed_point_counts = point_counts[observed_anchor_ids]
+    effective_point_counts = cap_point_counts(
+        raw_observed_point_counts,
+        args.max_points_per_anchor,
+    )
+    capped_anchor_count = int(np.count_nonzero(effective_point_counts < raw_observed_point_counts))
+    effective_point_total = int(effective_point_counts.sum()) if m_obs else 0
+    fit_point_count_processed = 0
+    print(
+        "Observed point counts (raw): "
+        f"min={int(raw_observed_point_counts.min()) if m_obs else 0} "
+        f"p50={float(np.percentile(raw_observed_point_counts, 50)) if m_obs else 0.0:.1f} "
+        f"p90={float(np.percentile(raw_observed_point_counts, 90)) if m_obs else 0.0:.1f} "
+        f"max={int(raw_observed_point_counts.max()) if m_obs else 0}"
+    )
+    print(
+        "Observed point counts (fit): "
+        f"min={int(effective_point_counts.min()) if m_obs else 0} "
+        f"p50={float(np.percentile(effective_point_counts, 50)) if m_obs else 0.0:.1f} "
+        f"p90={float(np.percentile(effective_point_counts, 90)) if m_obs else 0.0:.1f} "
+        f"max={int(effective_point_counts.max()) if m_obs else 0} "
+        f"capped={capped_anchor_count:,} cap={args.max_points_per_anchor}"
+    )
     fit_start = time.time()
 
     if args.fit_mode == "loop":
         for obs_idx, anchor_id in enumerate(observed_anchor_ids):
-            anchor_point_indices = unpack_group_slice(anchor_offsets, point_indices, int(anchor_id))
+            anchor_point_indices = select_anchor_point_indices(
+                anchor_offsets,
+                point_indices,
+                int(anchor_id),
+                max_points_per_anchor=args.max_points_per_anchor,
+                seed=args.seed,
+            )
             anchor_points = points_norm[anchor_point_indices]
             fit_batch_size[obs_idx] = int(anchor_points.shape[0])
 
@@ -804,19 +886,22 @@ def main() -> None:
             delta_u[obs_idx] = packed["delta_u"]
             delta_n[obs_idx] = packed["delta_n"]
             fit_completed[obs_idx] = True
+            fit_point_count_processed += int(anchor_points.shape[0])
 
             if (obs_idx + 1) % max(args.log_every, 1) == 0 or (obs_idx + 1) == m_obs:
                 elapsed = time.time() - fit_start
                 rate = (obs_idx + 1) / max(elapsed, 1e-6)
                 print(
                     f"[{obs_idx + 1:>6}/{m_obs}] anchor={anchor_id:>7} level={int(anchor_level[anchor_id])} "
-                    f"pts={anchor_points.shape[0]:>6} K={int(final_k[obs_idx]):>2} "
+                    f"fit_pts={anchor_points.shape[0]:>6} "
+                    f"fit_pts_done={fit_point_count_processed:,}/{effective_point_total:,} "
+                    f"K={int(final_k[obs_idx]):>2} "
                     f"ELBO/pt={final_elbo[obs_idx]: .4f} rate={rate: .2f} anchors/s"
                 )
     else:
         obs_rows = np.arange(m_obs, dtype=np.int64)
         count_to_bucket = np.array(
-            [bucket_for_count(int(count), batch_buckets) for count in observed_point_counts],
+            [bucket_for_count(int(count), batch_buckets) for count in effective_point_counts],
             dtype=np.int32,
         )
         fit_batch_size[:] = count_to_bucket
@@ -843,6 +928,7 @@ def main() -> None:
                         anchor_offsets=anchor_offsets,
                         point_indices=point_indices,
                         points_norm=points_norm,
+                        max_points_per_anchor=args.max_points_per_anchor,
                         k_max=args.k_max,
                         MultivariateNormal=MultivariateNormal,
                         Multinomial=Multinomial,
@@ -850,6 +936,7 @@ def main() -> None:
                         DeltaMixture=DeltaMixture,
                         ArrayDict=ArrayDict,
                     )
+                    group_fit_points = int(_valid_counts.sum())
 
                     if cur_k == args.k_init:
                         assign_batched_rows(
@@ -869,6 +956,7 @@ def main() -> None:
                             delta_n=delta_n,
                         )
                         processed += rows.shape[0]
+                        fit_point_count_processed += group_fit_points
                         fit_completed[rows] = True
                     else:
                         gain = group_elbo - final_elbo[rows]
@@ -905,6 +993,8 @@ def main() -> None:
                         print(
                             f"[{processed:>6}/{m_obs}] mode=batched K={cur_k:>2} "
                             f"bucket={int(bucket_size):>6} group={rows.shape[0]:>4} "
+                            f"group_fit_pts={group_fit_points:,} "
+                            f"fit_pts_done={fit_point_count_processed:,}/{effective_point_total:,} "
                             f"rate={rate: .2f} anchors/s"
                         )
 
@@ -914,7 +1004,7 @@ def main() -> None:
 
             growth_mask = (
                 (final_k == cur_k)
-                & (observed_point_counts >= max(args.k_growth_min_points, 0))
+                & (effective_point_counts >= max(args.k_growth_min_points, 0))
             )
             if cur_k > args.k_init:
                 growth_mask &= selected_gain >= args.elbo_improvement_tol
@@ -930,6 +1020,7 @@ def main() -> None:
         is_observed=is_observed,
         observed_anchor_ids=observed_anchor_ids,
         point_count=point_counts,
+        effective_point_count=effective_point_counts,
         final_k=final_k,
         final_elbo=final_elbo,
         selected_gain=selected_gain,
@@ -949,6 +1040,7 @@ def main() -> None:
         k_init=np.array(args.k_init, dtype=np.int16),
         k_max=np.array(args.k_max, dtype=np.int16),
         min_points_per_anchor=np.array(args.min_points_per_anchor, dtype=np.int32),
+        max_points_per_anchor=np.array(args.max_points_per_anchor, dtype=np.int32),
         elbo_improvement_tol=np.array(args.elbo_improvement_tol, dtype=np.float32),
     )
 
@@ -963,10 +1055,18 @@ def main() -> None:
         "completed_anchor_count": int(fit_completed.sum()),
         "unobserved_anchor_count": int(n_anchors - int(is_observed.sum())),
         "observed_anchor_count_total": total_observed,
-        "observed_point_count_min": int(observed_point_counts.min()) if m_obs else 0,
-        "observed_point_count_p50": float(np.percentile(observed_point_counts, 50)) if m_obs else 0.0,
-        "observed_point_count_p90": float(np.percentile(observed_point_counts, 90)) if m_obs else 0.0,
-        "observed_point_count_max": int(observed_point_counts.max()) if m_obs else 0,
+        "observed_point_count_min": int(raw_observed_point_counts.min()) if m_obs else 0,
+        "observed_point_count_p50": float(np.percentile(raw_observed_point_counts, 50)) if m_obs else 0.0,
+        "observed_point_count_p90": float(np.percentile(raw_observed_point_counts, 90)) if m_obs else 0.0,
+        "observed_point_count_max": int(raw_observed_point_counts.max()) if m_obs else 0,
+        "effective_point_count_min": int(effective_point_counts.min()) if m_obs else 0,
+        "effective_point_count_p50": float(np.percentile(effective_point_counts, 50)) if m_obs else 0.0,
+        "effective_point_count_p90": float(np.percentile(effective_point_counts, 90)) if m_obs else 0.0,
+        "effective_point_count_max": int(effective_point_counts.max()) if m_obs else 0,
+        "effective_point_count_total": effective_point_total,
+        "max_points_per_anchor": args.max_points_per_anchor,
+        "sampling_method": SAMPLING_METHOD if args.max_points_per_anchor > 0 else "none",
+        "capped_anchor_count": capped_anchor_count,
         "k_init": args.k_init,
         "k_max": args.k_max,
         "k_growth_factor": args.k_growth_factor,

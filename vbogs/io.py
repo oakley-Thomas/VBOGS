@@ -95,3 +95,32 @@ def unpack_group_slice(
     start = int(offsets[group_id])
     end = int(offsets[group_id + 1])
     return values[start:end]
+
+
+def cap_group_counts(point_counts: np.ndarray, max_points_per_group: int) -> np.ndarray:
+    """Return per-group counts after applying an optional fitting cap."""
+
+    point_counts = np.asarray(point_counts, dtype=np.int32)
+    if max_points_per_group <= 0:
+        return point_counts.astype(np.int32, copy=True)
+    return np.minimum(point_counts, max_points_per_group).astype(np.int32)
+
+
+def select_group_values(
+    offsets: np.ndarray,
+    values: np.ndarray,
+    group_id: int,
+    *,
+    max_values_per_group: int,
+    seed: int,
+) -> np.ndarray:
+    """Return all or a deterministic random subset of packed group values."""
+
+    group_values = unpack_group_slice(offsets, values, group_id)
+    if max_values_per_group <= 0 or group_values.shape[0] <= max_values_per_group:
+        return group_values
+
+    rng = np.random.default_rng(seed + int(group_id))
+    sampled = rng.choice(group_values, size=int(max_values_per_group), replace=False)
+    sampled.sort()
+    return sampled.astype(group_values.dtype, copy=False)

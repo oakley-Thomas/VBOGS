@@ -75,9 +75,13 @@ CONFIG_KEY_MAP = {
         "jax_device": "jax_device",
         "fit_mode": "fit_mode",
         "batch_size": "batch_size",
+        "batch_buckets": "batch_buckets",
         "vmap_group_size": "vmap_group_size",
+        "k_max": "k_max",
+        "k_growth_min_points": "k_growth_min_points",
         "log_every": "log_every",
         "max_observed_anchors": "max_observed_anchors",
+        "max_points_per_anchor": "max_points_per_anchor",
     },
     "inspect": {
         "top_k": "inspect_top_k",
@@ -322,8 +326,26 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default="batched",
     )
     fit_group.add_argument("--batch-size", type=int, default=5000)
+    fit_group.add_argument(
+        "--batch-buckets",
+        default=(
+            "64,128,256,512,1024,2048,4096,8192,10000,16384,"
+            "32768,65536,131072,262144,524288"
+        ),
+    )
     fit_group.add_argument("--vmap-group-size", type=int, default=64)
+    fit_group.add_argument("--k-max", type=int, default=40)
+    fit_group.add_argument("--k-growth-min-points", type=int, default=256)
     fit_group.add_argument("--log-every", type=int, default=100)
+    fit_group.add_argument(
+        "--max-points-per-anchor",
+        type=int,
+        default=10000,
+        help=(
+            "Maximum assigned points used for fitting each observed anchor. "
+            "Use 0 for exact unbounded fits."
+        ),
+    )
     fit_group.add_argument(
         "--max-observed-anchors",
         type=int,
@@ -533,12 +555,20 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.fit_mode,
         "--batch-size",
         str(args.batch_size),
+        "--batch-buckets",
+        args.batch_buckets,
         "--vmap-group-size",
         str(args.vmap_group_size),
+        "--k-max",
+        str(args.k_max),
+        "--k-growth-min-points",
+        str(args.k_growth_min_points),
         "--log-every",
         str(args.log_every),
         "--max-observed-anchors",
         str(args.max_observed_anchors),
+        "--max-points-per-anchor",
+        str(args.max_points_per_anchor),
     )
 
     posterior_name = (

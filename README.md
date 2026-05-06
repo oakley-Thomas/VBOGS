@@ -251,6 +251,19 @@ Run the full M4b fit by omitting `--max-observed-anchors`; that writes:
 - `anchor_posterior.npz`
 - `fit_metadata.json`
 
+Dense anchors can dominate M4b runtime. Direct `fit_anchors.py` runs are exact
+by default, but you can bound dense-anchor work with deterministic random
+subsampling:
+
+```bash
+python scripts/fit_anchors.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --max-points-per-anchor 10000
+```
+
+The pipeline wrapper defaults to this `10000`-point cap; pass
+`--max-points-per-anchor 0` for an exact unbounded pipeline fit.
+
 The initial hyperparameter defaults match `PLAN.md`:
 
 - `K_INIT=10`
