@@ -1,0 +1,116 @@
+services:
+  vbogs-torch:
+    image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
+    volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: false
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+    command: sleep infinity
+
+  vbogs-jax:
+    image: ${VBOGS_JAX_IMAGE:-oakleyth/vbogs-jax:latest}
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      JAX_PLATFORMS: cuda
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
+    volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: false
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+    command: sleep infinity
+
+  vbogs-pipeline:
+    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    working_dir: /workspace/VBOGS
+    depends_on:
+      - vbogs-torch
+      - vbogs-jax
+    environment:
+      VBOGS_DRIVE: ${VBOGS_DRIVE:-}
+      VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
+      VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
+      VBOGS_PIPELINE_GIT_REF: ${VBOGS_PIPELINE_GIT_REF:-}
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    command:
+      - sh
+      - -lc
+      - |
+        if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
+          if [ -n "${VBOGS_PIPELINE_GIT_REF:-}" ]; then
+            git fetch --tags origin
+            (git checkout "${VBOGS_PIPELINE_GIT_REF:-}" || git checkout -B "${VBOGS_PIPELINE_GIT_REF:-}" "origin/${VBOGS_PIPELINE_GIT_REF:-}")
+            git submodule update --init --recursive
+          fi
+          python scripts/run_pipeline_from_env.py
+        else
+          echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."
+          sleep infinity
+        fi
+
+volumes:
+  COLMAP:
+    external: true
+  OCTREE-ANYGS:
+    external: true
+  KITTI-360:
+    external: true
+  vbogs-data:
+  vbogs-outputs:
+  vbogs-generated-configs:

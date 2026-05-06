@@ -4,3 +4,4 @@ generated_configs/
 outputs/
 __pycache__/
 *.py[cod]
+.env

@@ -1,6 +1,6 @@
 FROM docker:27-cli
 
-RUN apk add --no-cache git python3 py3-yaml
+RUN apk add --no-cache bash git python3 py3-yaml
 
 ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
 ARG VBOGS_GIT_REF=main
