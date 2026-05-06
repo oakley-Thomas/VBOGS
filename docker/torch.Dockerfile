@@ -51,7 +51,13 @@ RUN python -m pip install \
     pyyaml \
     ninja
 
-ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;12.0"
+ARG VBOGS_TORCH_CUDA_ARCH_LIST="7.5;12.0"
+ARG VBOGS_TORCH_MAX_JOBS=1
+
+ENV TORCH_CUDA_ARCH_LIST="${VBOGS_TORCH_CUDA_ARCH_LIST}" \
+    MAX_JOBS="${VBOGS_TORCH_MAX_JOBS}" \
+    CMAKE_BUILD_PARALLEL_LEVEL="${VBOGS_TORCH_MAX_JOBS}" \
+    NINJAFLAGS="-j${VBOGS_TORCH_MAX_JOBS}"
 
 RUN python -m pip install rich && \
     python -m pip install --no-build-isolation \

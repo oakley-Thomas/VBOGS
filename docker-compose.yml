@@ -7,6 +7,8 @@ services:
       args:
         VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
         VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+        VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.5;12.0}
+        VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true

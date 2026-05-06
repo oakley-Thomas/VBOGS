@@ -166,11 +166,23 @@ wheel stack:
 - torchvision `0.22.1+cu128`
 - torchaudio `2.7.1+cu128`
 - `torch_scatter` wheel matched to `torch 2.7 / cu128`
-- `gsplat` installed from the official `pt27cu128` wheel index
+- `gsplat` built from source, because upstream prebuilt wheels do not currently
+  cover the `torch 2.7 / cu128 / Python 3.10` combination
 
 This configuration is chosen because it works on the local RTX 5080 dev machine
 and is a reasonable deployment target for the Quadro RTX 8000 server, assuming
 the server's NVIDIA driver is new enough for CUDA 12.8-era PyTorch wheels.
+
+The Docker build keeps the `gsplat` compile intentionally small:
+
+- `VBOGS_TORCH_MAX_JOBS=1` by default
+- `VBOGS_TORCH_CUDA_ARCH_LIST=7.5;12.0` by default in Compose
+- `scripts/build_stack_serial.sh` detects GPU 0 and narrows
+  `VBOGS_TORCH_CUDA_ARCH_LIST` to that single compute capability unless you
+  set it yourself
+
+For the local RTX 5080, use `12.0`. For the Quadro RTX 8000 server, use `7.5`.
+Building every architecture is much more likely to exhaust WSL memory.
 
 ### Validation
 
@@ -416,8 +428,20 @@ Build and start the idle stack:
 VBOGS_TORCH_IMAGE=local/vbogs-torch \
 VBOGS_JAX_IMAGE=local/vbogs-jax \
 VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
-docker compose up -d --build
+VBOGS_TORCH_CUDA_ARCH_LIST=12.0 \
+VBOGS_TORCH_MAX_JOBS=1 \
+bash scripts/build_stack_serial.sh
+
+VBOGS_TORCH_IMAGE=local/vbogs-torch \
+VBOGS_JAX_IMAGE=local/vbogs-jax \
+VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
+docker compose up -d --no-build
 ```
+
+On WSL, prefer the serial build helper over `docker compose up --build`.
+The Torch image compiles `gsplat` while the JAX image downloads large CUDA
+wheels; allowing those phases to overlap can exhaust WSL memory or Docker disk
+space and crash the VM.
 
 Run a command audit first. This prints the stage commands without launching the
 expensive work:
@@ -431,7 +455,7 @@ VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
-docker compose up --build vbogs-pipeline
+docker compose up --no-build vbogs-pipeline
 ```
 
 Run a short smoke fit:
@@ -445,7 +469,7 @@ VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
-docker compose up --build vbogs-pipeline
+docker compose up --no-build vbogs-pipeline
 ```
 
 Run the full implemented pipeline:
@@ -459,7 +483,7 @@ VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
 VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
-docker compose up --build vbogs-pipeline
+docker compose up --no-build vbogs-pipeline
 ```
 
 Set `VBOGS_PIPELINE_GIT_REF` to the VBOGS branch, tag, or commit that should be
