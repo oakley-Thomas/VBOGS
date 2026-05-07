@@ -2,26 +2,6 @@
 Combining Octree-GS's scene scalability with Variational Bayes GS uncertainty for better autonomous vehicle mapping
 
 ## Environment Notes
-
-VBOGS uses two separate conda environments because the PyTorch and JAX CUDA stacks
-conflict in practice:
-
-- `vbogs-torch` for Octree-AnyGS, stereo, point bucketing, and rendering
-- `vbogs-jax` for VBGS fitting and posterior computations
-
-The repo helper script is [scripts/envs.sh](/home/oakley/ub/advanced_robotics/VBOGS/scripts/envs.sh:1).
-
-Common commands:
-
-```bash
-bash scripts/envs.sh create-torch
-bash scripts/envs.sh create-jax
-bash scripts/envs.sh check-torch-stack
-bash scripts/envs.sh smoke-test-jax
-```
-
-## Deployment Quick Start
-
 The Docker workflow uses one compose stack with three services:
 
 - `vbogs-torch` for Octree-AnyGS, stereo, and bucketing
@@ -29,14 +9,42 @@ The Docker workflow uses one compose stack with three services:
   computation
 - `vbogs-pipeline` for running the stages in order inside the stack
 
-You can run the same `docker-compose.yml` locally with Docker Compose, or deploy
-it remotely through the Portainer web UI. The default pipeline still stops
-after the M4b fit-inspection helper to force a manual posterior sanity check,
-but M5 uncertainty computation and M7 side-by-side diagnostic rendering now have
-repo-owned entry points.
+### Build commands
+```bash
+# Rebuild all containers
+bash scripts/build_stack_serial.sh
 
-For local Docker Compose, see `Local Docker Compose` below. For a remote server
-where you only have Portainer web access, see `Remote Portainer Web UI`.
+# Rebuild individual containers
+bash scripts/build_stack_serial.sh vbogs-torch
+bash scripts/build_stack_serial.sh vbogs-jax
+bash scripts/build_stack_serial.sh vbogs-pipeline
+```
+
+### Docker Volumes:
+These external volumes **MUST EXIST** when deploying the stack.
+- `KITTI-360`, mounted at `/workspace/VBOGS/data/KITTI-360`
+- `COLMAP`, mounted at `/data/COLMAP`
+- `OCTREE-ANYGS`, mounted at `/data/OCTREE-ANYGS`
+```bash
+# Create the volumes (only need to execute once)
+docker volume create KITTI-360
+docker volume create COLMAP
+docker volume create OCTREE-ANYGS
+```
+
+### Portainer Deployment
+When deploying the stack using Portainer's web interface
+1. Create a custom template 
+    - Build from: "Repository"
+    - Repository URL: https://github.com/oakley-Thomas/VBOGS 
+    - Compose path: docker-compose.portainer.yml
+2. Create stack from custom template
+
+## Usage
+
+
+## Deployment Quick Start
+
 
 ## M2 Training Workflow
 
@@ -184,21 +192,7 @@ The Docker build keeps the `gsplat` compile intentionally small:
 For the local RTX 5080, use `12.0`. For the Quadro RTX 8000 server, use `7.5`.
 Building every architecture is much more likely to exhaust WSL memory.
 
-### Validation
 
-Use the following command after provisioning `vbogs-torch`:
-
-```bash
-bash scripts/envs.sh check-torch-stack
-```
-
-It verifies:
-
-- CUDA visibility in PyTorch
-- a real CUDA tensor operation
-- `torch_scatter` CUDA execution
-- `gsplat` import
-- `gaussian_renderer.render` import through `Octree-AnyGS`
 
 ## M4 Point Bucketing And Anchor Fits
 
@@ -340,9 +334,7 @@ The stack uses these services:
 
 The stack uses these Docker volumes:
 
-- `KITTI-360`, external, mounted at `/workspace/VBOGS/data/KITTI-360`
-- `COLMAP`, external, mounted at `/data/COLMAP`
-- `OCTREE-ANYGS`, external, mounted at `/data/OCTREE-ANYGS`
+
 - `vbogs-data`, compose-managed, mounted at `/workspace/VBOGS/data`
 - `vbogs-outputs`, compose-managed, mounted at `/workspace/VBOGS/outputs`
 - `vbogs-generated-configs`, compose-managed, mounted at `/workspace/VBOGS/generated_configs`
