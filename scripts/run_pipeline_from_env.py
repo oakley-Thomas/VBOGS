@@ -23,10 +23,6 @@ def main() -> None:
     if drive:
         cmd.extend(["--drive", drive])
 
-    git_ref = os.environ.get("VBOGS_PIPELINE_GIT_REF")
-    if git_ref:
-        cmd.extend(["--git-ref", git_ref])
-
     extra_args = os.environ.get("VBOGS_PIPELINE_ARGS", "")
     if extra_args:
         cmd.extend(shlex.split(extra_args))

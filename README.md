@@ -34,14 +34,35 @@ docker volume create OCTREE-ANYGS
 
 ### Portainer Deployment
 When deploying the stack using Portainer's web interface
-1. Create a custom template 
+1. Create the custom template 
     - Build from: "Repository"
     - Repository URL: https://github.com/oakley-Thomas/VBOGS 
     - Compose path: docker-compose.portainer.yml
-2. Create stack from custom template
+2. Create the stack from custom template
 
-## Usage
+**NOTE:** the VBOGS codebase is configured as a Git Repository. If you would like to try out a feature branch, run this script inside of the vbogs-pipeline container to update the stack.
+```bash
+python scripts/update_stack_git_ref.py <name-of-branch>
+```
 
+## Usage (on a Dev machine)
+
+Local Docker Compose automatically reads `docker-compose.override.yml`, which
+bind-mounts this checkout at `/workspace/VBOGS` in every service. Edits on your
+dev machine are therefore visible inside the running containers without
+rebuilding the images.
+
+Start the stack:
+```bash
+docker compose up -d --no-build
+```
+
+If the stack was already running before the override existed, recreate the
+containers once so the source mount is attached:
+
+```bash
+docker compose up -d --no-build --force-recreate
+```
 
 ## Deployment Quick Start
 
@@ -363,7 +384,7 @@ The pipeline currently supports these stages:
 Main pipeline knobs live in [pipeline_config.yaml](pipeline_config.yaml). The
 runner loads this file by default and uses it for values such as:
 
-- drive id and Git ref
+- drive id
 - stage range, dry-run mode, and resume point
 - KITTI-360 input overrides
 - dataset-prep sampling
@@ -385,8 +406,8 @@ VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 file should be the only source of the drive id.
 
 For Portainer web-only deployments, the usual pattern is to commit a tuned
-`pipeline_config.yaml` on a branch, set `VBOGS_PIPELINE_GIT_REF` to that branch,
-and redeploy the stack.
+`pipeline_config.yaml` on a branch, update the running stack with
+`scripts/update_stack_git_ref.py`, and redeploy or restart the pipeline service.
 
 ### Local Docker Compose
 
@@ -417,18 +438,17 @@ docker run --rm \
 Build and start the idle stack:
 
 ```bash
-VBOGS_TORCH_IMAGE=local/vbogs-torch \
-VBOGS_JAX_IMAGE=local/vbogs-jax \
-VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_TORCH_CUDA_ARCH_LIST=12.0 \
 VBOGS_TORCH_MAX_JOBS=1 \
 bash scripts/build_stack_serial.sh
 
-VBOGS_TORCH_IMAGE=local/vbogs-torch \
-VBOGS_JAX_IMAGE=local/vbogs-jax \
-VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 docker compose up -d --no-build
 ```
+
+Local Compose uses `docker-compose.override.yml` by default, so the running
+containers see this checkout at `/workspace/VBOGS` instead of the clone baked
+into the image. Portainer and remote deployments that use only
+`docker-compose.yml` or `docker-compose.portainer.yml` are unaffected.
 
 On WSL, prefer the serial build helper over `docker compose up --build`.
 The Torch image compiles `gsplat` while the JAX image downloads large CUDA
@@ -439,13 +459,9 @@ Run a command audit first. This prints the stage commands without launching the
 expensive work:
 
 ```bash
-VBOGS_TORCH_IMAGE=local/vbogs-torch \
-VBOGS_JAX_IMAGE=local/vbogs-jax \
-VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
 docker compose up --no-build vbogs-pipeline
 ```
@@ -453,13 +469,9 @@ docker compose up --no-build vbogs-pipeline
 Run a short smoke fit:
 
 ```bash
-VBOGS_TORCH_IMAGE=local/vbogs-torch \
-VBOGS_JAX_IMAGE=local/vbogs-jax \
-VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
 docker compose up --no-build vbogs-pipeline
 ```
@@ -467,21 +479,19 @@ docker compose up --no-build vbogs-pipeline
 Run the full implemented pipeline:
 
 ```bash
-VBOGS_TORCH_IMAGE=local/vbogs-torch \
-VBOGS_JAX_IMAGE=local/vbogs-jax \
-VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
 docker compose up --no-build vbogs-pipeline
 ```
 
-Set `VBOGS_PIPELINE_GIT_REF` to the VBOGS branch, tag, or commit that should be
-checked out inside the pipeline, Torch, and JAX containers immediately before
-the pipeline stages run. Leave it empty to use whatever ref was baked into the
-images.
+To switch running containers to another branch, tag, or commit without
+rebuilding images, run:
+
+```bash
+docker compose exec vbogs-pipeline python scripts/update_stack_git_ref.py my-branch
+```
 
 Resume from a later stage by changing only the pipeline args:
 
@@ -546,7 +556,6 @@ VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
 VBOGS_PIPELINE_AUTORUN=0
 VBOGS_DRIVE=2013_05_28_drive_0008_sync
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=
 VBOGS_PIPELINE_ARGS=
 ```
 
@@ -560,7 +569,6 @@ VBOGS_PIPELINE_ARGS=
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```
 
@@ -569,7 +577,6 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
 ```
 
@@ -578,7 +585,6 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 ```
 
@@ -591,16 +597,13 @@ VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 To resume from a later stage through the web UI:
 
 ```text
-VBOGS_PIPELINE_GIT_REF=main
 VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
 ```
 
 `VBOGS_GIT_REF` controls the Git ref cloned when images are built.
-`VBOGS_PIPELINE_GIT_REF` controls the Git ref checked out in the already-running
-pipeline, Torch, and JAX containers immediately before a pipeline run. For
-branch testing, set both to the same branch when building from source in
-Portainer; if you are using prebuilt images, set `VBOGS_PIPELINE_GIT_REF` to the
-branch you want the stack to pull before running.
+For branch testing in already-running containers, run
+`scripts/update_stack_git_ref.py <branch>` inside any stack service before
+starting the pipeline.
 If the branch lives in a fork instead of the default repository, set
 `VBOGS_GIT_URL` to that fork when building the images so `origin/<branch>` points
 at the right remote.

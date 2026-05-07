@@ -1,0 +1,18 @@
+services:
+  vbogs-torch:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
+
+  vbogs-jax:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
+
+  vbogs-pipeline:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
