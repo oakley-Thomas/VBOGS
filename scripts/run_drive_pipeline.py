@@ -26,7 +26,17 @@ from pathlib import Path
 from typing import Sequence
 
 
-STAGES = ("prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "render")
+STAGES = (
+    "prepare",
+    "train",
+    "stereo",
+    "bucket",
+    "fit",
+    "inspect",
+    "uncertainty",
+    "map-viz",
+    "render",
+)
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("pipeline_config.yaml")
@@ -86,6 +96,15 @@ CONFIG_KEY_MAP = {
     "uncertainty": {
         "u_max": "uncertainty_u_max",
         "no_histogram": "uncertainty_no_histogram",
+    },
+    "map_viz": {
+        "output_dir": "map_viz_output_dir",
+        "vmin": "map_viz_vmin",
+        "vmax": "map_viz_vmax",
+        "percentile_low": "map_viz_percentile_low",
+        "percentile_high": "map_viz_percentile_high",
+        "observed_only": "map_viz_observed_only",
+        "no_split_levels": "map_viz_no_split_levels",
     },
     "render": {
         "split": "render_split",
@@ -359,6 +378,31 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Skip writing the M5 uncertainty histogram PNG.",
     )
 
+    map_viz_group = parser.add_argument_group("map-scale uncertainty export")
+    map_viz_group.add_argument(
+        "--map-viz-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional map-scale PLY output directory. Defaults to "
+            "`outputs/uncertainty_maps/<drive>`."
+        ),
+    )
+    map_viz_group.add_argument("--map-viz-vmin", type=float, default=None)
+    map_viz_group.add_argument("--map-viz-vmax", type=float, default=None)
+    map_viz_group.add_argument("--map-viz-percentile-low", type=float, default=2.0)
+    map_viz_group.add_argument("--map-viz-percentile-high", type=float, default=98.0)
+    map_viz_group.add_argument(
+        "--map-viz-observed-only",
+        action="store_true",
+        help="Export only observed anchors in the map-scale CloudCompare PLYs.",
+    )
+    map_viz_group.add_argument(
+        "--map-viz-no-split-levels",
+        action="store_true",
+        help="Only write the combined all-levels map-scale PLY.",
+    )
+
     render_group = parser.add_argument_group("uncertainty rendering")
     render_group.add_argument(
         "--render-split",
@@ -554,6 +598,26 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *(("--no-histogram",) if args.uncertainty_no_histogram else ()),
     )
 
+    map_viz_cmd = (
+        "python",
+        "scripts/export_uncertainty_map.py",
+        "--drive",
+        args.drive,
+        "--bucket-root",
+        bucket_root,
+        "--posterior",
+        f"{bucket_root}/{posterior_name}",
+        "--percentile-low",
+        str(args.map_viz_percentile_low),
+        "--percentile-high",
+        str(args.map_viz_percentile_high),
+        *maybe_option("--output-dir", args.map_viz_output_dir),
+        *maybe_option("--vmin", args.map_viz_vmin),
+        *maybe_option("--vmax", args.map_viz_vmax),
+        *(("--observed-only",) if args.map_viz_observed_only else ()),
+        *(("--no-split-levels",) if args.map_viz_no_split_levels else ()),
+    )
+
     render_cmd = (
         "python",
         "scripts/render_uncertainty_views.py",
@@ -578,6 +642,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
         PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
         PipelineStep("uncertainty", JAX_SERVICE, uncertainty_cmd),
+        PipelineStep("map-viz", TORCH_SERVICE, map_viz_cmd),
         PipelineStep("render", TORCH_SERVICE, render_cmd),
     ]
 
