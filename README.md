@@ -89,7 +89,7 @@ therefore show up directly under `VBOGS/outputs/` on your dev machine.
 
 Run the pipeline from a given step:
 
-**prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> render**
+**prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz -> render**
 
 ```bash
 python scripts/run_drive_pipeline.py \
