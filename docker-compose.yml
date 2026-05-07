@@ -1,6 +1,6 @@
 services:
   vbogs-torch:
-    image: ${VBOGS_TORCH_IMAGE}
+    image: ${VBOGS_TORCH_IMAGE:-local/vbogs-torch}
     build:
       context: .
       dockerfile: docker/torch.Dockerfile
@@ -41,10 +41,16 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: volume
+        source: vbogs-torch-cache
+        target: /root/.cache/torch
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     command: sleep infinity
 
   vbogs-jax:
-    image: ${VBOGS_JAX_IMAGE}
+    image: ${VBOGS_JAX_IMAGE:-local/vbogs-jax}
     build:
       context: .
       dockerfile: docker/jax.Dockerfile
@@ -84,10 +90,13 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     command: sleep infinity
 
   vbogs-pipeline:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    image: ${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}
     build:
       context: .
       dockerfile: docker/pipeline.Dockerfile
@@ -103,7 +112,6 @@ services:
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
       VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
-      VBOGS_PIPELINE_GIT_REF: ${VBOGS_PIPELINE_GIT_REF:-}
     volumes:
       - type: bind
         source: /var/run/docker.sock
@@ -113,11 +121,6 @@ services:
       - -lc
       - |
         if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
-          if [ -n "${VBOGS_PIPELINE_GIT_REF:-}" ]; then
-            git fetch --tags origin
-            (git checkout "${VBOGS_PIPELINE_GIT_REF:-}" || git checkout -B "${VBOGS_PIPELINE_GIT_REF:-}" "origin/${VBOGS_PIPELINE_GIT_REF:-}")
-            git submodule update --init --recursive
-          fi
           python scripts/run_pipeline_from_env.py
         else
           echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."
@@ -134,3 +137,4 @@ volumes:
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:
+  vbogs-torch-cache:

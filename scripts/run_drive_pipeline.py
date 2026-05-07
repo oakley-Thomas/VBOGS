@@ -26,14 +26,23 @@ from pathlib import Path
 from typing import Sequence
 
 
-STAGES = ("prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "render")
+STAGES = (
+    "prepare",
+    "train",
+    "stereo",
+    "bucket",
+    "fit",
+    "inspect",
+    "uncertainty",
+    "map-viz",
+    "render",
+)
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("pipeline_config.yaml")
 CONFIG_KEY_MAP = {
     "pipeline": {
         "drive": "drive",
-        "git_ref": "git_ref",
         "start_at": "start_at",
         "stop_after": "stop_after",
         "dry_run": "dry_run",
@@ -87,6 +96,16 @@ CONFIG_KEY_MAP = {
     "uncertainty": {
         "u_max": "uncertainty_u_max",
         "no_histogram": "uncertainty_no_histogram",
+    },
+    "map_viz": {
+        "output_dir": "map_viz_output_dir",
+        "vmin": "map_viz_vmin",
+        "vmax": "map_viz_vmax",
+        "percentile_low": "map_viz_percentile_low",
+        "percentile_high": "map_viz_percentile_high",
+        "observed_only": "map_viz_observed_only",
+        "no_split_levels": "map_viz_no_split_levels",
+        "no_trajectory": "map_viz_no_trajectory",
     },
     "render": {
         "split": "render_split",
@@ -248,15 +267,6 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default="inspect",
         help="Last stage to run.",
     )
-    parser.add_argument(
-        "--git-ref",
-        default="",
-        help=(
-            "Optional VBOGS branch, tag, or commit to check out inside the "
-            "Torch/JAX runtime containers before running stages."
-        ),
-    )
-
     input_group = parser.add_argument_group("KITTI-360 inputs")
     input_group.add_argument("--raw-root", type=Path, default=None)
     input_group.add_argument("--poses-root", type=Path, default=None)
@@ -367,6 +377,36 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--uncertainty-no-histogram",
         action="store_true",
         help="Skip writing the M5 uncertainty histogram PNG.",
+    )
+
+    map_viz_group = parser.add_argument_group("map-scale uncertainty export")
+    map_viz_group.add_argument(
+        "--map-viz-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional map-scale PLY output directory. Defaults to "
+            "`outputs/uncertainty_maps/<drive>`."
+        ),
+    )
+    map_viz_group.add_argument("--map-viz-vmin", type=float, default=None)
+    map_viz_group.add_argument("--map-viz-vmax", type=float, default=None)
+    map_viz_group.add_argument("--map-viz-percentile-low", type=float, default=2.0)
+    map_viz_group.add_argument("--map-viz-percentile-high", type=float, default=98.0)
+    map_viz_group.add_argument(
+        "--map-viz-observed-only",
+        action="store_true",
+        help="Export only observed anchors in the map-scale CloudCompare PLYs.",
+    )
+    map_viz_group.add_argument(
+        "--map-viz-no-split-levels",
+        action="store_true",
+        help="Only write the combined all-levels map-scale PLY.",
+    )
+    map_viz_group.add_argument(
+        "--map-viz-no-trajectory",
+        action="store_true",
+        help="Skip the camera trajectory PLY in the map-scale export stage.",
     )
 
     render_group = parser.add_argument_group("uncertainty rendering")
@@ -564,6 +604,30 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *(("--no-histogram",) if args.uncertainty_no_histogram else ()),
     )
 
+    map_viz_cmd = (
+        "python",
+        "scripts/export_uncertainty_map.py",
+        "--drive",
+        args.drive,
+        "--bucket-root",
+        bucket_root,
+        "--posterior",
+        f"{bucket_root}/{posterior_name}",
+        "--selection-metadata",
+        selection_metadata,
+        "--percentile-low",
+        str(args.map_viz_percentile_low),
+        "--percentile-high",
+        str(args.map_viz_percentile_high),
+        *maybe_option("--poses-root", args.poses_root),
+        *maybe_option("--output-dir", args.map_viz_output_dir),
+        *maybe_option("--vmin", args.map_viz_vmin),
+        *maybe_option("--vmax", args.map_viz_vmax),
+        *(("--observed-only",) if args.map_viz_observed_only else ()),
+        *(("--no-split-levels",) if args.map_viz_no_split_levels else ()),
+        *(("--no-trajectory",) if args.map_viz_no_trajectory else ()),
+    )
+
     render_cmd = (
         "python",
         "scripts/render_uncertainty_views.py",
@@ -588,6 +652,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
         PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
         PipelineStep("uncertainty", JAX_SERVICE, uncertainty_cmd),
+        PipelineStep("map-viz", TORCH_SERVICE, map_viz_cmd),
         PipelineStep("render", TORCH_SERVICE, render_cmd),
     ]
 
@@ -709,37 +774,12 @@ def shell_exec_command(script: str) -> tuple[str, ...]:
     return ("sh", "-lc", script)
 
 
-def git_update_script(git_ref: str) -> str:
-    quoted_ref = shlex.quote(git_ref)
-    return (
-        "set -e; "
-        "git fetch --tags origin; "
-        f"(git checkout {quoted_ref} || git checkout -B {quoted_ref} origin/{quoted_ref}); "
-        "git submodule update --init --recursive"
-    )
-
-
 def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
     printable = shlex.join(cmd)
     print(f"+ {printable}", flush=True)
     if dry_run:
         return
     subprocess.run(cmd, check=True)
-
-
-def update_runtime_repos(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
-    if not args.git_ref:
-        return
-    services = sorted({step.service for step in steps})
-    print(f"\n=== checkout VBOGS ref ({args.git_ref}) ===", flush=True)
-    for service in services:
-        run_command(
-            [
-                *exec_prefix(args, service),
-                *shell_exec_command(git_update_script(args.git_ref)),
-            ],
-            dry_run=args.dry_run,
-        )
 
 
 def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
@@ -760,7 +800,6 @@ def main() -> None:
     print(f"Drive: {args.drive}")
     print("Stages: " + ", ".join(step.name for step in steps))
     run_optional_up(args, steps)
-    update_runtime_repos(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)

@@ -1,7 +1,8 @@
 data/*
 !data/download_kitti_360.sh
 generated_configs/
-outputs/
+outputs/*
+!outputs/.gitkeep
 __pycache__/
 *.py[cod]
 .env

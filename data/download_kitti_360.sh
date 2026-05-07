@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_ROOT="${KITTI_360_DATA_ROOT:-"${SCRIPT_DIR}/KITTI-360"}"
 DOWNLOADS_DIR="${KITTI_360_DOWNLOADS_DIR:-"${DATA_ROOT}/_downloads"}"
+DEFAULT_DRIVE="${VBOGS_DRIVE:-2013_05_28_drive_0008_sync}"
+IMAGE_BASE_URL="https://s3.eu-central-1.amazonaws.com/avg-projects/KITTI-360/data_2d_raw"
 
 usage() {
   cat <<'USAGE'
@@ -17,26 +19,23 @@ Archives are normalized into this layout:
 Required environment variables:
   KITTI_CALIBRATION_LINK   URL for KITTI-360 calibration archive
   KITTI_POSES_LINK         URL for KITTI-360 poses archive
-  KITTI_IMAGES             URL(s) for KITTI-360 image archive(s)
 
 KITTI_CALIBRATION_LINK and KITTI_POSES_LINK may be omitted when the matching
 canonical folders already exist.
-KITTI_IMAGES may contain multiple URLs separated by spaces, commas, or newlines.
-KITTI_IMAGES may point to image archives directly or to the official
-download_2d_perspective.zip helper archive.
 
 Optional:
   KITTI_360_DATA_ROOT       Extraction root. Default: ./KITTI-360 beside this script
   KITTI_360_DOWNLOADS_DIR   Archive cache. Default: <KITTI_360_DATA_ROOT>/_downloads
-  KITTI_IMAGE_DRIVES        Drive names to keep when KITTI_IMAGES is the
-                            official download_2d_perspective.zip helper
+  VBOGS_DRIVE               Drive image archives to download when images are
+                            not already present. Default: 2013_05_28_drive_0008_sync
+  KITTI_IMAGES              URL(s) for KITTI-360 image archive(s), separated by
+                            spaces, commas, or newlines. Usually not needed.
   FORCE_DOWNLOAD=1          Re-download archives even when cached
   KEEP_ARCHIVES=0           Delete cached archives after extraction
 
 Example:
   export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
   export KITTI_POSES_LINK='https://.../data_poses.zip'
-  export KITTI_IMAGES='https://.../data_2d_raw_2013_05_28_drive_0008_sync.zip'
   ./download_kitti_360.sh
 USAGE
 }
@@ -184,13 +183,13 @@ run_image_download_script_from() {
   require_command unzip
 
   script_dir="$(dirname "${script_path}")"
-  if [[ -n "${KITTI_IMAGE_DRIVES:-}" ]]; then
+  if [[ -n "${image_drive:-}" ]]; then
     replacement="train_list=("
     while IFS= read -r drive; do
       [[ -n "${drive}" ]] || continue
       replacement+=$'\n'
       replacement+="            \"${drive}\""
-    done < <(printf '%s\n' "${KITTI_IMAGE_DRIVES}" | tr ',\n' '  ' | xargs -n 1 printf '%s\n')
+    done < <(printf '%s\n' "${image_drive}" | tr ',\n' '  ' | xargs -n 1 printf '%s\n')
     replacement+=$'\n)'
 
     filtered_script="${script_dir}/download_2d_perspective.filtered.sh"
@@ -210,7 +209,7 @@ run_image_download_script_from() {
     ' "${script_path}" > "${filtered_script}"
     chmod +x "${filtered_script}"
     script_path="${filtered_script}"
-    echo "Limiting nested perspective download to: ${KITTI_IMAGE_DRIVES}"
+    echo "Limiting nested perspective download to: ${image_drive}"
   fi
 
   echo "Running nested KITTI-360 perspective downloader: ${script_path}"
@@ -292,6 +291,13 @@ split_urls() {
   tr ',\n' '  ' | xargs -n 1 printf '%s\n'
 }
 
+default_image_urls() {
+  local drive="$1"
+
+  printf '%s/%s_image_00.zip\n' "${IMAGE_BASE_URL}" "${drive}"
+  printf '%s/%s_image_01.zip\n' "${IMAGE_BASE_URL}" "${drive}"
+}
+
 process_url() {
   local label="$1"
   local url="$2"
@@ -325,11 +331,11 @@ fi
 calibration_url="$(get_env_first KITTI_CALIBRATION_LINK || true)"
 poses_url="$(get_env_first KITTI_POSES_LINK || true)"
 images_urls="$(get_env_first KITTI_IMAGES || true)"
+image_drive="${DEFAULT_DRIVE}"
 
 missing=()
 [[ -n "${calibration_url}" || -d "${DATA_ROOT}/calibration" ]] || missing+=("KITTI_CALIBRATION_LINK")
 [[ -n "${poses_url}" || -d "${DATA_ROOT}/data_poses" ]] || missing+=("KITTI_POSES_LINK")
-[[ -n "${images_urls}" ]] || missing+=("KITTI_IMAGES")
 
 if (( ${#missing[@]} > 0 )); then
   usage >&2
@@ -342,6 +348,7 @@ mkdir -p "${DATA_ROOT}" "${DOWNLOADS_DIR}"
 echo "KITTI-360 data root : ${DATA_ROOT}"
 echo "Archive cache       : ${DOWNLOADS_DIR}"
 echo "Canonical layout    : calibration/, data_poses/, images/"
+echo "Image drive         : ${image_drive}"
 
 if [[ -n "${calibration_url}" ]]; then
   process_url "calibration" "${calibration_url}"
@@ -355,10 +362,21 @@ else
   echo "Using existing poses: ${DATA_ROOT}/data_poses"
 fi
 
-while IFS= read -r image_url; do
-  [[ -n "${image_url}" ]] || continue
-  process_url "images" "${image_url}"
-done < <(printf '%s\n' "${images_urls}" | split_urls)
+if [[ -z "${images_urls}" ]]; then
+  if [[ -d "${DATA_ROOT}/images/${image_drive}" ]]; then
+    echo "Using existing images: ${DATA_ROOT}/images/${image_drive}"
+  else
+    echo "KITTI_IMAGES not set; using default perspective image archives for ${image_drive}"
+    images_urls="$(default_image_urls "${image_drive}")"
+  fi
+fi
+
+if [[ -n "${images_urls}" ]]; then
+  while IFS= read -r image_url; do
+    [[ -n "${image_url}" ]] || continue
+    process_url "images" "${image_url}"
+  done < <(printf '%s\n' "${images_urls}" | split_urls)
+fi
 
 echo
 echo "KITTI-360 downloads extracted into ${DATA_ROOT}"
