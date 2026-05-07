@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vbogs.io import save_json
+from vbogs.data_layout import resolve_kitti360_path
 
 DEFAULT_DRIVE = "2013_05_28_drive_0008_sync"
 PLY_DTYPE = np.dtype(
@@ -34,6 +36,19 @@ PLY_DTYPE = np.dtype(
         ("cell_size", "<f4"),
     ]
 )
+TRAJECTORY_VERTEX_DTYPE = np.dtype(
+    [
+        ("x", "<f4"),
+        ("y", "<f4"),
+        ("z", "<f4"),
+        ("red", "u1"),
+        ("green", "u1"),
+        ("blue", "u1"),
+        ("frame_id", "<i4"),
+        ("trajectory_index", "<i4"),
+    ]
+)
+TRAJECTORY_EDGE_DTYPE = np.dtype([("vertex1", "<i4"), ("vertex2", "<i4")])
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +118,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only write the combined all-levels PLY.",
     )
+    parser.add_argument(
+        "--selection-metadata",
+        type=Path,
+        default=None,
+        help=(
+            "Prepared COLMAP metadata with `selected_frames`. Defaults to "
+            "`/data/COLMAP/<drive>/metadata.json`."
+        ),
+    )
+    parser.add_argument(
+        "--poses-root",
+        type=Path,
+        default=None,
+        help="Root containing KITTI-360 pose text files. Defaults to auto-detecting the repo layout.",
+    )
+    parser.add_argument(
+        "--no-trajectory",
+        action="store_true",
+        help="Skip writing `camera_trajectory.ply`.",
+    )
     return parser.parse_args()
 
 
@@ -136,6 +171,12 @@ def resolve_output_dir(drive: str, output_dir: Path | None) -> Path:
     if output_dir is not None:
         return output_dir.resolve()
     return (REPO_ROOT / "outputs" / "uncertainty_maps" / drive).resolve()
+
+
+def resolve_selection_metadata(drive: str, selection_metadata: Path | None) -> Path:
+    if selection_metadata is not None:
+        return selection_metadata.resolve()
+    return Path("/data/COLMAP") / drive / "metadata.json"
 
 
 def _scalar_item(value: Any, name: str) -> float:
@@ -288,6 +329,119 @@ def write_binary_ply(path: Path, rows: np.ndarray) -> None:
         rows.astype(PLY_DTYPE, copy=False).tofile(handle)
 
 
+def load_selected_frames(path: Path) -> list[int]:
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    selected = metadata.get("selected_frames")
+    if not isinstance(selected, list) or not selected:
+        raise ValueError(f"`selected_frames` is missing or empty in {path}")
+    return [int(frame_id) for frame_id in selected]
+
+
+def parse_cam0_to_world(path: Path) -> dict[int, np.ndarray]:
+    poses: dict[int, np.ndarray] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            tokens = line.strip().split()
+            if not tokens:
+                continue
+            frame_id = int(tokens[0])
+            values = np.asarray([float(token) for token in tokens[1:]], dtype=np.float64)
+            if values.size != 16:
+                raise ValueError(
+                    f"Expected 16 matrix values for frame {frame_id}, found {values.size}"
+                )
+            poses[frame_id] = values.reshape(4, 4)
+    if not poses:
+        raise ValueError(f"No poses found in {path}")
+    return poses
+
+
+def build_trajectory_rows(
+    frame_ids: list[int],
+    poses_by_frame: dict[int, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    missing = [frame_id for frame_id in frame_ids if frame_id not in poses_by_frame]
+    if missing:
+        preview = ", ".join(str(frame_id) for frame_id in missing[:5])
+        raise KeyError(f"Missing poses for selected frame ids: {preview}")
+
+    centers = np.stack([poses_by_frame[frame_id][:3, 3] for frame_id in frame_ids], axis=0)
+    vertex_rows = np.empty(len(frame_ids), dtype=TRAJECTORY_VERTEX_DTYPE)
+    vertex_rows["x"] = centers[:, 0].astype(np.float32)
+    vertex_rows["y"] = centers[:, 1].astype(np.float32)
+    vertex_rows["z"] = centers[:, 2].astype(np.float32)
+    vertex_rows["red"] = np.uint8(255)
+    vertex_rows["green"] = np.uint8(255)
+    vertex_rows["blue"] = np.uint8(0)
+    vertex_rows["frame_id"] = np.asarray(frame_ids, dtype=np.int32)
+    vertex_rows["trajectory_index"] = np.arange(len(frame_ids), dtype=np.int32)
+
+    edge_count = max(len(frame_ids) - 1, 0)
+    edge_rows = np.empty(edge_count, dtype=TRAJECTORY_EDGE_DTYPE)
+    if edge_count:
+        edge_rows["vertex1"] = np.arange(edge_count, dtype=np.int32)
+        edge_rows["vertex2"] = np.arange(1, edge_count + 1, dtype=np.int32)
+    return vertex_rows, edge_rows
+
+
+def trajectory_ply_header(vertex_count: int, edge_count: int) -> bytes:
+    header = "\n".join(
+        [
+            "ply",
+            "format binary_little_endian 1.0",
+            f"element vertex {vertex_count}",
+            "property float x",
+            "property float y",
+            "property float z",
+            "property uchar red",
+            "property uchar green",
+            "property uchar blue",
+            "property int frame_id",
+            "property int trajectory_index",
+            f"element edge {edge_count}",
+            "property int vertex1",
+            "property int vertex2",
+            "end_header",
+            "",
+        ]
+    )
+    return header.encode("ascii")
+
+
+def write_trajectory_ply(path: Path, vertex_rows: np.ndarray, edge_rows: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle:
+        handle.write(trajectory_ply_header(int(vertex_rows.shape[0]), int(edge_rows.shape[0])))
+        vertex_rows.astype(TRAJECTORY_VERTEX_DTYPE, copy=False).tofile(handle)
+        edge_rows.astype(TRAJECTORY_EDGE_DTYPE, copy=False).tofile(handle)
+
+
+def export_camera_trajectory(
+    *,
+    drive: str,
+    output_dir: Path,
+    selection_metadata: Path,
+    poses_root: Path | None,
+) -> dict[str, Any]:
+    resolved_poses_root = resolve_kitti360_path(poses_root, kind="poses")
+    poses_path = resolved_poses_root / drive / "cam0_to_world.txt"
+    frame_ids = load_selected_frames(selection_metadata)
+    poses_by_frame = parse_cam0_to_world(poses_path)
+    vertex_rows, edge_rows = build_trajectory_rows(frame_ids, poses_by_frame)
+
+    trajectory_path = output_dir / "camera_trajectory.ply"
+    write_trajectory_ply(trajectory_path, vertex_rows, edge_rows)
+    return {
+        "trajectory_path": str(trajectory_path),
+        "selection_metadata": str(selection_metadata),
+        "poses_path": str(poses_path),
+        "camera_count": int(vertex_rows.shape[0]),
+        "edge_count": int(edge_rows.shape[0]),
+        "first_frame_id": int(frame_ids[0]),
+        "last_frame_id": int(frame_ids[-1]),
+    }
+
+
 def summarize(values: np.ndarray) -> dict[str, float]:
     finite = values[np.isfinite(values)]
     if finite.size == 0:
@@ -313,6 +467,7 @@ def export_uncertainty_map(
     percentile_high: float,
     observed_only: bool,
     split_levels: bool,
+    trajectory_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pts_path = bucket_root / "pts_by_anchor.npz"
     if not pts_path.exists():
@@ -414,6 +569,7 @@ def export_uncertainty_map(
         "split_levels": bool(split_levels),
         "levels": levels,
         "level_counts": level_counts,
+        "trajectory": trajectory_metadata,
         "voxel_size": voxel_size,
         "fork": fork,
         "color_scale": {
@@ -437,6 +593,24 @@ def main() -> None:
     uncertainty_path = resolve_uncertainty_path(bucket_root, args.uncertainty)
     posterior_path = resolve_posterior_path(bucket_root, args.posterior)
     output_dir = resolve_output_dir(args.drive, args.output_dir)
+    selection_metadata = resolve_selection_metadata(args.drive, args.selection_metadata)
+
+    trajectory_metadata = None
+    if not args.no_trajectory:
+        if selection_metadata.exists():
+            print(f"Loading selected camera frames: {selection_metadata}")
+            trajectory_metadata = export_camera_trajectory(
+                drive=args.drive,
+                output_dir=output_dir,
+                selection_metadata=selection_metadata,
+                poses_root=args.poses_root,
+            )
+            print(f"Wrote {trajectory_metadata['trajectory_path']}")
+        else:
+            print(
+                "Skipping camera trajectory: "
+                f"selection metadata not found at {selection_metadata}"
+            )
 
     print(f"Loading anchors: {bucket_root / 'pts_by_anchor.npz'}")
     print(f"Loading uncertainty: {uncertainty_path}")
@@ -452,6 +626,7 @@ def main() -> None:
         percentile_high=args.percentile_high,
         observed_only=args.observed_only,
         split_levels=not args.no_split_levels,
+        trajectory_metadata=trajectory_metadata,
     )
 
     print(f"Wrote {metadata['all_path']}")

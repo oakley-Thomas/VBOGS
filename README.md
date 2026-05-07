@@ -112,7 +112,7 @@ python scripts/run_drive_pipeline.py \
   --frame-step 20 \
   --max-frames 30 \
   --resolution 4 \
-  --iterations 1000 \
+  --iterations 7000 \
   --max-points-per-frame 50000 \
   --max-observed-anchors 50 \
   --render-max-views 2 \

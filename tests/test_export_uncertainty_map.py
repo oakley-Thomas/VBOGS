@@ -2,7 +2,10 @@ import numpy as np
 
 from scripts.export_uncertainty_map import (
     PLY_DTYPE,
+    TRAJECTORY_EDGE_DTYPE,
+    TRAJECTORY_VERTEX_DTYPE,
     choose_color_scale,
+    export_camera_trajectory,
     export_uncertainty_map,
     uncertainty_to_rgb,
 )
@@ -15,6 +18,19 @@ def read_binary_ply(path):
     header = data[:header_end].decode("ascii")
     rows = np.frombuffer(data[header_end:], dtype=PLY_DTYPE)
     return header, rows
+
+
+def read_trajectory_ply(path):
+    data = path.read_bytes()
+    marker = b"end_header\n"
+    header_end = data.index(marker) + len(marker)
+    header = data[:header_end].decode("ascii")
+    payload = data[header_end:]
+    vertex_count = 3
+    vertex_bytes = vertex_count * TRAJECTORY_VERTEX_DTYPE.itemsize
+    vertices = np.frombuffer(payload[:vertex_bytes], dtype=TRAJECTORY_VERTEX_DTYPE)
+    edges = np.frombuffer(payload[vertex_bytes:], dtype=TRAJECTORY_EDGE_DTYPE)
+    return header, vertices, edges
 
 
 def test_uncertainty_to_rgb_maps_low_blue_and_high_red():
@@ -140,3 +156,51 @@ def test_export_uncertainty_map_writes_all_and_lod_plys(tmp_path):
     assert lod_01_rows.shape == (2,)
     assert lod_01_rows["level"].tolist() == [1, 1]
     assert lod_01_rows["anchor_id"].tolist() == [1, 2]
+
+
+def test_export_camera_trajectory_writes_vertices_and_edges(tmp_path):
+    output_dir = tmp_path / "viz"
+    metadata_path = tmp_path / "metadata.json"
+    poses_root = tmp_path / "poses"
+    drive = "drive_sync"
+    drive_poses = poses_root / drive
+    drive_poses.mkdir(parents=True)
+
+    metadata_path.write_text('{"selected_frames": [10, 20, 30]}', encoding="utf-8")
+    identity = np.eye(4, dtype=np.float64)
+    pose_lines = []
+    for frame_id, center in (
+        (10, [1.0, 2.0, 3.0]),
+        (20, [4.0, 5.0, 6.0]),
+        (30, [7.0, 8.0, 9.0]),
+    ):
+        pose = identity.copy()
+        pose[:3, 3] = np.asarray(center, dtype=np.float64)
+        values = " ".join(f"{value:.6f}" for value in pose.reshape(-1))
+        pose_lines.append(f"{frame_id} {values}")
+    (drive_poses / "cam0_to_world.txt").write_text("\n".join(pose_lines) + "\n", encoding="utf-8")
+
+    metadata = export_camera_trajectory(
+        drive=drive,
+        output_dir=output_dir,
+        selection_metadata=metadata_path,
+        poses_root=poses_root,
+    )
+
+    trajectory_path = output_dir / "camera_trajectory.ply"
+    assert metadata["trajectory_path"] == str(trajectory_path)
+    assert metadata["camera_count"] == 3
+    assert metadata["edge_count"] == 2
+
+    header, vertices, edges = read_trajectory_ply(trajectory_path)
+    assert "element vertex 3" in header
+    assert "element edge 2" in header
+    assert "property int frame_id" in header
+    assert vertices["frame_id"].tolist() == [10, 20, 30]
+    assert vertices["trajectory_index"].tolist() == [0, 1, 2]
+    assert vertices["x"].tolist() == [1.0, 4.0, 7.0]
+    assert vertices["red"].tolist() == [255, 255, 255]
+    assert vertices["green"].tolist() == [255, 255, 255]
+    assert vertices["blue"].tolist() == [0, 0, 0]
+    assert edges["vertex1"].tolist() == [0, 1]
+    assert edges["vertex2"].tolist() == [1, 2]

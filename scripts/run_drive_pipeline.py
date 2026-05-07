@@ -105,6 +105,7 @@ CONFIG_KEY_MAP = {
         "percentile_high": "map_viz_percentile_high",
         "observed_only": "map_viz_observed_only",
         "no_split_levels": "map_viz_no_split_levels",
+        "no_trajectory": "map_viz_no_trajectory",
     },
     "render": {
         "split": "render_split",
@@ -402,6 +403,11 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         action="store_true",
         help="Only write the combined all-levels map-scale PLY.",
     )
+    map_viz_group.add_argument(
+        "--map-viz-no-trajectory",
+        action="store_true",
+        help="Skip the camera trajectory PLY in the map-scale export stage.",
+    )
 
     render_group = parser.add_argument_group("uncertainty rendering")
     render_group.add_argument(
@@ -607,15 +613,19 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         bucket_root,
         "--posterior",
         f"{bucket_root}/{posterior_name}",
+        "--selection-metadata",
+        selection_metadata,
         "--percentile-low",
         str(args.map_viz_percentile_low),
         "--percentile-high",
         str(args.map_viz_percentile_high),
+        *maybe_option("--poses-root", args.poses_root),
         *maybe_option("--output-dir", args.map_viz_output_dir),
         *maybe_option("--vmin", args.map_viz_vmin),
         *maybe_option("--vmax", args.map_viz_vmax),
         *(("--observed-only",) if args.map_viz_observed_only else ()),
         *(("--no-split-levels",) if args.map_viz_no_split_levels else ()),
+        *(("--no-trajectory",) if args.map_viz_no_trajectory else ()),
     )
 
     render_cmd = (
