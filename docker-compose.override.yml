@@ -4,12 +4,18 @@ services:
       - type: bind
         source: .
         target: /workspace/VBOGS
+      - type: bind
+        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+        target: /workspace/VBOGS/outputs
 
   vbogs-jax:
     volumes:
       - type: bind
         source: .
         target: /workspace/VBOGS
+      - type: bind
+        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+        target: /workspace/VBOGS/outputs
 
   vbogs-pipeline:
     volumes:
