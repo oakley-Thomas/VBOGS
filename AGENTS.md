@@ -72,6 +72,7 @@ tests/            # integration tests against small fixtures as they are added
 
 - **Framework boundary is the filesystem.** PyTorch scripts read/write `.npz`; JAX scripts read/write `.npz`. No in-process IPC, no cross-framework tensor sharing.
 - **Coordinate frames matter.** Stage 3 buckets points in **world** coords (to match Octree-AnyGS's grid) but fits VBGS in **normalized** coords. Mixing these silently produces nonsense grid buckets. Make the frame explicit in variable names (`points_world` vs `points_norm`).
+- **Do not edit the top-level README.** `README.md` is maintained by the human project owner. If documentation changes seem necessary, update repo-owned docs such as `PLAN.md` or propose the README change in chat instead of modifying the file.
 - **Don't modify the submodules to add functionality.** Example: for `render_scalar`, write a sibling function in `vbogs/render.py` that imports and reuses `generate_gaussians` from Octree-AnyGS; do NOT edit `Octree-AnyGS/gaussian_renderer/render.py`.
 - **KITTI-360 source data lives under `data/KITTI-360/`.** In Portainer deployments this path is expected to be backed by a dedicated external volume mounted at `/workspace/VBOGS/data/KITTI-360`.
 - **Server rebuild workflow is repo-owned.** Prefer `bash scripts/update_server_stack.sh` on the GPU server after pulling changes instead of ad hoc container edits.
