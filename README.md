@@ -114,7 +114,6 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --max-observed-anchors 50 \
   --render-max-views 2 \
   --use-service-labels
 ```

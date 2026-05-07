@@ -31,6 +31,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from vbogs.fit_planning import (
+    build_bucket_plan,
+    compute_bucket_group_size,
+    parse_batch_buckets,
+)
 from vbogs.io import save_json, unpack_group_slice
 
 
@@ -125,10 +130,27 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-auto-extend-buckets",
+        action="store_true",
+        help=(
+            "Disable automatic dense-tail bucket extension. Counts above the "
+            "largest configured bucket will use exact singleton-style buckets."
+        ),
+    )
+    parser.add_argument(
         "--vmap-group-size",
         type=int,
         default=64,
         help="Maximum anchors fit together in one batched group.",
+    )
+    parser.add_argument(
+        "--max-padded-points-per-group",
+        type=int,
+        default=0,
+        help=(
+            "Maximum padded anchor-points per batched fit call. Defaults to "
+            "`--vmap-group-size * --batch-size`, preserving the previous memory target."
+        ),
     )
     parser.add_argument(
         "--k-growth-min-points",
@@ -149,7 +171,7 @@ def parse_args() -> argparse.Namespace:
         "--max-observed-anchors",
         type=int,
         default=0,
-        help="Optional cap for smoke tests; 0 processes all observed anchors.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--vbgs-root",
@@ -178,12 +200,7 @@ def resolve_output_root(args: argparse.Namespace, bucket_root: Path) -> Path:
     return bucket_root
 
 
-def resolve_output_paths(output_root: Path, max_observed_anchors: int) -> Tuple[Path, Path]:
-    if max_observed_anchors > 0:
-        return (
-            output_root / "anchor_posterior.smoke.npz",
-            output_root / "fit_metadata.smoke.json",
-        )
+def resolve_output_paths(output_root: Path) -> Tuple[Path, Path]:
     return (
         output_root / "anchor_posterior.npz",
         output_root / "fit_metadata.json",
@@ -213,24 +230,6 @@ def select_device(device_index: int) -> str:
 def load_npz(path: Path) -> Dict[str, np.ndarray]:
     with np.load(path) as data:
         return {key: data[key] for key in data.files}
-
-
-def parse_batch_buckets(raw: str, batch_size: int) -> Tuple[int, ...]:
-    buckets = sorted({int(item.strip()) for item in raw.split(",") if item.strip()})
-    if not buckets:
-        raise ValueError("--batch-buckets must contain at least one positive integer")
-    if any(bucket <= 0 for bucket in buckets):
-        raise ValueError("--batch-buckets values must be positive")
-    if buckets[-1] < batch_size:
-        buckets.append(batch_size)
-    return tuple(buckets)
-
-
-def bucket_for_count(count: int, buckets: Tuple[int, ...]) -> int:
-    for bucket in buckets:
-        if count <= bucket:
-            return bucket
-    return count
 
 
 def compute_mean_elbo(model, points_norm: np.ndarray, batch_size: int, compute_elbo_delta) -> float:
@@ -678,7 +677,7 @@ def main() -> None:
 
     points_norm_path = (args.points_norm or (bucket_root / "points_norm.npz")).resolve()
     pts_by_anchor_path = (args.pts_by_anchor or (bucket_root / "pts_by_anchor.npz")).resolve()
-    posterior_path, metadata_path = resolve_output_paths(output_root, args.max_observed_anchors)
+    posterior_path, metadata_path = resolve_output_paths(output_root)
 
     add_vbgs_to_path(args.vbgs_root)
     from vbgs.model.train import compute_elbo_delta, fit_gmm_step
@@ -691,9 +690,18 @@ def main() -> None:
     from model_volume import get_volume_delta_mixture
 
     device_name = select_device(args.device)
-    batch_buckets = parse_batch_buckets(args.batch_buckets, args.batch_size)
+    configured_batch_buckets = parse_batch_buckets(args.batch_buckets, args.batch_size)
     if args.vmap_group_size <= 0:
         raise ValueError("--vmap-group-size must be positive")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
+    max_padded_points_per_group = (
+        int(args.max_padded_points_per_group)
+        if args.max_padded_points_per_group > 0
+        else int(args.vmap_group_size * args.batch_size)
+    )
+    if max_padded_points_per_group <= 0:
+        raise ValueError("--max-padded-points-per-group must be positive")
 
     points_norm_npz = load_npz(points_norm_path)
     pts_by_anchor_npz = load_npz(pts_by_anchor_path)
@@ -708,7 +716,10 @@ def main() -> None:
     is_observed = point_counts >= args.min_points_per_anchor
     observed_anchor_ids = np.nonzero(is_observed)[0].astype(np.int32)
     if args.max_observed_anchors > 0:
-        observed_anchor_ids = observed_anchor_ids[: args.max_observed_anchors]
+        print(
+            "Ignoring deprecated --max-observed-anchors; "
+            "fit_anchors.py now processes all observed anchors."
+        )
 
     print(f"Loaded {points_norm.shape[0]:,} normalized points")
     total_observed = int(is_observed.sum())
@@ -716,9 +727,6 @@ def main() -> None:
         f"Loaded {n_anchors:,} anchors; {total_observed:,} meet "
         f"MIN_POINTS_PER_ANCHOR={args.min_points_per_anchor}"
     )
-    if args.max_observed_anchors > 0:
-        print(f"Processing the first {observed_anchor_ids.shape[0]:,} observed anchors for a smoke test")
-
     m_obs = observed_anchor_ids.shape[0]
     final_k = np.zeros((m_obs,), dtype=np.int16)
     final_elbo = np.full((m_obs,), np.nan, dtype=np.float32)
@@ -739,6 +747,33 @@ def main() -> None:
     k_growth_attempted = np.zeros((m_obs,), dtype=bool)
 
     observed_point_counts = point_counts[observed_anchor_ids]
+    bucket_plan = build_bucket_plan(
+        observed_point_counts,
+        configured_batch_buckets,
+        auto_extend_buckets=not args.no_auto_extend_buckets,
+        vmap_group_size=args.vmap_group_size,
+        max_padded_points_per_group=max_padded_points_per_group,
+    )
+    if args.fit_mode == "batched":
+        print(
+            "Batched fit plan: "
+            f"{len(bucket_plan.bucket_sizes)} active bucket(s), "
+            f"{bucket_plan.estimated_fit_calls:,} estimated fit call(s), "
+            f"{bucket_plan.exact_overflow_bucket_count} exact overflow bucket(s), "
+            f"max_padded_points_per_group={max_padded_points_per_group:,}"
+        )
+        preview_count = min(8, len(bucket_plan.bucket_sizes))
+        if preview_count:
+            preview = ", ".join(
+                f"{bucket}:{anchors}@{group}"
+                for bucket, anchors, group in zip(
+                    bucket_plan.bucket_sizes[:preview_count],
+                    bucket_plan.anchors_per_bucket[:preview_count],
+                    bucket_plan.group_caps[:preview_count],
+                )
+            )
+            suffix = " ..." if len(bucket_plan.bucket_sizes) > preview_count else ""
+            print(f"Bucket plan preview (bucket:anchors@group_cap): {preview}{suffix}")
     fit_start = time.time()
 
     if args.fit_mode == "loop":
@@ -815,22 +850,25 @@ def main() -> None:
                 )
     else:
         obs_rows = np.arange(m_obs, dtype=np.int64)
-        count_to_bucket = np.array(
-            [bucket_for_count(int(count), batch_buckets) for count in observed_point_counts],
-            dtype=np.int32,
-        )
+        count_to_bucket = bucket_plan.count_to_bucket
         fit_batch_size[:] = count_to_bucket
         processed = 0
 
         cur_k = int(args.k_init)
         active_rows = obs_rows.copy()
         while active_rows.shape[0] > 0:
+            phase_total = int(active_rows.shape[0])
+            phase_processed = 0
+            phase_start = time.time()
+            phase_next_log = max(args.log_every, 1)
+            phase_name = "initial" if cur_k == args.k_init else "growth"
             unique_buckets = np.unique(count_to_bucket[active_rows])
             for bucket_size in unique_buckets.tolist():
                 bucket_rows = active_rows[count_to_bucket[active_rows] == bucket_size]
-                bucket_group_size = min(
-                    args.vmap_group_size,
-                    max(1, (args.vmap_group_size * args.batch_size) // max(int(bucket_size), 1)),
+                bucket_group_size = compute_bucket_group_size(
+                    bucket_size=int(bucket_size),
+                    vmap_group_size=args.vmap_group_size,
+                    max_padded_points_per_group=max_padded_points_per_group,
                 )
                 for start in range(0, bucket_rows.shape[0], bucket_group_size):
                     rows = bucket_rows[start : start + bucket_group_size]
@@ -899,13 +937,18 @@ def main() -> None:
                             if cur_k == args.k_max:
                                 under_modeled[accepted_rows] = True
 
-                    if processed and (processed % max(args.log_every, 1) == 0 or processed == m_obs):
-                        elapsed = time.time() - fit_start
-                        rate = processed / max(elapsed, 1e-6)
+                    phase_processed += int(rows.shape[0])
+                    should_log = phase_processed >= phase_next_log or phase_processed == phase_total
+                    if should_log:
+                        while phase_next_log <= phase_processed:
+                            phase_next_log += max(args.log_every, 1)
+                        phase_elapsed = time.time() - phase_start
+                        phase_rate = phase_processed / max(phase_elapsed, 1e-6)
                         print(
-                            f"[{processed:>6}/{m_obs}] mode=batched K={cur_k:>2} "
+                            f"[{phase_processed:>6}/{phase_total}] phase={phase_name} "
+                            f"completed={processed:>6}/{m_obs} mode=batched K={cur_k:>2} "
                             f"bucket={int(bucket_size):>6} group={rows.shape[0]:>4} "
-                            f"rate={rate: .2f} anchors/s"
+                            f"phase_rate={phase_rate: .2f} anchors/s"
                         )
 
             next_k = min(args.k_max, cur_k * args.k_growth_factor)
@@ -972,8 +1015,17 @@ def main() -> None:
         "k_growth_factor": args.k_growth_factor,
         "k_growth_min_points": args.k_growth_min_points,
         "batch_size": args.batch_size,
-        "batch_buckets": list(batch_buckets),
+        "batch_buckets": list(configured_batch_buckets),
+        "effective_batch_buckets": list(bucket_plan.effective_buckets),
+        "auto_extend_buckets": not args.no_auto_extend_buckets,
         "vmap_group_size": args.vmap_group_size,
+        "max_padded_points_per_group": max_padded_points_per_group,
+        "active_bucket_sizes": list(bucket_plan.bucket_sizes),
+        "anchors_per_bucket": list(bucket_plan.anchors_per_bucket),
+        "group_cap_per_bucket": list(bucket_plan.group_caps),
+        "estimated_batched_fit_calls": int(bucket_plan.estimated_fit_calls),
+        "exact_overflow_bucket_count": int(bucket_plan.exact_overflow_bucket_count),
+        "exact_overflow_anchor_count": int(bucket_plan.exact_overflow_anchor_count),
         "fit_mode": args.fit_mode,
         "min_points_per_anchor": args.min_points_per_anchor,
         "elbo_improvement_tol": args.elbo_improvement_tol,
@@ -985,7 +1037,7 @@ def main() -> None:
         "fit_batch_size_p50": float(np.percentile(fit_batch_size, 50)) if m_obs else 0.0,
         "fit_batch_size_p90": float(np.percentile(fit_batch_size, 90)) if m_obs else 0.0,
         "fit_batch_size_max": int(fit_batch_size.max()) if m_obs else 0,
-        "max_observed_anchors": args.max_observed_anchors,
+        "deprecated_max_observed_anchors_arg": args.max_observed_anchors,
     }
     save_json(metadata_path, metadata)
 

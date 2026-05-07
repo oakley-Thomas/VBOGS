@@ -49,8 +49,6 @@ fit:
   batch_size: 5000
   vmap_group_size: 64
   log_every: 100
-  # 0 means full fit. Use 5 for a quick smoke run.
-  max_observed_anchors: 0
 
 inspect:
   top_k: 5

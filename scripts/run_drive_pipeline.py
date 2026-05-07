@@ -83,9 +83,11 @@ CONFIG_KEY_MAP = {
         "jax_device": "jax_device",
         "fit_mode": "fit_mode",
         "batch_size": "batch_size",
+        "batch_buckets": "batch_buckets",
+        "no_auto_extend_buckets": "no_auto_extend_buckets",
         "vmap_group_size": "vmap_group_size",
+        "max_padded_points_per_group": "max_padded_points_per_group",
         "log_every": "log_every",
-        "max_observed_anchors": "max_observed_anchors",
     },
     "inspect": {
         "top_k": "inspect_top_k",
@@ -322,15 +324,32 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default="batched",
     )
     fit_group.add_argument("--batch-size", type=int, default=5000)
+    fit_group.add_argument(
+        "--batch-buckets",
+        default="64,128,256,512,1024,2048,4096,5000",
+        help="Comma-separated point-count buckets forwarded to fit_anchors.py.",
+    )
+    fit_group.add_argument(
+        "--no-auto-extend-buckets",
+        action="store_true",
+        help="Disable automatic dense-tail bucket extension during VBGS fitting.",
+    )
     fit_group.add_argument("--vmap-group-size", type=int, default=64)
+    fit_group.add_argument(
+        "--max-padded-points-per-group",
+        type=int,
+        default=0,
+        help=(
+            "Maximum padded anchor-points per batched VBGS fit call. "
+            "Defaults to `--vmap-group-size * --batch-size`."
+        ),
+    )
     fit_group.add_argument("--log-every", type=int, default=100)
     fit_group.add_argument(
         "--max-observed-anchors",
         type=int,
         default=0,
-        help=(
-            "Optional smoke-test cap for M4b. Leave at 0 for the full fit."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     inspect_group = parser.add_argument_group("anchor fit inspection")
@@ -561,19 +580,18 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.fit_mode,
         "--batch-size",
         str(args.batch_size),
+        "--batch-buckets",
+        args.batch_buckets,
         "--vmap-group-size",
         str(args.vmap_group_size),
+        *(("--no-auto-extend-buckets",) if args.no_auto_extend_buckets else ()),
+        "--max-padded-points-per-group",
+        str(args.max_padded_points_per_group),
         "--log-every",
         str(args.log_every),
-        "--max-observed-anchors",
-        str(args.max_observed_anchors),
     )
 
-    posterior_name = (
-        "anchor_posterior.smoke.npz"
-        if args.max_observed_anchors > 0
-        else "anchor_posterior.npz"
-    )
+    posterior_name = "anchor_posterior.npz"
     inspect_cmd = (
         "python",
         "scripts/inspect_anchor_fits.py",
