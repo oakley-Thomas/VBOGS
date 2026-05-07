@@ -202,6 +202,11 @@ def parse_args() -> argparse.Namespace:
         default=Path("Octree-AnyGS"),
         help="Path to the Octree-AnyGS submodule.",
     )
+    parser.add_argument(
+        "--skip-stack-check",
+        action="store_true",
+        help="Skip the Torch CUDA/gsplat preflight before launching training.",
+    )
     return parser.parse_args()
 
 
@@ -265,6 +270,26 @@ def main() -> None:
     train_script = octree_root / "train.py"
     if not train_script.exists():
         raise FileNotFoundError(f"Octree-AnyGS training script not found: {train_script}")
+
+    if not args.skip_stack_check:
+        check_script = Path(__file__).resolve().with_name("check_torch_stack.py")
+        device_index = 0
+        try:
+            parsed_gpu = int(args.gpu)
+        except ValueError:
+            parsed_gpu = -1
+        if parsed_gpu >= 0:
+            device_index = parsed_gpu
+        check_cmd = [
+            args.python,
+            str(check_script),
+            "--repo-root",
+            str(octree_root.parent),
+            "--device-index",
+            str(device_index),
+        ]
+        print("Checking Torch stack:", " ".join(check_cmd))
+        subprocess.run(check_cmd, cwd=str(octree_root.parent), check=True)
 
     cmd = [
         args.python,
