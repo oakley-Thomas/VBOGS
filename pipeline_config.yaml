@@ -6,7 +6,9 @@
 
 pipeline:
   drive: 2013_05_28_drive_0008_sync
-  git_ref: main
+  # Leave empty to run the source baked into the current images. Set this only
+  # when you explicitly want runtime containers to fetch and checkout a ref.
+  git_ref: ""
   start_at: prepare
   stop_after: inspect
   dry_run: false

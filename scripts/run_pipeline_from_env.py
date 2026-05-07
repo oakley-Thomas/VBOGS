@@ -23,8 +23,9 @@ def main() -> None:
     if drive:
         cmd.extend(["--drive", drive])
 
-    if "VBOGS_PIPELINE_GIT_REF" in os.environ:
-        cmd.extend(["--git-ref", os.environ.get("VBOGS_PIPELINE_GIT_REF", "")])
+    git_ref = os.environ.get("VBOGS_PIPELINE_GIT_REF") or os.environ.get("VBOGS_GIT_REF")
+    if git_ref:
+        cmd.extend(["--git-ref", git_ref])
 
     extra_args = os.environ.get("VBOGS_PIPELINE_ARGS", "")
     if extra_args:

@@ -161,8 +161,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_input_layout(args: argparse.Namespace) -> None:
-    args.raw_root = resolve_kitti360_path(args.raw_root, kind="raw")
-    args.poses_root = resolve_kitti360_path(args.poses_root, kind="poses")
+    args.raw_root = resolve_kitti360_path(args.raw_root, kind="raw", drive=args.drive)
+    args.poses_root = resolve_kitti360_path(args.poses_root, kind="poses", drive=args.drive)
     args.calibration_dir = resolve_kitti360_path(args.calibration_dir, kind="calibration")
 
 

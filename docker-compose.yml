@@ -22,6 +22,9 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
     volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
       - type: volume
         source: vbogs-data
         target: /workspace/VBOGS/data
@@ -65,6 +68,9 @@ services:
       JAX_PLATFORMS: cuda
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
       - type: volume
         source: vbogs-data
         target: /workspace/VBOGS/data
@@ -106,16 +112,25 @@ services:
       VBOGS_PIPELINE_GIT_REF: ${VBOGS_PIPELINE_GIT_REF:-}
     volumes:
       - type: bind
+        source: .
+        target: /workspace/VBOGS
+      - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
     command:
       - sh
       - -lc
       - |
-        if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
-          if [ -n "${VBOGS_PIPELINE_GIT_REF:-}" ]; then
+        set -eu
+        if [ "$${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
+          if [ -n "$${VBOGS_PIPELINE_GIT_REF:-}" ]; then
+            ref="$${VBOGS_PIPELINE_GIT_REF}"
             git fetch --tags origin
-            (git checkout "${VBOGS_PIPELINE_GIT_REF:-}" || git checkout -B "${VBOGS_PIPELINE_GIT_REF:-}" "origin/${VBOGS_PIPELINE_GIT_REF:-}")
+            if git rev-parse --verify --quiet "origin/$${ref}^{commit}" >/dev/null; then
+              git checkout -B "$${ref}" "origin/$${ref}"
+            else
+              git checkout "$${ref}"
+            fi
             git submodule update --init --recursive
           fi
           python scripts/run_pipeline_from_env.py

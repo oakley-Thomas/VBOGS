@@ -756,7 +756,7 @@ def git_update_script(git_ref: str) -> str:
     return (
         "set -e; "
         "git fetch --tags origin; "
-        f"(git checkout {quoted_ref} || git checkout -B {quoted_ref} origin/{quoted_ref}); "
+        f"(git checkout -B {quoted_ref} origin/{quoted_ref} || git checkout {quoted_ref}); "
         "git submodule update --init --recursive"
     )
 

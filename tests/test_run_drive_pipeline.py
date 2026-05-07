@@ -87,3 +87,19 @@ def test_pipeline_defaults_to_bounded_fit_when_config_disabled():
 
     assert args.max_points_per_anchor == 10000
     assert command[command.index("--max-points-per-anchor") + 1] == "10000"
+
+
+def test_empty_config_git_ref_disables_runtime_checkout(tmp_path):
+    config = tmp_path / "pipeline_config.yaml"
+    config.write_text(
+        """
+pipeline:
+  drive: test_drive
+  git_ref: ""
+""",
+        encoding="utf-8",
+    )
+
+    args = run_drive_pipeline.parse_args(["--config", str(config)])
+
+    assert args.git_ref == ""

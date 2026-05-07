@@ -12,6 +12,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
     volumes:
       - type: volume
@@ -33,7 +35,24 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
-    command: sleep infinity
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        if [ -n "$${VBOGS_GIT_URL:-}" ]; then
+          git remote set-url origin "$${VBOGS_GIT_URL}"
+        fi
+        ref="$${VBOGS_GIT_REF:-main}"
+        echo "Checking out VBOGS ref: $${ref}"
+        git fetch --tags origin
+        if git rev-parse --verify --quiet "origin/$${ref}^{commit}" >/dev/null; then
+          git checkout -B "$${ref}" "origin/$${ref}"
+        else
+          git checkout "$${ref}"
+        fi
+        git submodule update --init --recursive
+        sleep infinity
 
   vbogs-jax:
     image: ${VBOGS_JAX_IMAGE:-oakleyth/vbogs-jax:latest}
@@ -49,6 +68,8 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       JAX_PLATFORMS: cuda
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
       - type: volume
@@ -70,7 +91,24 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
-    command: sleep infinity
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        if [ -n "$${VBOGS_GIT_URL:-}" ]; then
+          git remote set-url origin "$${VBOGS_GIT_URL}"
+        fi
+        ref="$${VBOGS_GIT_REF:-main}"
+        echo "Checking out VBOGS ref: $${ref}"
+        git fetch --tags origin
+        if git rev-parse --verify --quiet "origin/$${ref}^{commit}" >/dev/null; then
+          git checkout -B "$${ref}" "origin/$${ref}"
+        else
+          git checkout "$${ref}"
+        fi
+        git submodule update --init --recursive
+        sleep infinity
 
   vbogs-pipeline:
     image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
@@ -80,6 +118,8 @@ services:
       - vbogs-jax
     environment:
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
       VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
@@ -92,12 +132,21 @@ services:
       - sh
       - -lc
       - |
-        if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
-          if [ -n "${VBOGS_PIPELINE_GIT_REF:-}" ]; then
-            git fetch --tags origin
-            (git checkout "${VBOGS_PIPELINE_GIT_REF:-}" || git checkout -B "${VBOGS_PIPELINE_GIT_REF:-}" "origin/${VBOGS_PIPELINE_GIT_REF:-}")
-            git submodule update --init --recursive
-          fi
+        set -eu
+        if [ -n "$${VBOGS_GIT_URL:-}" ]; then
+          git remote set-url origin "$${VBOGS_GIT_URL}"
+        fi
+        ref="$${VBOGS_PIPELINE_GIT_REF:-$${VBOGS_GIT_REF:-main}}"
+        echo "Checking out VBOGS ref: $${ref}"
+        git fetch --tags origin
+        if git rev-parse --verify --quiet "origin/$${ref}^{commit}" >/dev/null; then
+          git checkout -B "$${ref}" "origin/$${ref}"
+        else
+          git checkout "$${ref}"
+        fi
+        git submodule update --init --recursive
+        export VBOGS_PIPELINE_GIT_REF="$${ref}"
+        if [ "$${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
           python scripts/run_pipeline_from_env.py
         else
           echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."

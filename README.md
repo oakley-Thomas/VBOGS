@@ -3,14 +3,6 @@ Combining Octree-GS's scene scalability with Variational Bayes GS uncertainty fo
 
 ## Environment Notes
 
-VBOGS uses two separate conda environments because the PyTorch and JAX CUDA stacks
-conflict in practice:
-
-- `vbogs-torch` for Octree-AnyGS, stereo, point bucketing, and rendering
-- `vbogs-jax` for VBGS fitting and posterior computations
-
-The repo helper script is [scripts/envs.sh](/home/oakley/ub/advanced_robotics/VBOGS/scripts/envs.sh:1).
-
 Common commands:
 
 ```bash
@@ -406,12 +398,16 @@ VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
 file should be the only source of the drive id.
 
 For Portainer web-only deployments, the usual pattern is to commit a tuned
-`pipeline_config.yaml` on a branch, set `VBOGS_PIPELINE_GIT_REF` to that branch,
-and redeploy the stack.
+`pipeline_config.yaml` on a branch, set `VBOGS_GIT_REF` to that branch, and
+redeploy the stack.
 
 ### Local Docker Compose
 
 Use this when you have terminal access on the machine running Docker.
+`docker-compose.yml` bind-mounts the current checkout over `/workspace/VBOGS`,
+so local edits replace the copy of VBOGS that was baked into the images.
+Initialize the local submodules before starting the stack, because the bind
+mount also replaces the baked `Octree-AnyGS` and `vbgs` directories.
 
 Create the required external volumes once:
 
@@ -466,7 +462,7 @@ VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
+VBOGS_PIPELINE_GIT_REF= \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --dry-run" \
 docker compose up --no-build vbogs-pipeline
 ```
@@ -480,7 +476,7 @@ VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
+VBOGS_PIPELINE_GIT_REF= \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1" \
 docker compose up --no-build vbogs-pipeline
 ```
@@ -494,15 +490,14 @@ VBOGS_PIPELINE_IMAGE=local/vbogs-pipeline \
 VBOGS_DRIVE=2013_05_28_drive_0008_sync \
 VBOGS_PIPELINE_AUTORUN=1 \
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml \
-VBOGS_PIPELINE_GIT_REF=main \
+VBOGS_PIPELINE_GIT_REF= \
 VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0" \
 docker compose up --no-build vbogs-pipeline
 ```
 
-Set `VBOGS_PIPELINE_GIT_REF` to the VBOGS branch, tag, or commit that should be
-checked out inside the pipeline, Torch, and JAX containers immediately before
-the pipeline stages run. Leave it empty to use whatever ref was baked into the
-images.
+Local Compose runs the source from your bind-mounted checkout. Leave
+`VBOGS_PIPELINE_GIT_REF` empty for normal development so the containers do not
+try to change the branch of your working tree.
 
 Resume from a later stage by changing only the pipeline args:
 
@@ -555,7 +550,7 @@ GUI and you cannot run host terminal commands.
    you need to inspect the source tree in Portainer.
 
 3. In Portainer, create a stack from Git or the Web editor using
-   `docker-compose.yml`.
+   `docker-compose.portainer.yml`.
 
 4. In the stack environment variables, set image names. For a server-side build
    from the Git ref in the Dockerfiles, local names are fine:
@@ -575,7 +570,13 @@ private:
 VBOGS_TORCH_IMAGE=ghcr.io/oakley-thomas/vbogs-torch:latest
 VBOGS_JAX_IMAGE=ghcr.io/oakley-thomas/vbogs-jax:latest
 VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
+VBOGS_GIT_REF=main
 ```
+
+In Portainer, `VBOGS_GIT_REF` is also the runtime source ref. On container
+startup each service fetches from `VBOGS_GIT_URL`, checks out that branch, tag,
+or commit, and updates submodules. Set `VBOGS_GIT_URL` only when the branch
+lives in a fork.
 
 5. Deploy the stack with the pipeline idle:
 
@@ -583,7 +584,6 @@ VBOGS_PIPELINE_IMAGE=ghcr.io/oakley-thomas/vbogs-pipeline:latest
 VBOGS_PIPELINE_AUTORUN=0
 VBOGS_DRIVE=2013_05_28_drive_0008_sync
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=
 VBOGS_PIPELINE_ARGS=
 ```
 
@@ -597,8 +597,7 @@ VBOGS_PIPELINE_ARGS=
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=
-VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --dry-run
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --dry-run
 ```
 
 8. For a short smoke fit, redeploy with:
@@ -606,8 +605,7 @@ VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-ro
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=
-VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --max-observed-anchors 5 --log-every 1
 ```
 
 9. For the full implemented pipeline, redeploy with:
@@ -615,8 +613,7 @@ VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-ro
 ```text
 VBOGS_PIPELINE_AUTORUN=1
 VBOGS_PIPELINE_CONFIG=pipeline_config.yaml
-VBOGS_PIPELINE_GIT_REF=
-VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0
 ```
 
 10. Watch `vbogs-pipeline` logs in Portainer. The orchestrator will print each
@@ -628,24 +625,12 @@ VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-ro
 To resume from a later stage through the web UI:
 
 ```text
-VBOGS_PIPELINE_GIT_REF=
-VBOGS_PIPELINE_ARGS=--raw-root /workspace/VBOGS/data/KITTI-360/images --poses-root /workspace/VBOGS/data/KITTI-360/data_poses --calibration-dir /workspace/VBOGS/data/KITTI-360/calibration --gpu 0 --jax-device 0 --start-at bucket
+VBOGS_PIPELINE_ARGS=--gpu 0 --jax-device 0 --start-at bucket
 ```
 
-`VBOGS_GIT_REF` controls the Git ref cloned when images are built.
-`VBOGS_PIPELINE_GIT_REF` controls the Git ref checked out in the already-running
-pipeline, Torch, and JAX containers immediately before a pipeline run. For
-branch testing, set both to the same branch when building from source in
-Portainer; if you are using prebuilt images, set `VBOGS_PIPELINE_GIT_REF` to the
-branch you want the stack to pull before running.
-If the branch lives in a fork instead of the default repository, set
-`VBOGS_GIT_URL` to that fork when building the images so `origin/<branch>` points
-at the right remote.
-
-When you are deploying prebuilt images from Docker Hub, set
-`VBOGS_PIPELINE_GIT_REF=` empty to disable the runtime `git fetch` / checkout
-step. The default `pipeline_config.yaml` still carries `git_ref: main`, which
-is useful for source-built images but can fail in pull-only deployments.
+`VBOGS_PIPELINE_GIT_REF` remains available as an advanced override when the
+pipeline run should use a different ref than the rest of the stack. Most
+Portainer deployments should leave it unset and use `VBOGS_GIT_REF`.
 
 The pipeline service requires `/var/run/docker.sock` access. That is what makes
 the web-only Portainer workflow possible, but it gives `vbogs-pipeline` Docker

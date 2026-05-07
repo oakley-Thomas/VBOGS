@@ -56,7 +56,8 @@ create_torch_env() {
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
         "torchaudio==${TORCHAUDIO_VERSION}" \
-        --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_TAG}"
+        --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_TAG}" \
+        --extra-index-url "https://pypi.org/simple"
 
     pip install torch_scatter \
         -f "https://data.pyg.org/whl/torch-${PYG_TORCH_VERSION}+${TORCH_CUDA_TAG}.html"
