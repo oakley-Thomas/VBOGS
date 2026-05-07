@@ -57,12 +57,32 @@ Start the stack:
 docker compose up -d --no-build
 ```
 
-If the stack was already running before the override existed, recreate the
-containers once so the source mount is attached:
-
+Run the full pipeline
 ```bash
-docker compose up -d --no-build --force-recreate
+# Enter the vbogs-pipeline container
+docker compose exec vbogs-pipeline bash
+
+# Run the full pipeline:
+python scripts/run_drive_pipeline.py \
+  --drive 2013_05_28_drive_0000_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --use-service-labels
 ```
+
+# Run the pipeline from a given step:
+prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> render
+```bash
+python scripts/run_drive_pipeline.py \
+  --drive 2013_05_28_drive_0000_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at <start-stage> \
+  --stop-after <end-stage> \
+  --use-service-labels
+```
+For the full list of pipeline flags, see
+[docs/RUN_DRIVE_PIPELINE_ARGS.md](docs/RUN_DRIVE_PIPELINE_ARGS.md).
 
 ## Deployment Quick Start
 
@@ -359,6 +379,8 @@ The stack uses these Docker volumes:
 - `vbogs-data`, compose-managed, mounted at `/workspace/VBOGS/data`
 - `vbogs-outputs`, compose-managed, mounted at `/workspace/VBOGS/outputs`
 - `vbogs-generated-configs`, compose-managed, mounted at `/workspace/VBOGS/generated_configs`
+- `vbogs-torch-cache`, compose-managed, mounted at `/root/.cache/torch`
+  to persist Torch/LPIPS model downloads such as VGG
 
 `KITTI-360`, `COLMAP`, and `OCTREE-ANYGS` are declared as external volumes, so
 they must exist before the stack starts. The source KITTI-360 volume must contain

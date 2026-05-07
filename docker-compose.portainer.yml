@@ -33,6 +33,9 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: volume
+        source: vbogs-torch-cache
+        target: /root/.cache/torch
     command: sleep infinity
 
   vbogs-jax:
@@ -108,3 +111,4 @@ volumes:
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:
+  vbogs-torch-cache:

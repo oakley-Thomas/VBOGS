@@ -41,6 +41,9 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: volume
+        source: vbogs-torch-cache
+        target: /root/.cache/torch
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -134,3 +137,4 @@ volumes:
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:
+  vbogs-torch-cache:
