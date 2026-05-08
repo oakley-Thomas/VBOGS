@@ -79,6 +79,16 @@ python scripts/run_drive_pipeline.py \
   --gpu 0 \
   --jax-device 0 \
   --use-service-labels
+
+# Example
+python scripts/run_drive_pipeline.py \
+  --drive 2013_05_28_drive_0000_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --use-service-labels \
+  --stop-after render \
+  --write-ply
+
 ```
 **NOTE:** For the full list of pipeline flags, see
 [docs/RUN_DRIVE_PIPELINE_ARGS.md](docs/RUN_DRIVE_PIPELINE_ARGS.md).
