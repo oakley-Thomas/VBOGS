@@ -596,7 +596,6 @@ def rendered_anchor_mask_from_gaussians(
 ) -> np.ndarray:
     visible_mask = np.asarray(visible_mask, dtype=bool).reshape(-1)
     selection_mask = np.asarray(selection_mask, dtype=bool).reshape(-1)
-    visibility_filter = np.asarray(visibility_filter, dtype=bool).reshape(-1)
     visible_anchor_ids = np.nonzero(visible_mask)[0]
     expanded_anchor_ids = np.repeat(visible_anchor_ids, int(n_offsets))
     if expanded_anchor_ids.shape[0] != selection_mask.shape[0]:
@@ -605,6 +604,7 @@ def rendered_anchor_mask_from_gaussians(
             f"({selection_mask.shape[0]} != {expanded_anchor_ids.shape[0]})"
         )
     selected_anchor_ids = expanded_anchor_ids[selection_mask]
+    visibility_filter = gaussian_visibility_vector(visibility_filter, selected_anchor_ids.shape[0])
     if selected_anchor_ids.shape[0] != visibility_filter.shape[0]:
         raise ValueError(
             "visibility_filter length does not match selected gaussian count "
@@ -614,6 +614,20 @@ def rendered_anchor_mask_from_gaussians(
     rendered_ids = selected_anchor_ids[visibility_filter]
     rendered[rendered_ids] = True
     return rendered
+
+
+def gaussian_visibility_vector(visibility_filter: np.ndarray, gaussian_count: int) -> np.ndarray:
+    values = np.asarray(visibility_filter, dtype=bool)
+    if values.size == gaussian_count:
+        return values.reshape(-1)
+    values = np.squeeze(values)
+    if values.size == gaussian_count:
+        return values.reshape(-1)
+    if values.ndim > 1 and values.shape[0] == gaussian_count:
+        return np.any(values, axis=tuple(range(1, values.ndim))).reshape(-1)
+    if values.ndim > 1 and values.shape[-1] == gaussian_count:
+        return np.any(values, axis=tuple(range(values.ndim - 1))).reshape(-1)
+    return values.reshape(-1)
 
 
 def world_to_camera_from_query_camera(cam: Any) -> np.ndarray:
@@ -777,6 +791,48 @@ def write_anchor_ply(path: Path, rows: np.ndarray) -> None:
         rows.astype(ANCHOR_ROW_DTYPE, copy=False).tofile(handle)
 
 
+def save_uncertainty_scale(
+    path: Path,
+    *,
+    vmin: float,
+    vmax: float,
+    colormap: str,
+) -> None:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6.0, 0.85), dpi=160)
+    fig.subplots_adjust(left=0.08, right=0.94, bottom=0.48, top=0.78)
+    ticks = np.linspace(float(vmin), float(vmax), 5)
+    scalar_map = mpl.cm.ScalarMappable(
+        norm=mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax)),
+        cmap=colormap,
+    )
+    colorbar = fig.colorbar(scalar_map, cax=ax, orientation="horizontal", ticks=ticks)
+    colorbar.set_label("alpha-normalized uncertainty", fontsize=8)
+    colorbar.ax.tick_params(labelsize=7, length=2)
+    fig.savefig(path, facecolor="white", bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+
+
+def stack_scale_below_image(image_path: Path, scale_path: Path, output_path: Path) -> None:
+    from PIL import Image
+
+    image = Image.open(image_path).convert("RGB")
+    scale = Image.open(scale_path).convert("RGB")
+
+    target_width = image.width
+    target_height = max(42, int(round(scale.height * target_width / max(scale.width, 1))))
+    scale = scale.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+    composed = Image.new("RGB", (target_width, image.height + scale.height), "white")
+    composed.paste(image, (0, 0))
+    composed.paste(scale, (0, image.height))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    composed.save(output_path)
+
+
 def save_query_images(
     *,
     output_dir: Path,
@@ -806,6 +862,8 @@ def save_query_images(
         "uncertainty_heatmap": output_dir / f"{stem}_uncertainty_heatmap.png",
         "uncertainty_overlay": output_dir / f"{stem}_uncertainty_overlay.png",
         "side_by_side": output_dir / f"{stem}_side_by_side.png",
+        "uncertainty_scale": output_dir / f"{stem}_uncertainty_scale.png",
+        "side_by_side_with_scale": output_dir / f"{stem}_side_by_side_with_scale.png",
         "uncertainty_accumulated_npy": output_dir / f"{stem}_uncertainty_accumulated.npy",
         "uncertainty_display_npy": output_dir / f"{stem}_uncertainty_display.npy",
         "alpha_npy": output_dir / f"{stem}_alpha.npy",
@@ -815,6 +873,8 @@ def save_query_images(
     torchvision.utils.save_image(heatmap, str(paths["uncertainty_heatmap"]))
     torchvision.utils.save_image(overlay, str(paths["uncertainty_overlay"]))
     torchvision.utils.save_image(torch.cat([rgb, heatmap, overlay], dim=2), str(paths["side_by_side"]))
+    save_uncertainty_scale(paths["uncertainty_scale"], vmin=vmin, vmax=vmax, colormap=colormap)
+    stack_scale_below_image(paths["side_by_side"], paths["uncertainty_scale"], paths["side_by_side_with_scale"])
     np.save(paths["uncertainty_accumulated_npy"], unc_image.detach().cpu().numpy().astype(np.float32))
     np.save(paths["uncertainty_display_npy"], display_unc.detach().cpu().numpy().astype(np.float32))
     np.save(paths["alpha_npy"], alpha_image.detach().cpu().numpy().astype(np.float32))

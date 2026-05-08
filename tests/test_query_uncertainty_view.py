@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from scripts.query_uncertainty_view import (
+    gaussian_visibility_vector,
     matrix_from_values,
     pose_to_c2w,
     project_points_to_camera,
@@ -72,3 +73,17 @@ def test_rendered_anchor_mask_from_gaussians_maps_back_to_parent_anchors():
     )
 
     assert rendered.tolist() == [False, True, True, False]
+
+
+def test_gaussian_visibility_vector_reduces_multi_radius_visibility():
+    radii_visible = np.array(
+        [
+            [False, False],
+            [True, False],
+            [False, True],
+        ]
+    )
+
+    visible = gaussian_visibility_vector(radii_visible, gaussian_count=3)
+
+    assert visible.tolist() == [False, True, True]
