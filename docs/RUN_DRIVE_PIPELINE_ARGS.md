@@ -9,11 +9,12 @@ Common full-pipeline command from inside `vbogs-pipeline`:
 
 ```bash
 python scripts/run_drive_pipeline.py \
-  --drive 2013_05_28_drive_0008_sync \
+  --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
-  --stop-after render \
+  --stop-after bundle \
+  --run-output-root outputs/v1_0 \
   --use-service-labels
 ```
 
@@ -26,14 +27,15 @@ expensive work.
 | --- | --- | --- |
 | `--config CONFIG` | `pipeline_config.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
 | `--drive DRIVE` | Config: `pipeline.drive` | KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`. Required if not set in config. |
-| `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,render}` | `prepare` | First stage to run. |
-| `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,render}` | `inspect` | Last stage to run. Use `render` for the full implemented pipeline. |
+| `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
+| `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `inspect` | Last stage to run. Use `bundle` for the full curated run output. |
+| `--run-output-root RUN_OUTPUT_ROOT` | Config: `outputs.run_root` | Optional root for curated outputs. When set, stage outputs are derived under `<root>/<drive>/`. |
 | `--dry-run` | `false` | Print the Docker/stage commands without executing them. |
 
 Stage order is:
 
 ```text
-prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> render
+prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz -> render -> nbv -> nbv-viz -> bundle
 ```
 
 ## Orchestration
@@ -67,8 +69,8 @@ COLMAP-style dataset under `/data/COLMAP/<drive>`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--frame-step FRAME_STEP` | `10` | Keep every Nth frame from the drive. Higher values are faster and smaller. |
-| `--max-frames MAX_FRAMES` | `0` | Maximum number of frames to prepare. `0` means no cap. |
+| `--frame-step FRAME_STEP` | Config: `1` | Keep every Nth frame from the drive. Higher values are faster and smaller. |
+| `--max-frames MAX_FRAMES` | Config: `1000` | Maximum number of frames to prepare. `0` means no cap. |
 | `--copy-mode {symlink,copy}` | `symlink` | How images are placed in the prepared dataset. `symlink` is faster and saves space when supported. |
 | `--seed-mode {stereo,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. |
 
@@ -82,7 +84,7 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | --- | --- | --- |
 | `--gpu GPU` | `0` | GPU id passed to the Octree-AnyGS training wrapper. |
 | `--resolution RESOLUTION` | `4` | Octree-AnyGS image divisor. Higher values reduce memory use and image fidelity. |
-| `--iterations ITERATIONS` | `15000` | Number of training iterations. |
+| `--iterations ITERATIONS` | Config: `30000` | Number of training iterations. |
 | `--llffhold LLFFHOLD` | `8` | Held-out test frame cadence used by the Octree-AnyGS data loader. |
 | `--feat-dim FEAT_DIM` | `16` | Anchor feature dimension. Lower values reduce VRAM pressure. |
 | `--base-layer BASE_LAYER` | `9` | LoD base layer. Lower values reduce anchor count and memory. |
@@ -99,7 +101,7 @@ stereo points under `data/points_world/<drive>/`.
 | `--matcher {sgbm,raft}` | `sgbm` | Stereo matcher backend. `raft` is reserved for a future provider unless installed/implemented. |
 | `--pixel-step PIXEL_STEP` | `1` | Pixel subsampling step for point export. Higher values reduce density and runtime. |
 | `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported stereo points. |
-| `--write-ply` | `false` | Also write a PLY point cloud for quick visual inspection. |
+| `--write-ply` | Config: `true` | Also write a PLY point cloud for quick visual inspection and the curated bundle. |
 
 The stereo stage also receives `--max-frames` and any KITTI-360 input override
 arguments.
@@ -149,10 +151,28 @@ Runs `scripts/compute_uncertainty.py` in `vbogs-jax` and writes `U.npy` under
 | `--uncertainty-u-max UNCERTAINTY_U_MAX` | Maximum finite observed uncertainty | Value assigned to unobserved anchors. |
 | `--uncertainty-no-histogram` | `false` | Skip writing the M5 uncertainty histogram PNG. |
 
+## `map-viz`
+
+Runs `scripts/export_uncertainty_map.py` in `vbogs-torch` and writes
+CloudCompare-friendly colored anchor PLYs. With `--run-output-root outputs/v1_0`,
+the default output directory is `outputs/v1_0/<drive>/pointclouds/anchors`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--map-viz-output-dir MAP_VIZ_OUTPUT_DIR` | Derived from run root | Optional map-scale PLY output directory. |
+| `--map-viz-vmin MAP_VIZ_VMIN` | Auto | Explicit lower bound for anchor uncertainty colors. |
+| `--map-viz-vmax MAP_VIZ_VMAX` | Auto | Explicit upper bound for anchor uncertainty colors. |
+| `--map-viz-percentile-low MAP_VIZ_PERCENTILE_LOW` | `2.0` | Lower observed-anchor percentile used for automatic color scale. |
+| `--map-viz-percentile-high MAP_VIZ_PERCENTILE_HIGH` | `98.0` | Upper observed-anchor percentile used for automatic color scale. |
+| `--map-viz-observed-only` | `false` | Export only observed anchors. |
+| `--map-viz-no-split-levels` | `false` | Only write the combined all-levels PLY. |
+| `--map-viz-no-trajectory` | `false` | Skip `camera_trajectory.ply`. |
+
 ## `render`
 
 Runs `scripts/render_uncertainty_views.py` in `vbogs-torch` and writes diagnostic
-RGB/uncertainty views.
+RGB/uncertainty views. With `--run-output-root outputs/v1_0`, the default output
+directory is `outputs/v1_0/<drive>/views`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
@@ -161,7 +181,43 @@ RGB/uncertainty views.
 | `--render-colormap RENDER_COLORMAP` | `turbo` | Matplotlib colormap for uncertainty heatmaps. |
 | `--render-vmin RENDER_VMIN` | Auto | Lower bound for uncertainty colormap normalization. |
 | `--render-vmax RENDER_VMAX` | Auto | Upper bound for uncertainty colormap normalization. |
-| `--render-output-dir RENDER_OUTPUT_DIR` | `outputs/uncertainty_views/<drive>` | Optional render output root in the Torch container. |
+| `--render-output-dir RENDER_OUTPUT_DIR` | Derived from run root | Optional render output root in the Torch container. |
+
+## `nbv`
+
+Runs `scripts/score_nbv.py` in `vbogs-torch` and writes NBV scores plus top
+uncertainty/alpha arrays. With `--run-output-root outputs/v1_0`, the default
+output directory is `outputs/v1_0/<drive>/nbv`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--nbv-candidate-source {test,train,lattice}` | `test` | Candidate camera set used for scoring. |
+| `--nbv-max-candidates NBV_MAX_CANDIDATES` | `0` | Optional candidate cap. `0` scores all selected candidates. |
+| `--nbv-top-k NBV_TOP_K` | `10` | Number of ranked candidates stored in `nbv_scores.json`. |
+| `--nbv-save-top-images NBV_SAVE_TOP_IMAGES` | `5` | Number of top uncertainty/alpha arrays saved for visualization. |
+| `--nbv-force-all-levels` | `false` | Force all Octree-AnyGS levels active during scalar renders. |
+| `--nbv-output-dir NBV_OUTPUT_DIR` | Derived from run root | Optional NBV output directory. |
+
+## `nbv-viz`
+
+Runs `scripts/visualize_m6.py` in `vbogs-torch` and converts saved top NBV
+uncertainty/alpha arrays into PNG diagnostics under `<nbv-output-dir>/viz`.
+
+## `bundle`
+
+Runs `scripts/bundle_run_outputs.py` in `vbogs-torch`. It copies curated,
+user-facing artifacts into `outputs/v1_0/<drive>` and writes
+`run_manifest.json`. Bulky Octree-AnyGS checkpoints and full VBGS posterior
+artifacts remain in their native data volumes and are referenced by path.
+
+Bundled outputs include:
+
+- `pointclouds/stereo/points_world.npz`, optional `points_world.ply`, and metadata
+- `pointclouds/anchors/` generated by `map-viz`
+- `views/` generated by `render`
+- `nbv/` generated by `nbv` and `nbv-viz`
+- `uncertainty/U.npy`, uncertainty metadata/components, and histogram when present
+- `prepared/metadata.json`, `octree/config.yaml`, and `run_manifest.json`
 
 ## Config Mapping
 
@@ -178,6 +234,8 @@ The default config file uses section names that map to CLI arguments:
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `vmap_group_size`, `log_every`, `max_observed_anchors` |
 | `inspect` | `top_k`, `sample_points`, `anchor_id`, `export_ply` |
 | `uncertainty` | `u_max`, `no_histogram` |
+| `map_viz` | `output_dir`, `vmin`, `vmax`, `percentile_low`, `percentile_high`, `observed_only`, `no_split_levels`, `no_trajectory` |
 | `render` | `split`, `max_views`, `colormap`, `vmin`, `vmax`, `output_dir` |
+| `nbv` | `candidate_source`, `max_candidates`, `top_k`, `save_top_images`, `force_all_levels`, `output_dir` |
+| `outputs` | `run_root` |
 | `orchestration` | `compose_command`, `compose_file`, `project_name`, `torch_container`, `jax_container`, `use_service_labels`, `label_project` |
-

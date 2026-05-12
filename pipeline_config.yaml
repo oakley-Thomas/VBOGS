@@ -5,10 +5,13 @@
 # still wins.
 
 pipeline:
-  drive: 2013_05_28_drive_0008_sync
+  drive: 2013_05_28_drive_0007_sync
   start_at: prepare
-  stop_after: inspect
+  stop_after: bundle
   dry_run: false
+
+outputs:
+  run_root: outputs/v1_0
 
 inputs:
   # Leave null to use the repo/container default KITTI-360 layout.
@@ -17,8 +20,8 @@ inputs:
   calibration_dir: null
 
 prepare:
-  frame_step: 2
-  max_frames: 0
+  frame_step: 1
+  max_frames: 1000
   copy_mode: symlink
   seed_mode: stereo
 
@@ -36,7 +39,7 @@ stereo:
   matcher: sgbm
   pixel_step: 1
   max_points_per_frame: 300000
-  write_ply: false
+  write_ply: true
 
 bucket:
   # Leave null to use the latest Octree-AnyGS run under /data/OCTREE-ANYGS/<drive>.
@@ -68,4 +71,12 @@ render:
   colormap: turbo
   vmin: null
   vmax: null
+  output_dir: null
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  top_k: 10
+  save_top_images: 5
+  force_all_levels: false
   output_dir: null

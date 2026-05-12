@@ -36,6 +36,9 @@ STAGES = (
     "uncertainty",
     "map-viz",
     "render",
+    "nbv",
+    "nbv-viz",
+    "bundle",
 )
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
@@ -116,6 +119,17 @@ CONFIG_KEY_MAP = {
         "vmin": "render_vmin",
         "vmax": "render_vmax",
         "output_dir": "render_output_dir",
+    },
+    "nbv": {
+        "candidate_source": "nbv_candidate_source",
+        "max_candidates": "nbv_max_candidates",
+        "top_k": "nbv_top_k",
+        "save_top_images": "nbv_save_top_images",
+        "force_all_levels": "nbv_force_all_levels",
+        "output_dir": "nbv_output_dir",
+    },
+    "outputs": {
+        "run_root": "run_output_root",
     },
     "orchestration": {
         "compose_command": "compose_command",
@@ -256,6 +270,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--dry-run",
         action="store_true",
         help="Print the commands that would run without executing them.",
+    )
+    parser.add_argument(
+        "--run-output-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional root for curated run outputs. When set, stage outputs are "
+            "derived under `<root>/<drive>/`."
+        ),
     )
     parser.add_argument(
         "--start-at",
@@ -457,6 +480,43 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "`outputs/uncertainty_views/<drive>` in the Torch container."
         ),
     )
+
+    nbv_group = parser.add_argument_group("next-best-view scoring")
+    nbv_group.add_argument(
+        "--nbv-candidate-source",
+        choices=("test", "train", "lattice"),
+        default="test",
+        help="Candidate camera set passed to score_nbv.py.",
+    )
+    nbv_group.add_argument(
+        "--nbv-max-candidates",
+        type=int,
+        default=0,
+        help="Optional candidate cap for NBV scoring. `0` scores all candidates.",
+    )
+    nbv_group.add_argument(
+        "--nbv-top-k",
+        type=int,
+        default=10,
+        help="Number of ranked NBV candidates saved in nbv_scores.json.",
+    )
+    nbv_group.add_argument(
+        "--nbv-save-top-images",
+        type=int,
+        default=5,
+        help="Number of top uncertainty/alpha arrays saved for NBV visualization.",
+    )
+    nbv_group.add_argument(
+        "--nbv-force-all-levels",
+        action="store_true",
+        help="Force all Octree-AnyGS levels active while scoring NBV candidates.",
+    )
+    nbv_group.add_argument(
+        "--nbv-output-dir",
+        type=Path,
+        default=None,
+        help="Optional NBV output directory. Defaults to `data/m6/<drive>`.",
+    )
     parser.set_defaults(**(config_defaults or {}))
     return parser
 
@@ -495,10 +555,37 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
     return [flag, str(value)]
 
 
+def run_output_dir(args: argparse.Namespace) -> Path | None:
+    if args.run_output_root is None:
+        return None
+    return Path(args.run_output_root) / args.drive
+
+
+def derived_output_dir(
+    explicit: Path | None,
+    base_dir: Path | None,
+    *parts: str,
+) -> Path | None:
+    if explicit is not None:
+        return Path(explicit)
+    if base_dir is None:
+        return None
+    return base_dir.joinpath(*parts)
+
+
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     dataset_path = f"/data/COLMAP/{args.drive}"
     selection_metadata = f"{dataset_path}/metadata.json"
     bucket_root = f"data/m4/{args.drive}"
+    run_dir = run_output_dir(args)
+    map_viz_output_dir = derived_output_dir(
+        args.map_viz_output_dir,
+        run_dir,
+        "pointclouds",
+        "anchors",
+    )
+    render_output_dir = derived_output_dir(args.render_output_dir, run_dir, "views")
+    nbv_output_dir = derived_output_dir(args.nbv_output_dir, run_dir, "nbv")
 
     prepare_cmd = (
         "python",
@@ -638,7 +725,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--percentile-high",
         str(args.map_viz_percentile_high),
         *maybe_option("--poses-root", args.poses_root),
-        *maybe_option("--output-dir", args.map_viz_output_dir),
+        *maybe_option("--output-dir", map_viz_output_dir),
         *maybe_option("--vmin", args.map_viz_vmin),
         *maybe_option("--vmax", args.map_viz_vmax),
         *(("--observed-only",) if args.map_viz_observed_only else ()),
@@ -659,7 +746,44 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.render_colormap,
         *maybe_option("--vmin", args.render_vmin),
         *maybe_option("--vmax", args.render_vmax),
-        *maybe_option("--output-dir", args.render_output_dir),
+        *maybe_option("--output-dir", render_output_dir),
+    )
+
+    nbv_cmd = (
+        "python",
+        "scripts/score_nbv.py",
+        "--drive",
+        args.drive,
+        "--candidate-source",
+        args.nbv_candidate_source,
+        "--max-candidates",
+        str(args.nbv_max_candidates),
+        "--top-k",
+        str(args.nbv_top_k),
+        "--save-top-images",
+        str(args.nbv_save_top_images),
+        *maybe_option("--output-root", nbv_output_dir),
+        *(("--force-all-levels",) if args.nbv_force_all_levels else ()),
+    )
+
+    nbv_viz_cmd = (
+        "python",
+        "scripts/visualize_m6.py",
+        "--drive",
+        args.drive,
+        *maybe_option("--m6-root", nbv_output_dir),
+        *maybe_option("--output-dir", nbv_output_dir / "viz" if nbv_output_dir else None),
+    )
+
+    bundle_cmd = (
+        "python",
+        "scripts/bundle_run_outputs.py",
+        "--drive",
+        args.drive,
+        *maybe_option("--run-output-dir", run_dir),
+        *maybe_option("--map-viz-output-dir", map_viz_output_dir),
+        *maybe_option("--render-output-dir", render_output_dir),
+        *maybe_option("--nbv-output-dir", nbv_output_dir),
     )
 
     return [
@@ -672,6 +796,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         PipelineStep("uncertainty", JAX_SERVICE, uncertainty_cmd),
         PipelineStep("map-viz", TORCH_SERVICE, map_viz_cmd),
         PipelineStep("render", TORCH_SERVICE, render_cmd),
+        PipelineStep("nbv", TORCH_SERVICE, nbv_cmd),
+        PipelineStep("nbv-viz", TORCH_SERVICE, nbv_viz_cmd),
+        PipelineStep("bundle", TORCH_SERVICE, bundle_cmd),
     ]
 
 
