@@ -21,6 +21,30 @@ python scripts/run_drive_pipeline.py \
 Use `--dry-run` to print the commands that would be run without launching the
 expensive work.
 
+## Config Profiles
+
+Use the profile config that matches where the stack is running:
+
+| File | Intended use | Output location |
+| --- | --- | --- |
+| `pipeline_config.dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` in this checkout, via the dev compose bind mount |
+| `pipeline_config.portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
+| `pipeline_config.yaml` | Backward-compatible default | Depends on the active compose mounts |
+
+For local development, plain `docker compose up` auto-loads
+`docker-compose.override.yml`, which bind-mounts `${VBOGS_LOCAL_OUTPUTS:-./outputs}`
+to `/workspace/VBOGS/outputs`. The same setup is available explicitly with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build
+```
+
+From inside `vbogs-pipeline`, run the local-dev profile with:
+
+```bash
+python scripts/run_drive_pipeline.py --config pipeline_config.dev.yaml --use-service-labels
+```
+
 ## Pipeline Selection
 
 | Argument | Default | Description |
@@ -86,7 +110,8 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | `--resolution RESOLUTION` | `4` | Octree-AnyGS image divisor. Higher values reduce memory use and image fidelity. |
 | `--iterations ITERATIONS` | Config: `30000` | Number of training iterations. |
 | `--llffhold LLFFHOLD` | `8` | Held-out test frame cadence used by the Octree-AnyGS data loader. |
-| `--feat-dim FEAT_DIM` | `16` | Anchor feature dimension. Lower values reduce VRAM pressure. |
+| `--gaussian-type {implicit3D,explicit3D}` | `implicit3D` | Octree-AnyGS Gaussian representation. `implicit3D` is the neural default; `explicit3D` uses explicit SH 3D Gaussians. |
+| `--feat-dim FEAT_DIM` | `16` | Neural anchor feature dimension. Lower values reduce VRAM pressure. Ignored for `explicit3D`. |
 | `--base-layer BASE_LAYER` | `9` | LoD base layer. Lower values reduce anchor count and memory. |
 | `--visible-threshold VISIBLE_THRESHOLD` | `0.02` | LoD pruning visibility threshold. |
 | `--write-config-only` | `false` | Generate the Octree-AnyGS YAML config and skip training. |
@@ -115,6 +140,8 @@ assignments under `data/m4/<drive>/`.
 | --- | --- | --- |
 | `--model-path MODEL_PATH` | Latest run under `/data/OCTREE-ANYGS/<drive>` | Explicit Octree-AnyGS model/run directory to bucket against. |
 | `--bucket-iteration BUCKET_ITERATION` | `-1` | Checkpoint iteration to load. `-1` means use the latest available checkpoint. |
+| `--bucket-point-chunk-size BUCKET_POINT_CHUNK_SIZE` | `1000000` | Number of stereo points processed per bucketing chunk. Lower values reduce peak memory. |
+| `--bucket-max-points BUCKET_MAX_POINTS` | `0` | Optional deterministic cap on stereo points used for M4 bucketing/fitting. `0` keeps all points. |
 
 ## `fit`
 
@@ -207,8 +234,10 @@ uncertainty/alpha arrays into PNG diagnostics under `<nbv-output-dir>/viz`.
 
 Runs `scripts/bundle_run_outputs.py` in `vbogs-torch`. It copies curated,
 user-facing artifacts into `outputs/v1_0/<drive>` and writes
-`run_manifest.json`. Bulky Octree-AnyGS checkpoints and full VBGS posterior
-artifacts remain in their native data volumes and are referenced by path.
+`run_manifest.json`, then zips that output folder to
+`outputs/v1_0/<drive>.zip`. Bulky Octree-AnyGS checkpoints and full VBGS
+posterior artifacts remain in their native data volumes and are referenced by
+path.
 
 Bundled outputs include:
 
@@ -228,9 +257,9 @@ The default config file uses section names that map to CLI arguments:
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run`, `skip_up` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
-| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `feat_dim`, `base_layer`, `visible_threshold`, `write_config_only` |
+| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `write_config_only` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
-| `bucket` | `model_path`, `bucket_iteration` |
+| `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `vmap_group_size`, `log_every`, `max_observed_anchors` |
 | `inspect` | `top_k`, `sample_points`, `anchor_id`, `export_ply` |
 | `uncertainty` | `u_max`, `no_histogram` |

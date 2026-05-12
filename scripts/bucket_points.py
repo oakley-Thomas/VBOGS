@@ -19,20 +19,29 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import yaml
-from plyfile import PlyData
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from vbogs.io import normalize_data_numpy, pack_grouped_indices, save_json
+from vbogs.io import save_json
 
 DEFAULT_OCTREE_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
+
+
+@dataclass(frozen=True)
+class LevelIndex:
+    level: int
+    cur_size: float
+    sorted_anchor_keys: np.ndarray
+    sorted_anchor_ids: np.ndarray
+    anchor_count: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,6 +92,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="How many non-empty anchors to print in the summary preview.",
+    )
+    parser.add_argument(
+        "--point-chunk-size",
+        type=int,
+        default=1_000_000,
+        help=(
+            "Number of points processed per bucketing chunk. Lower values reduce "
+            "peak memory at the cost of more passes through the point array."
+        ),
+    )
+    parser.add_argument(
+        "--max-points",
+        type=int,
+        default=0,
+        help=(
+            "Optional deterministic cap on points used for M4 bucketing/fitting. "
+            "`0` keeps every point from the stereo artifact."
+        ),
     )
     return parser.parse_args()
 
@@ -147,6 +174,8 @@ def load_yaml(path: Path) -> Dict:
 
 
 def reconstruct_grid_params(config: Dict, model_path: Path) -> Tuple[float, int, np.ndarray]:
+    from plyfile import PlyData
+
     model_kwargs = config["model_params"]["model_config"]["kwargs"]
     base_layer = int(model_kwargs["base_layer"])
     source_path = Path(config["model_params"]["source_path"])
@@ -180,6 +209,8 @@ def reconstruct_grid_params(config: Dict, model_path: Path) -> Tuple[float, int,
 
 
 def load_anchor_state(anchor_ply: Path) -> Tuple[np.ndarray, np.ndarray, int]:
+    from plyfile import PlyData
+
     ply = PlyData.read(str(anchor_ply))
     anchor_xyz = np.stack(
         [
@@ -210,16 +241,13 @@ def match_level_points(
     points_xyz_world: np.ndarray,
     init_pos: np.ndarray,
     cur_size: float,
-    anchor_grid: np.ndarray,
-    anchor_ids: np.ndarray,
+    sorted_anchor_keys: np.ndarray,
+    sorted_anchor_ids: np.ndarray,
+    *,
+    point_index_offset: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     point_grid = np.rint((points_xyz_world - init_pos[None, :]) / cur_size).astype(np.int64)
     point_keys = coords_to_keys(point_grid)
-    anchor_keys = coords_to_keys(anchor_grid)
-
-    order = np.argsort(anchor_keys)
-    sorted_anchor_keys = anchor_keys[order]
-    sorted_anchor_ids = anchor_ids[order]
 
     idx = np.searchsorted(sorted_anchor_keys, point_keys)
     within = idx < sorted_anchor_keys.shape[0]
@@ -228,9 +256,208 @@ def match_level_points(
         matched_within = sorted_anchor_keys[idx[within]] == point_keys[within]
         matched[np.nonzero(within)[0]] = matched_within
 
-    point_indices = np.nonzero(matched)[0].astype(np.int64)
+    point_indices = (np.nonzero(matched)[0] + point_index_offset).astype(np.int64)
     matched_anchor_ids = sorted_anchor_ids[idx[matched]].astype(np.int64)
     return matched_anchor_ids, point_indices
+
+
+def iter_chunk_ranges(total_count: int, chunk_size: int):
+    if chunk_size <= 0:
+        raise ValueError("--point-chunk-size must be positive")
+    for start in range(0, total_count, chunk_size):
+        yield start, min(start + chunk_size, total_count)
+
+
+def select_points(
+    xyz: np.ndarray,
+    rgb: np.ndarray,
+    frame_id: np.ndarray,
+    max_points: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    if max_points < 0:
+        raise ValueError("--max-points must be non-negative")
+
+    total_points = int(xyz.shape[0])
+    if rgb.shape[0] != total_points or frame_id.shape[0] != total_points:
+        raise ValueError("xyz, rgb, and frame_id must have the same row count")
+    if max_points == 0 or total_points <= max_points:
+        return xyz, rgb, frame_id, {
+            "source_point_count": total_points,
+            "selected_point_count": total_points,
+            "max_points": int(max_points),
+            "selection": "all",
+        }
+
+    # Evenly-spaced deterministic sampling preserves broad drive coverage better
+    # than taking the first N points when input is frame-ordered.
+    indices = np.linspace(0, total_points - 1, num=max_points, dtype=np.int64)
+    return xyz[indices], rgb[indices], frame_id[indices], {
+        "source_point_count": total_points,
+        "selected_point_count": int(max_points),
+        "max_points": int(max_points),
+        "selection": "linspace",
+    }
+
+
+def normalization_params_from_xyz_rgb(
+    xyz: np.ndarray,
+    rgb: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    xyz = np.asarray(xyz, dtype=np.float32)
+    rgb_float = np.asarray(rgb, dtype=np.float32)
+    mean = np.concatenate([xyz.mean(axis=0), rgb_float.mean(axis=0)]).astype(np.float32)
+
+    xyz_var = ((xyz - mean[None, :3]) ** 2).mean(axis=0)
+    rgb_var = ((rgb_float - mean[None, 3:]) ** 2).mean(axis=0)
+    stdevs = np.sqrt(np.concatenate([xyz_var, rgb_var])).astype(np.float32)
+    stdevs = np.where(stdevs == 0, 1.0, stdevs).astype(np.float32)
+    return {"offset": mean, "stdevs": stdevs}
+
+
+def normalized_points_from_xyz_rgb(
+    xyz: np.ndarray,
+    rgb: np.ndarray,
+    norm_params: Dict[str, np.ndarray],
+    *,
+    chunk_size: int,
+) -> np.ndarray:
+    total_points = int(xyz.shape[0])
+    offset = np.asarray(norm_params["offset"], dtype=np.float32)
+    stdevs = np.asarray(norm_params["stdevs"], dtype=np.float32)
+    points_norm = np.empty((total_points, 6), dtype=np.float32)
+    for start, end in iter_chunk_ranges(total_points, chunk_size):
+        points_norm[start:end, :3] = (xyz[start:end] - offset[None, :3]) / stdevs[None, :3]
+        points_norm[start:end, 3:] = (
+            rgb[start:end].astype(np.float32) - offset[None, 3:]
+        ) / stdevs[None, 3:]
+    return points_norm
+
+
+def world_points_from_xyz_rgb(
+    xyz: np.ndarray,
+    rgb: np.ndarray,
+    *,
+    chunk_size: int,
+) -> np.ndarray:
+    total_points = int(xyz.shape[0])
+    points_world = np.empty((total_points, 6), dtype=np.float32)
+    for start, end in iter_chunk_ranges(total_points, chunk_size):
+        points_world[start:end, :3] = xyz[start:end]
+        points_world[start:end, 3:] = rgb[start:end].astype(np.float32)
+    return points_world
+
+
+def build_level_indices(
+    anchor_xyz: np.ndarray,
+    anchor_level: np.ndarray,
+    levels: int,
+    voxel_size: float,
+    fork: int,
+    init_pos: np.ndarray,
+) -> list[LevelIndex]:
+    level_indices: list[LevelIndex] = []
+    for level in range(levels):
+        level_mask = anchor_level == level
+        level_anchor_ids = np.nonzero(level_mask)[0].astype(np.int64)
+        level_anchor_xyz = anchor_xyz[level_mask]
+        cur_size = voxel_size / (fork ** level)
+        level_anchor_grid = np.rint((level_anchor_xyz - init_pos[None, :]) / cur_size).astype(
+            np.int64
+        )
+        anchor_keys = coords_to_keys(level_anchor_grid)
+        order = np.argsort(anchor_keys)
+        level_indices.append(
+            LevelIndex(
+                level=level,
+                cur_size=cur_size,
+                sorted_anchor_keys=anchor_keys[order],
+                sorted_anchor_ids=level_anchor_ids[order],
+                anchor_count=int(level_anchor_ids.shape[0]),
+            )
+        )
+    return level_indices
+
+
+def count_point_assignments(
+    points_xyz_world: np.ndarray,
+    level_indices: list[LevelIndex],
+    init_pos: np.ndarray,
+    *,
+    num_anchors: int,
+    chunk_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    point_counts = np.zeros(num_anchors, dtype=np.int64)
+    level_assignment_counts = np.zeros(len(level_indices), dtype=np.int64)
+    total_points = int(points_xyz_world.shape[0])
+
+    for level_index in level_indices:
+        for start, end in iter_chunk_ranges(total_points, chunk_size):
+            matched_anchor_ids, _matched_point_indices = match_level_points(
+                points_xyz_world=points_xyz_world[start:end],
+                init_pos=init_pos,
+                cur_size=level_index.cur_size,
+                sorted_anchor_keys=level_index.sorted_anchor_keys,
+                sorted_anchor_ids=level_index.sorted_anchor_ids,
+                point_index_offset=start,
+            )
+            if matched_anchor_ids.size:
+                point_counts += np.bincount(
+                    matched_anchor_ids,
+                    minlength=num_anchors,
+                ).astype(np.int64)
+                level_assignment_counts[level_index.level] += int(matched_anchor_ids.size)
+
+    return point_counts, level_assignment_counts
+
+
+def fill_packed_point_indices(
+    points_xyz_world: np.ndarray,
+    level_indices: list[LevelIndex],
+    init_pos: np.ndarray,
+    anchor_offsets: np.ndarray,
+    *,
+    chunk_size: int,
+) -> np.ndarray:
+    packed_point_indices = np.empty(int(anchor_offsets[-1]), dtype=np.int64)
+    write_offsets = anchor_offsets[:-1].copy()
+    total_points = int(points_xyz_world.shape[0])
+
+    for level_index in level_indices:
+        for start, end in iter_chunk_ranges(total_points, chunk_size):
+            matched_anchor_ids, matched_point_indices = match_level_points(
+                points_xyz_world=points_xyz_world[start:end],
+                init_pos=init_pos,
+                cur_size=level_index.cur_size,
+                sorted_anchor_keys=level_index.sorted_anchor_keys,
+                sorted_anchor_ids=level_index.sorted_anchor_ids,
+                point_index_offset=start,
+            )
+            if matched_anchor_ids.size == 0:
+                continue
+
+            order = np.argsort(matched_anchor_ids, kind="stable")
+            sorted_anchor_ids = matched_anchor_ids[order]
+            sorted_point_indices = matched_point_indices[order]
+            unique_anchor_ids, run_starts, run_counts = np.unique(
+                sorted_anchor_ids,
+                return_index=True,
+                return_counts=True,
+            )
+            for anchor_id, run_start, run_count in zip(
+                unique_anchor_ids,
+                run_starts,
+                run_counts,
+            ):
+                write_start = int(write_offsets[anchor_id])
+                write_end = write_start + int(run_count)
+                packed_point_indices[write_start:write_end] = sorted_point_indices[
+                    run_start : run_start + run_count
+                ]
+                write_offsets[anchor_id] = write_end
+
+    if not np.array_equal(write_offsets, anchor_offsets[1:]):
+        raise RuntimeError("Packed point-index fill did not match counted anchor offsets")
+    return packed_point_indices
 
 
 def summarize_counts(point_counts: np.ndarray) -> Dict[str, float]:
@@ -269,55 +496,70 @@ def main() -> None:
     voxel_size, fork, init_pos = reconstruct_grid_params(config, model_path)
 
     world_npz = np.load(points_world_path)
-    points_xyz_world = np.asarray(world_npz["xyz"], dtype=np.float32)
-    points_rgb = np.asarray(world_npz["rgb"], dtype=np.uint8)
-    frame_id = np.asarray(world_npz["frame_id"], dtype=np.int32)
+    source_xyz_world = np.asarray(world_npz["xyz"], dtype=np.float32)
+    source_rgb = np.asarray(world_npz["rgb"], dtype=np.uint8)
+    source_frame_id = np.asarray(world_npz["frame_id"], dtype=np.int32)
 
-    points_world = np.concatenate(
-        [points_xyz_world, points_rgb.astype(np.float32)],
-        axis=1,
-    ).astype(np.float32)
-    points_norm, norm_params = normalize_data_numpy(points_world)
+    points_xyz_world, points_rgb, frame_id, point_selection = select_points(
+        source_xyz_world,
+        source_rgb,
+        source_frame_id,
+        args.max_points,
+    )
+    world_npz.close()
+    if point_selection["selection"] != "all":
+        del source_xyz_world, source_rgb, source_frame_id
+    norm_params = normalization_params_from_xyz_rgb(points_xyz_world, points_rgb)
 
-    print(f"Loaded {points_xyz_world.shape[0]:,} world-frame points")
+    print(
+        f"Loaded {point_selection['source_point_count']:,} world-frame points; "
+        f"using {point_selection['selected_point_count']:,}"
+    )
     print(f"Loaded {anchor_xyz.shape[0]:,} anchors across {levels} levels")
+    print(f"Point chunk size: {args.point_chunk_size:,}")
 
-    matched_anchor_ids_all = []
-    matched_point_indices_all = []
-
-    for level in range(levels):
-        level_mask = anchor_level == level
-        level_anchor_ids = np.nonzero(level_mask)[0].astype(np.int64)
-        level_anchor_xyz = anchor_xyz[level_mask]
-        cur_size = voxel_size / (fork ** level)
-        level_anchor_grid = np.rint((level_anchor_xyz - init_pos[None, :]) / cur_size).astype(np.int64)
-
-        matched_anchor_ids, matched_point_indices = match_level_points(
-            points_xyz_world=points_xyz_world,
-            init_pos=init_pos,
-            cur_size=cur_size,
-            anchor_grid=level_anchor_grid,
-            anchor_ids=level_anchor_ids,
-        )
-        matched_anchor_ids_all.append(matched_anchor_ids)
-        matched_point_indices_all.append(matched_point_indices)
+    level_indices = build_level_indices(
+        anchor_xyz,
+        anchor_level,
+        levels,
+        voxel_size,
+        fork,
+        init_pos,
+    )
+    point_counts, level_assignment_counts = count_point_assignments(
+        points_xyz_world,
+        level_indices,
+        init_pos,
+        num_anchors=anchor_xyz.shape[0],
+        chunk_size=args.point_chunk_size,
+    )
+    for level_index in level_indices:
         print(
-            f"Level {level:02d}: matched {matched_point_indices.shape[0]:,} "
-            f"point-anchor assignments to {level_anchor_ids.shape[0]:,} anchors"
+            f"Level {level_index.level:02d}: matched "
+            f"{int(level_assignment_counts[level_index.level]):,} point-anchor "
+            f"assignments to {level_index.anchor_count:,} anchors"
         )
 
-    if matched_anchor_ids_all:
-        group_ids = np.concatenate(matched_anchor_ids_all, axis=0)
-        point_indices = np.concatenate(matched_point_indices_all, axis=0)
-    else:
-        group_ids = np.zeros((0,), dtype=np.int64)
-        point_indices = np.zeros((0,), dtype=np.int64)
+    anchor_offsets = np.zeros(anchor_xyz.shape[0] + 1, dtype=np.int64)
+    anchor_offsets[1:] = np.cumsum(point_counts, dtype=np.int64)
+    packed_point_indices = fill_packed_point_indices(
+        points_xyz_world,
+        level_indices,
+        init_pos,
+        anchor_offsets,
+        chunk_size=args.point_chunk_size,
+    )
 
-    anchor_offsets, packed_point_indices, point_counts = pack_grouped_indices(
-        group_ids,
-        point_indices,
-        num_groups=anchor_xyz.shape[0],
-        value_dtype=np.int64,
+    points_world = world_points_from_xyz_rgb(
+        points_xyz_world,
+        points_rgb,
+        chunk_size=args.point_chunk_size,
+    )
+    points_norm = normalized_points_from_xyz_rgb(
+        points_xyz_world,
+        points_rgb,
+        norm_params,
+        chunk_size=args.point_chunk_size,
     )
 
     points_norm_path = output_root / "points_norm.npz"
@@ -375,7 +617,13 @@ def main() -> None:
             "points_world_path": str(points_world_path),
             "anchor_count": int(anchor_xyz.shape[0]),
             "point_count": int(points_xyz_world.shape[0]),
+            "source_point_count": int(point_selection["source_point_count"]),
+            "point_selection": point_selection,
+            "point_chunk_size": int(args.point_chunk_size),
             "assignment_count": int(packed_point_indices.shape[0]),
+            "assignment_count_by_level": [
+                int(level_assignment_counts[level]) for level in range(levels)
+            ],
             "voxel_size": voxel_size,
             "fork": fork,
             "levels": levels,

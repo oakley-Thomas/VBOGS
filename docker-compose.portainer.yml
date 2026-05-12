@@ -85,7 +85,7 @@ services:
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
-      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.portainer.yaml}
     volumes:
       - type: bind
         source: /var/run/docker.sock

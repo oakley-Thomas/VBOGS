@@ -1,3 +1,11 @@
+# Explicit local-development overlay for docker-compose.yml.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build
+#
+# Docker Compose also auto-loads docker-compose.override.yml, which mirrors this
+# overlay for the plain `docker compose up` dev workflow.
+
 services:
   vbogs-torch:
     volumes:

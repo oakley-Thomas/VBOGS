@@ -14,6 +14,35 @@ from typing import Any, Dict
 import yaml
 
 
+GAUSSIAN_TYPES = ("implicit3D", "explicit3D")
+IMPLICIT_ONLY_MODEL_KWARGS = ("feat_dim", "view_dim", "appearance_dim", "n_offsets")
+IMPLICIT_ONLY_OPTIM_KEYS = (
+    "mlp_opacity_lr_init",
+    "mlp_opacity_lr_final",
+    "mlp_opacity_lr_delay_mult",
+    "mlp_opacity_lr_max_steps",
+    "mlp_cov_lr_init",
+    "mlp_cov_lr_final",
+    "mlp_cov_lr_delay_mult",
+    "mlp_cov_lr_max_steps",
+    "mlp_color_lr_init",
+    "mlp_color_lr_final",
+    "mlp_color_lr_delay_mult",
+    "mlp_color_lr_max_steps",
+    "appearance_lr_init",
+    "appearance_lr_final",
+    "appearance_lr_delay_mult",
+    "appearance_lr_max_steps",
+)
+EXPLICIT_OPTIM_OVERRIDES: Dict[str, Any] = {
+    "feature_lr": 0.0025,
+    "opacity_lr": 0.05,
+    "scaling_lr": 0.005,
+    "rotation_lr": 0.001,
+    "lambda_dreg": 0.0,
+}
+
+
 LOCAL_16GB_CONFIG: Dict[str, Any] = {
     "model_params": {
         "model_config": {
@@ -164,10 +193,22 @@ def parse_args() -> argparse.Namespace:
         help="Held-out test frame cadence for eval mode.",
     )
     parser.add_argument(
+        "--gaussian-type",
+        choices=GAUSSIAN_TYPES,
+        default="implicit3D",
+        help=(
+            "Octree-AnyGS Gaussian representation. `implicit3D` is the neural "
+            "default; `explicit3D` uses explicit SH 3D Gaussians."
+        ),
+    )
+    parser.add_argument(
         "--feat-dim",
         type=int,
         default=16,
-        help="Anchor feature dimension. Lower values reduce VRAM pressure.",
+        help=(
+            "Implicit neural anchor feature dimension. Lower values reduce VRAM "
+            "pressure. Ignored for --gaussian-type explicit3D."
+        ),
     )
     parser.add_argument(
         "--base-layer",
@@ -210,8 +251,30 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def apply_gaussian_type_config(cfg: Dict[str, Any], gaussian_type: str) -> None:
+    if gaussian_type == "implicit3D":
+        return
+    if gaussian_type != "explicit3D":
+        raise ValueError(f"Unknown Gaussian type: {gaussian_type}")
+
+    model_kwargs = cfg["model_params"]["model_config"]["kwargs"]
+    model_kwargs["gs_attr"] = "explicit3D"
+    model_kwargs["color_attr"] = "SH2"
+    model_kwargs["render_mode"] = "RGB"
+    for key in IMPLICIT_ONLY_MODEL_KWARGS:
+        model_kwargs.pop(key, None)
+
+    optim_params = cfg["optim_params"]
+    for key in IMPLICIT_ONLY_OPTIM_KEYS:
+        optim_params.pop(key, None)
+    optim_params.update(EXPLICIT_OPTIM_OVERRIDES)
+
+
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     cfg = copy.deepcopy(LOCAL_16GB_CONFIG)
+    gaussian_type = getattr(args, "gaussian_type", "implicit3D")
+    apply_gaussian_type_config(cfg, gaussian_type)
+
     scene_name = args.scene_name or args.dataset_path.name
     model_params = cfg["model_params"]
     model_params["source_path"] = str(args.dataset_path.resolve())
@@ -227,18 +290,23 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params["llffhold"] = args.llffhold
 
     model_kwargs = model_params["model_config"]["kwargs"]
-    model_kwargs["feat_dim"] = args.feat_dim
+    if gaussian_type == "implicit3D":
+        model_kwargs["feat_dim"] = args.feat_dim
     model_kwargs["base_layer"] = args.base_layer
     model_kwargs["visible_threshold"] = args.visible_threshold
 
     optim_params = cfg["optim_params"]
     optim_params["iterations"] = args.iterations
-    optim_params["position_lr_max_steps"] = args.iterations
-    optim_params["offset_lr_max_steps"] = args.iterations
-    optim_params["mlp_opacity_lr_max_steps"] = args.iterations
-    optim_params["mlp_cov_lr_max_steps"] = args.iterations
-    optim_params["mlp_color_lr_max_steps"] = args.iterations
-    optim_params["appearance_lr_max_steps"] = args.iterations
+    for key in (
+        "position_lr_max_steps",
+        "offset_lr_max_steps",
+        "mlp_opacity_lr_max_steps",
+        "mlp_cov_lr_max_steps",
+        "mlp_color_lr_max_steps",
+        "appearance_lr_max_steps",
+    ):
+        if key in optim_params:
+            optim_params[key] = args.iterations
     optim_params["update_until"] = min(args.iterations - 1000, optim_params["update_until"])
     return cfg
 

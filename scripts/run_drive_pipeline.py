@@ -67,6 +67,7 @@ CONFIG_KEY_MAP = {
         "resolution": "resolution",
         "iterations": "iterations",
         "llffhold": "llffhold",
+        "gaussian_type": "gaussian_type",
         "feat_dim": "feat_dim",
         "base_layer": "base_layer",
         "visible_threshold": "visible_threshold",
@@ -81,6 +82,8 @@ CONFIG_KEY_MAP = {
     "bucket": {
         "model_path": "model_path",
         "bucket_iteration": "bucket_iteration",
+        "point_chunk_size": "bucket_point_chunk_size",
+        "max_points": "bucket_max_points",
     },
     "fit": {
         "jax_device": "jax_device",
@@ -316,6 +319,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     train_group.add_argument("--resolution", type=int, default=4)
     train_group.add_argument("--iterations", type=int, default=15000)
     train_group.add_argument("--llffhold", type=int, default=8)
+    train_group.add_argument(
+        "--gaussian-type",
+        choices=("implicit3D", "explicit3D"),
+        default="implicit3D",
+        help=(
+            "Octree-AnyGS Gaussian representation. `implicit3D` is the neural "
+            "default; `explicit3D` uses explicit SH 3D Gaussians."
+        ),
+    )
     train_group.add_argument("--feat-dim", type=int, default=16)
     train_group.add_argument("--base-layer", type=int, default=9)
     train_group.add_argument("--visible-threshold", type=float, default=0.02)
@@ -338,6 +350,18 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     bucket_group = parser.add_argument_group("anchor bucketing")
     bucket_group.add_argument("--model-path", type=Path, default=None)
     bucket_group.add_argument("--bucket-iteration", type=int, default=-1)
+    bucket_group.add_argument(
+        "--bucket-point-chunk-size",
+        type=int,
+        default=1_000_000,
+        help="Number of stereo points processed per bucketing chunk.",
+    )
+    bucket_group.add_argument(
+        "--bucket-max-points",
+        type=int,
+        default=0,
+        help="Optional deterministic cap on points used by bucket_points.py; 0 keeps all.",
+    )
 
     fit_group = parser.add_argument_group("VBGS anchor fitting")
     fit_group.add_argument("--jax-device", type=int, default=0)
@@ -618,6 +642,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.iterations),
         "--llffhold",
         str(args.llffhold),
+        "--gaussian-type",
+        args.gaussian_type,
         "--feat-dim",
         str(args.feat_dim),
         "--base-layer",
@@ -653,6 +679,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.drive,
         "--iteration",
         str(args.bucket_iteration),
+        "--point-chunk-size",
+        str(args.bucket_point_chunk_size),
+        "--max-points",
+        str(args.bucket_max_points),
         *maybe_option("--model-path", args.model_path),
     )
 

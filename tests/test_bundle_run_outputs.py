@@ -1,4 +1,5 @@
 import json
+import zipfile
 
 import numpy as np
 
@@ -60,15 +61,24 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     assert (run_output_dir / "prepared" / "metadata.json").exists()
     assert (run_output_dir / "octree" / "config.yaml").exists()
     assert (run_output_dir / "run_manifest.json").exists()
+    archive_path = run_output_dir.parent / f"{drive}.zip"
+    assert archive_path.exists()
 
     saved_manifest = json.loads((run_output_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert saved_manifest["drive"] == drive
+    assert saved_manifest["archive"]["path"] == str(archive_path.resolve())
     assert saved_manifest["frame_counts"]["num_frames"] == 1000
     assert saved_manifest["frame_counts"]["selected_frame_count"] == 1000
     assert saved_manifest["stereo"]["num_points"] == 2
     assert saved_manifest["stage_outputs"]["rendered_views"] == str((run_output_dir / "views").resolve())
     assert saved_manifest["source_paths"]["octree_model_path"] == str(model_path.resolve())
     assert manifest["missing_optional_artifacts"] == []
+    assert manifest["archive"]["path"] == str(archive_path.resolve())
+
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    assert f"{drive}/run_manifest.json" in names
+    assert f"{drive}/pointclouds/stereo/points_world.npz" in names
 
 
 def test_bundle_run_outputs_records_optional_missing_ply(tmp_path):

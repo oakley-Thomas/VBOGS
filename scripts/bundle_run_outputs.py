@@ -193,6 +193,27 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def default_archive_path(run_output_dir: Path) -> Path:
+    run_output_dir = run_output_dir.resolve()
+    return run_output_dir.parent / f"{run_output_dir.name}.zip"
+
+
+def archive_run_output_dir(run_output_dir: Path) -> Path:
+    run_output_dir = run_output_dir.resolve()
+    if not run_output_dir.is_dir():
+        raise NotADirectoryError(f"Run output directory not found: {run_output_dir}")
+
+    archive_path = default_archive_path(run_output_dir)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    created_path = shutil.make_archive(
+        str(archive_path.with_suffix("")),
+        "zip",
+        root_dir=run_output_dir.parent,
+        base_dir=run_output_dir.name,
+    )
+    return Path(created_path).resolve()
+
+
 def bundle_run_outputs(
     *,
     drive: str,
@@ -292,6 +313,11 @@ def bundle_run_outputs(
         "drive": drive,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "run_output_dir": str(run_output_dir),
+        "archive": {
+            "format": "zip",
+            "path": str(default_archive_path(run_output_dir)),
+            "base_dir": run_output_dir.name,
+        },
         "frame_counts": summarize_prepared(prepared_metadata),
         "stereo": summarize_stereo(points_dir / "points_world_metadata.json"),
         "source_paths": {
@@ -313,6 +339,8 @@ def bundle_run_outputs(
         ),
     }
     write_json(run_output_dir / "run_manifest.json", manifest)
+    archive_path = archive_run_output_dir(run_output_dir)
+    manifest["archive"]["path"] = str(archive_path)
     return manifest
 
 
@@ -333,6 +361,7 @@ def main() -> None:
         nbv_output_dir=args.nbv_output_dir,
     )
     print(f"Wrote {run_output_dir / 'run_manifest.json'}")
+    print(f"Wrote {manifest['archive']['path']}")
     print(
         "Bundle summary: "
         f"{len(manifest['copied_artifacts'])} copied, "

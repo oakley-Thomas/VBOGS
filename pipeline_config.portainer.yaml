@@ -1,8 +1,7 @@
-# Top-level VBOGS pipeline configuration.
+# Portainer pipeline configuration.
 #
-# `scripts/run_drive_pipeline.py` loads this file by default. Values here become
-# CLI defaults; anything passed through `VBOGS_PIPELINE_ARGS` or direct CLI flags
-# still wins.
+# Use this with `docker-compose.portainer.yml`. Outputs are written to the
+# stack-managed `vbogs-outputs` Docker volume at `/workspace/VBOGS/outputs`.
 
 pipeline:
   drive: 2013_05_28_drive_0007_sync

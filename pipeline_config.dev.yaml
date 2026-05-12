@@ -1,8 +1,8 @@
-# Top-level VBOGS pipeline configuration.
+# Local development pipeline configuration.
 #
-# `scripts/run_drive_pipeline.py` loads this file by default. Values here become
-# CLI defaults; anything passed through `VBOGS_PIPELINE_ARGS` or direct CLI flags
-# still wins.
+# Use this from the Docker Compose dev stack. The dev compose overlay bind-mounts
+# this checkout's `outputs/` directory at `/workspace/VBOGS/outputs`, so
+# `outputs/v1_0/<drive>/` appears on the local filesystem.
 
 pipeline:
   drive: 2013_05_28_drive_0007_sync
@@ -47,7 +47,9 @@ bucket:
   model_path: null
   bucket_iteration: -1
   point_chunk_size: 1000000
-  max_points: 0
+  # Dev-machine cap to keep M4 bucketing/fitting tractable when stereo exports
+  # dense 100M-point clouds. Use 0 to keep every stereo point.
+  max_points: 10000000
 
 fit:
   jax_device: 0
