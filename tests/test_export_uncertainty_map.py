@@ -1,4 +1,5 @@
 import numpy as np
+from matplotlib import colormaps
 
 from scripts.export_uncertainty_map import (
     PLY_DTYPE,
@@ -9,6 +10,11 @@ from scripts.export_uncertainty_map import (
     export_uncertainty_map,
     uncertainty_to_rgb,
 )
+
+
+def turbo_rgb(values):
+    mapped = colormaps["turbo"](np.asarray(values, dtype=np.float32))[:, :3]
+    return np.rint(mapped * 255.0).astype(np.uint8)
 
 
 def read_binary_ply(path):
@@ -33,7 +39,7 @@ def read_trajectory_ply(path):
     return header, vertices, edges
 
 
-def test_uncertainty_to_rgb_maps_low_blue_and_high_red():
+def test_uncertainty_to_rgb_matches_turbo_colormap():
     rgb = uncertainty_to_rgb(
         np.array([0.0, 5.0, 10.0], dtype=np.float32),
         np.array([True, True, True]),
@@ -41,8 +47,7 @@ def test_uncertainty_to_rgb_maps_low_blue_and_high_red():
         vmax=10.0,
     )
 
-    assert rgb[0].tolist() == [0, 0, 255]
-    assert rgb[2].tolist() == [255, 0, 0]
+    assert np.array_equal(rgb, turbo_rgb([0.0, 0.5, 1.0]))
 
 
 def test_uncertainty_to_rgb_clips_outside_scale():
@@ -53,13 +58,11 @@ def test_uncertainty_to_rgb_clips_outside_scale():
         vmax=10.0,
     )
 
-    assert rgb[0].tolist() == [0, 0, 255]
-    assert rgb[1].tolist() == [0, 0, 255]
-    assert rgb[2].tolist() == [255, 0, 0]
-    assert rgb[3].tolist() == [255, 0, 0]
+    expected = turbo_rgb([0.0, 0.0, 1.0, 1.0])
+    assert np.array_equal(rgb, expected)
 
 
-def test_unobserved_anchor_is_red_even_when_numeric_value_equals_observed_max():
+def test_unobserved_anchor_uses_turbo_value_instead_of_special_color():
     rgb = uncertainty_to_rgb(
         np.array([0.0, 10.0, 10.0], dtype=np.float32),
         np.array([True, True, False]),
@@ -67,8 +70,8 @@ def test_unobserved_anchor_is_red_even_when_numeric_value_equals_observed_max():
         vmax=20.0,
     )
 
-    assert rgb[1].tolist() == [128, 0, 128]
-    assert rgb[2].tolist() == [255, 0, 0]
+    assert rgb[1].tolist() == turbo_rgb([0.5])[0].tolist()
+    assert rgb[2].tolist() == turbo_rgb([0.5])[0].tolist()
 
 
 def test_choose_color_scale_uses_observed_percentiles():
@@ -147,9 +150,12 @@ def test_export_uncertainty_map_writes_all_and_lod_plys(tmp_path):
     assert "property uchar is_observed" in header
     assert rows.shape == (4,)
     assert rows["anchor_id"].tolist() == [0, 1, 2, 3]
-    assert rows["red"][1] == 255
-    assert rows["green"][1] == 0
-    assert rows["blue"][1] == 0
+    expected_unobserved = turbo_rgb([1.0])[0]
+    assert rows["red"][1] == expected_unobserved[0]
+    assert rows["green"][1] == expected_unobserved[1]
+    assert rows["blue"][1] == expected_unobserved[2]
+    assert metadata["color_scale"]["colormap"] == "turbo"
+    assert metadata["color_scale"]["unobserved_color"] is None
     assert rows["cell_size"].tolist() == [8.0, 4.0, 4.0, 2.0]
 
     _, lod_01_rows = read_binary_ply(lod_01_path)

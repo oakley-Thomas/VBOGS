@@ -117,6 +117,7 @@ CONFIG_KEY_MAP = {
     },
     "render": {
         "split": "render_split",
+        "resolution": "render_resolution",
         "max_views": "render_max_views",
         "colormap": "render_colormap",
         "vmin": "render_vmin",
@@ -483,6 +484,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Camera split rendered by the final diagnostic stage.",
     )
     render_group.add_argument(
+        "--render-resolution",
+        type=int,
+        default=2,
+        help=(
+            "Octree-AnyGS image divisor/target width for diagnostic renders. "
+            "Smaller divisors produce higher-resolution views."
+        ),
+    )
+    render_group.add_argument(
         "--render-max-views",
         type=int,
         default=0,
@@ -770,6 +780,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.drive,
         "--split",
         args.render_split,
+        *maybe_option("--resolution", args.render_resolution),
         "--max-views",
         str(args.render_max_views),
         "--colormap",

@@ -33,6 +33,8 @@ def test_run_output_root_routes_v1_stage_outputs():
     assert by_name["map-viz"].service == TORCH_SERVICE
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/pointclouds/anchors" in by_name["map-viz"].command
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/views" in by_name["render"].command
+    render_resolution_index = by_name["render"].command.index("--resolution")
+    assert by_name["render"].command[render_resolution_index + 1] == "2"
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/nbv" in by_name["nbv"].command
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/nbv/viz" in by_name["nbv-viz"].command
     assert "outputs/v1_0/2013_05_28_drive_0007_sync" in by_name["bundle"].command
@@ -54,6 +56,22 @@ def test_run_output_root_keeps_explicit_stage_output_override():
 
     assert "outputs/custom_views" in render_step.command
     assert "outputs/v1_0/drive_sync/views" not in render_step.command
+
+
+def test_render_step_forwards_resolution_override():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--render-resolution",
+            "1",
+        ]
+    )
+    render_step = next(step for step in build_steps(args) if step.name == "render")
+
+    resolution_index = render_step.command.index("--resolution")
+    assert render_step.command[resolution_index + 1] == "1"
 
 
 def test_train_step_forwards_gaussian_type():
@@ -107,6 +125,7 @@ def test_environment_pipeline_configs_are_loadable():
         assert defaults["drive"] == "2013_05_28_drive_0007_sync"
         assert defaults["run_output_root"] == "outputs/v1_0"
         assert defaults["gaussian_type"] == "explicit3D"
+        assert defaults["render_resolution"] == 2
         assert defaults["bucket_point_chunk_size"] == 1000000
     assert load_config_defaults(REPO_ROOT / "pipeline_config.dev.yaml")["bucket_max_points"] == 10000000
     assert load_config_defaults(REPO_ROOT / "pipeline_config.portainer.yaml")["bucket_max_points"] == 0

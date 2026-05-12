@@ -69,6 +69,9 @@ uncertainty:
 
 render:
   split: both
+  # Render diagnostics at half-resolution KITTI width/height. This is sharper
+  # than the conservative training divisor of 4, but lighter than full-res.
+  resolution: 2
   # 0 means render every camera in the selected split. Use 1 for a smoke run.
   max_views: 0
   colormap: turbo

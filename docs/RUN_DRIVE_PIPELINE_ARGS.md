@@ -204,6 +204,7 @@ directory is `outputs/v1_0/<drive>/views`.
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--render-split {train,test,both}` | `both` | Camera split to render. |
+| `--render-resolution RENDER_RESOLUTION` | Config: `2` | Octree-AnyGS image divisor/target width for diagnostic renders. Smaller divisors produce higher-resolution views; `1` is full input resolution. |
 | `--render-max-views RENDER_MAX_VIEWS` | `0` | Per-split cap for render smoke tests. `0` renders all views. |
 | `--render-colormap RENDER_COLORMAP` | `turbo` | Matplotlib colormap for uncertainty heatmaps. |
 | `--render-vmin RENDER_VMIN` | Auto | Lower bound for uncertainty colormap normalization. |
@@ -264,7 +265,7 @@ The default config file uses section names that map to CLI arguments:
 | `inspect` | `top_k`, `sample_points`, `anchor_id`, `export_ply` |
 | `uncertainty` | `u_max`, `no_histogram` |
 | `map_viz` | `output_dir`, `vmin`, `vmax`, `percentile_low`, `percentile_high`, `observed_only`, `no_split_levels`, `no_trajectory` |
-| `render` | `split`, `max_views`, `colormap`, `vmin`, `vmax`, `output_dir` |
+| `render` | `split`, `resolution`, `max_views`, `colormap`, `vmin`, `vmax`, `output_dir` |
 | `nbv` | `candidate_source`, `max_candidates`, `top_k`, `save_top_images`, `force_all_levels`, `output_dir` |
 | `outputs` | `run_root` |
 | `orchestration` | `compose_command`, `compose_file`, `project_name`, `torch_container`, `jax_container`, `use_service_labels`, `label_project` |

@@ -20,6 +20,7 @@ from vbogs.io import save_json
 from vbogs.data_layout import resolve_kitti360_path
 
 DEFAULT_DRIVE = "2013_05_28_drive_0008_sync"
+DEFAULT_COLORMAP = "turbo"
 PLY_DTYPE = np.dtype(
     [
         ("x", "<f4"),
@@ -88,6 +89,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
     parser.add_argument(
+        "--colormap",
+        default=DEFAULT_COLORMAP,
+        help="Matplotlib colormap used for anchor RGB values.",
+    )
+    parser.add_argument(
         "--percentile-low",
         type=float,
         default=2.0,
@@ -104,7 +110,10 @@ def parse_args() -> argparse.Namespace:
         "--include-unobserved",
         dest="observed_only",
         action="store_false",
-        help="Include unobserved anchors and paint them red. This is the default.",
+        help=(
+            "Include unobserved anchors. They use their uncertainty value on the colormap. "
+            "This is the default."
+        ),
     )
     visibility.add_argument(
         "--observed-only",
@@ -251,6 +260,7 @@ def uncertainty_to_rgb(
     *,
     vmin: float,
     vmax: float,
+    colormap: str = DEFAULT_COLORMAP,
 ) -> np.ndarray:
     if not vmin < vmax:
         raise ValueError(f"Expected vmin < vmax, got {vmin} >= {vmax}")
@@ -258,12 +268,16 @@ def uncertainty_to_rgb(
     t = (np.asarray(uncertainty, dtype=np.float32) - np.float32(vmin)) / np.float32(vmax - vmin)
     t = np.clip(t, 0.0, 1.0)
     t = np.where(np.isfinite(t), t, 1.0)
+    observed_mask = np.asarray(is_observed, dtype=bool)
+    if observed_mask.shape != t.shape:
+        raise ValueError(
+            f"`is_observed` shape {observed_mask.shape} does not match uncertainty shape {t.shape}"
+        )
 
-    rgb = np.zeros((t.shape[0], 3), dtype=np.uint8)
-    rgb[:, 0] = np.rint(t * 255.0).astype(np.uint8)
-    rgb[:, 2] = np.rint((1.0 - t) * 255.0).astype(np.uint8)
-    rgb[~is_observed] = np.array([255, 0, 0], dtype=np.uint8)
-    return rgb
+    from matplotlib import colormaps
+
+    mapped = colormaps[colormap](t)[..., :3]
+    return np.rint(mapped * 255.0).astype(np.uint8)
 
 
 def build_vertex_array(
@@ -467,6 +481,7 @@ def export_uncertainty_map(
     percentile_high: float,
     observed_only: bool,
     split_levels: bool,
+    colormap: str = DEFAULT_COLORMAP,
     trajectory_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pts_path = bucket_root / "pts_by_anchor.npz"
@@ -512,6 +527,7 @@ def export_uncertainty_map(
         is_observed,
         vmin=scale_vmin,
         vmax=scale_vmax,
+        colormap=colormap,
     )
 
     if observed_only:
@@ -575,10 +591,11 @@ def export_uncertainty_map(
         "color_scale": {
             "vmin": scale_vmin,
             "vmax": scale_vmax,
+            "colormap": colormap,
             "source": scale_source,
             "percentile_low": percentile_low,
             "percentile_high": percentile_high,
-            "unobserved_color": [255, 0, 0],
+            "unobserved_color": None,
         },
         "all_summary": summarize(uncertainty),
         "observed_summary": summarize(uncertainty[is_observed]),
@@ -626,6 +643,7 @@ def main() -> None:
         percentile_high=args.percentile_high,
         observed_only=args.observed_only,
         split_levels=not args.no_split_levels,
+        colormap=args.colormap,
         trajectory_metadata=trajectory_metadata,
     )
 
@@ -636,7 +654,8 @@ def main() -> None:
     scale = metadata["color_scale"]
     print(
         "Color scale: "
-        f"vmin={scale['vmin']:.6g} vmax={scale['vmax']:.6g} source={scale['source']}"
+        f"vmin={scale['vmin']:.6g} vmax={scale['vmax']:.6g} "
+        f"colormap={scale['colormap']} source={scale['source']}"
     )
 
 
