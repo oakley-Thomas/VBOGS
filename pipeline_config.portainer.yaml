@@ -26,13 +26,15 @@ prepare:
 
 train:
   gpu: "0"
-  resolution: 4
-  iterations: 30000
+  # High-quality 48 GB VRAM profile: half-res training, a finer octree,
+  # lower visibility pruning, and a longer Octree-AnyGS optimization run.
+  resolution: 2
+  iterations: 90000
   llffhold: 8
   gaussian_type: explicit3D
   feat_dim: 16
-  base_layer: 9
-  visible_threshold: 0.02
+  base_layer: 10
+  visible_threshold: 0.01
   write_config_only: false
 
 stereo:
