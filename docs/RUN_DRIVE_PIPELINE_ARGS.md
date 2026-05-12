@@ -9,7 +9,7 @@ Common full-pipeline command from inside `vbogs-pipeline`:
 
 ```bash
 python scripts/run_drive_pipeline.py \
-  --drive 2013_05_28_drive_0007_sync \
+  --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
