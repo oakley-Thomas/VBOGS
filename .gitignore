@@ -3,6 +3,10 @@ data/*
 generated_configs/
 outputs/*
 !outputs/.gitkeep
+!outputs/experiments/
+outputs/experiments/*
+!outputs/experiments/.gitkeep
+!outputs/experiments/*.yaml
 __pycache__/
 *.py[cod]
 .env

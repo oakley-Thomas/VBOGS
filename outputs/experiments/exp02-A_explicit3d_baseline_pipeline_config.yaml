@@ -1,8 +1,4 @@
-# Top-level VBOGS pipeline configuration.
-#
-# `scripts/run_drive_pipeline.py` loads this file by default. Values here become
-# CLI defaults; anything passed through `VBOGS_PIPELINE_ARGS` or direct CLI flags
-# still wins.
+# Explicit 3D baseline experiment: conservative local full pipeline.
 
 pipeline:
   drive: 2013_05_28_drive_0007_sync
@@ -11,10 +7,9 @@ pipeline:
   dry_run: false
 
 outputs:
-  run_root: outputs/v1_0
+  run_root: outputs/experiments/exp02_explicit3d_baseline
 
 inputs:
-  # Leave null to use the repo/container default KITTI-360 layout.
   raw_root: null
   poses_root: null
   calibration_dir: null
@@ -30,7 +25,7 @@ train:
   resolution: 4
   iterations: 120000
   llffhold: 8
-  gaussian_type: neural
+  gaussian_type: explicit3D
   feat_dim: 16
   base_layer: 9
   visible_threshold: 0.02
@@ -43,11 +38,10 @@ stereo:
   write_ply: true
 
 bucket:
-  # Leave null to use the latest Octree-AnyGS run under /data/OCTREE-ANYGS/<drive>.
   model_path: null
   bucket_iteration: -1
   point_chunk_size: 1000000
-  max_points: 0
+  max_points: 10000000
 
 fit:
   jax_device: 0
@@ -63,16 +57,12 @@ inspect:
   export_ply: null
 
 uncertainty:
-  # Leave null to assign unobserved anchors the maximum finite observed U.
   u_max: null
   no_histogram: false
 
 render:
   split: both
-  # Render diagnostics at half-resolution KITTI width/height. This is sharper
-  # than the conservative training divisor of 4, but lighter than full-res.
-  resolution: 2
-  # 0 means render every camera in the selected split. Use 1 for a smoke run.
+  resolution: 1
   max_views: 0
   colormap: turbo
   vmin: null
