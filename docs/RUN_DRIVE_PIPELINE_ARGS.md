@@ -114,6 +114,7 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | `--feat-dim FEAT_DIM` | `16` | Neural anchor feature dimension. Lower values reduce VRAM pressure. Ignored for `explicit3D`. |
 | `--base-layer BASE_LAYER` | `9` | LoD base layer. Lower values reduce anchor count and memory. |
 | `--visible-threshold VISIBLE_THRESHOLD` | `0.02` | LoD pruning visibility threshold. |
+| `--train-port TRAIN_PORT` | Auto | Octree-AnyGS network GUI port. The wrapper defaults to `6009 + GPU index`, so GPU 1 uses `6010`. |
 | `--write-config-only` | `false` | Generate the Octree-AnyGS YAML config and skip training. |
 
 ## `stereo`
@@ -258,7 +259,7 @@ The default config file uses section names that map to CLI arguments:
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run`, `skip_up` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
-| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `write_config_only` |
+| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `vmap_group_size`, `log_every`, `max_observed_anchors` |

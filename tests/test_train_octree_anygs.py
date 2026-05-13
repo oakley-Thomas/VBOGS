@@ -1,6 +1,6 @@
 import argparse
 
-from scripts.train_octree_anygs import build_config
+from scripts.train_octree_anygs import build_config, resolve_gui_port
 
 
 def make_args(tmp_path, *, gaussian_type="implicit3D"):
@@ -16,6 +16,7 @@ def make_args(tmp_path, *, gaussian_type="implicit3D"):
         feat_dim=12,
         base_layer=8,
         visible_threshold=0.03,
+        port=None,
     )
 
 
@@ -55,3 +56,11 @@ def test_build_config_can_select_explicit_3d_gaussians(tmp_path):
     assert optim_params["lambda_dreg"] == 0.0
     assert "mlp_opacity_lr_init" not in optim_params
     assert "mlp_color_lr_init" not in optim_params
+
+
+def test_resolve_gui_port_offsets_by_gpu_index():
+    assert resolve_gui_port("0", None) == 6009
+    assert resolve_gui_port("1", None) == 6010
+    assert resolve_gui_port("-1", None) == 6009
+    assert resolve_gui_port("cuda:1", None) == 6009
+    assert resolve_gui_port("1", 6200) == 6200

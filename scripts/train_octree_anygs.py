@@ -228,6 +228,15 @@ def parse_args() -> argparse.Namespace:
         help="GPU id passed through to Octree-AnyGS/train.py.",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            "Network GUI port passed through to Octree-AnyGS/train.py. "
+            "Defaults to 6009 + GPU index for nonnegative integer GPU ids."
+        ),
+    )
+    parser.add_argument(
         "--write-config-only",
         action="store_true",
         help="Generate the config but do not launch training.",
@@ -324,6 +333,20 @@ def write_config(path: Path, cfg: Dict[str, Any]) -> None:
         yaml.safe_dump(cfg, handle, sort_keys=False)
 
 
+def parse_gpu_index(gpu: str) -> int:
+    try:
+        return int(gpu)
+    except ValueError:
+        return -1
+
+
+def resolve_gui_port(gpu: str, explicit_port: int | None) -> int:
+    if explicit_port is not None:
+        return explicit_port
+    gpu_index = parse_gpu_index(gpu)
+    return 6009 + gpu_index if gpu_index >= 0 else 6009
+
+
 def main() -> None:
     args = parse_args()
     cfg = build_config(args)
@@ -342,10 +365,7 @@ def main() -> None:
     if not args.skip_stack_check:
         check_script = Path(__file__).resolve().with_name("check_torch_stack.py")
         device_index = 0
-        try:
-            parsed_gpu = int(args.gpu)
-        except ValueError:
-            parsed_gpu = -1
+        parsed_gpu = parse_gpu_index(args.gpu)
         if parsed_gpu >= 0:
             device_index = parsed_gpu
         check_cmd = [
@@ -366,6 +386,8 @@ def main() -> None:
         str(config_path.resolve()),
         "--gpu",
         str(args.gpu),
+        "--port",
+        str(resolve_gui_port(args.gpu, args.port)),
     ]
     print("Launching:", " ".join(cmd))
     subprocess.run(cmd, cwd=str(octree_root.parent), check=True)

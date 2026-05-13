@@ -90,6 +90,22 @@ def test_train_step_forwards_gaussian_type():
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
 
 
+def test_train_step_forwards_explicit_port_override():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--train-port",
+            "6010",
+        ]
+    )
+    train_step = next(step for step in build_steps(args) if step.name == "train")
+
+    port_index = train_step.command.index("--port")
+    assert train_step.command[port_index + 1] == "6010"
+
+
 def test_config_default_sets_gaussian_type():
     parser = build_parser({"gaussian_type": "explicit3D"})
     args = parser.parse_args(["--drive", "drive_sync"])
@@ -127,6 +143,7 @@ def test_environment_pipeline_configs_are_loadable():
         assert defaults["gaussian_type"] == "explicit3D"
         assert defaults["render_resolution"] == 2
         assert defaults["bucket_point_chunk_size"] == 1000000
+        assert "train_port" not in defaults
     assert load_config_defaults(REPO_ROOT / "pipeline_config.dev.yaml")["bucket_max_points"] == 10000000
     assert load_config_defaults(REPO_ROOT / "pipeline_config.portainer.yaml")["bucket_max_points"] == 0
 

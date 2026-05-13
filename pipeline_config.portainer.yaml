@@ -26,6 +26,9 @@ prepare:
 
 train:
   gpu: "0"
+  # Leave null to use 6009 + GPU index, so concurrent GPU 0/GPU 1 training
+  # processes bind different Octree-AnyGS GUI ports.
+  port: null
   # High-quality 48 GB VRAM profile: half-res training, a finer octree,
   # lower visibility pruning, and a longer Octree-AnyGS optimization run.
   resolution: 2

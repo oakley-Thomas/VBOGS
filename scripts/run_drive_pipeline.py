@@ -71,6 +71,7 @@ CONFIG_KEY_MAP = {
         "feat_dim": "feat_dim",
         "base_layer": "base_layer",
         "visible_threshold": "visible_threshold",
+        "port": "train_port",
         "write_config_only": "write_config_only",
     },
     "stereo": {
@@ -332,6 +333,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     train_group.add_argument("--feat-dim", type=int, default=16)
     train_group.add_argument("--base-layer", type=int, default=9)
     train_group.add_argument("--visible-threshold", type=float, default=0.02)
+    train_group.add_argument(
+        "--train-port",
+        type=int,
+        default=None,
+        help=(
+            "Octree-AnyGS network GUI port for training. Defaults in the wrapper "
+            "to 6009 + GPU index."
+        ),
+    )
     train_group.add_argument(
         "--write-config-only",
         action="store_true",
@@ -660,6 +670,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.base_layer),
         "--visible-threshold",
         str(args.visible_threshold),
+        *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
     )
 
