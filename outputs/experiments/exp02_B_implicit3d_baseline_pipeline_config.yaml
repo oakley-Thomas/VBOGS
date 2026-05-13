@@ -34,7 +34,7 @@ train:
 stereo:
   matcher: sgbm
   pixel_step: 1
-  max_points_per_frame: 100000
+  max_points_per_frame: 300000
   write_ply: true
 
 bucket:

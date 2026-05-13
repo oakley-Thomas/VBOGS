@@ -47,7 +47,7 @@ When deploying the stack using Portainer's web interface
 ### Code updates and Git Repositories
 The VBOGS codebase is configured as a Git Repository. If you would like to try out a feature branch, run this script inside of the vbogs-pipeline container to update the stack.
 ```bash
- <name-of-branch>
+python scripts/update_stack_git_ref.py <name-of-branch>
 ```
 
 ## Usage
@@ -127,5 +127,4 @@ python scripts/run_drive_pipeline.py \
   --render-max-views 2 \
   --use-service-labels
 ```
-
 
