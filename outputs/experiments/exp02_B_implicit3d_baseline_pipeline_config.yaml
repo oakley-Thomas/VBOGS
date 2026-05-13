@@ -7,7 +7,7 @@ pipeline:
   dry_run: false
 
 outputs:
-  run_root: outputs/experiments/exp03_implicit3d_baseline
+  run_root: outputs/experiments/exp02_implicit3d_baseline
 
 inputs:
   raw_root: null
@@ -23,7 +23,7 @@ prepare:
 train:
   gpu: "0"
   resolution: 4
-  iterations: 30000
+  iterations: 120000
   llffhold: 8
   gaussian_type: implicit3D
   feat_dim: 16
