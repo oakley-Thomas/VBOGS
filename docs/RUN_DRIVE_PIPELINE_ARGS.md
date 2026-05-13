@@ -75,6 +75,62 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 | `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. Usually unnecessary inside the stack. |
 | `--skip-up` | `false` | Do not run `docker compose up -d` before executing selected stages. Automatically skipped with `--use-service-labels`. |
 
+The `vbogs-pipeline` service is also GPU-enabled, so after the stack is
+running you can check host GPU visibility from the pipeline container:
+
+```bash
+docker compose exec vbogs-pipeline nvidia-smi
+```
+
+## Google Drive Upload
+
+The pipeline image includes `rclone` and `scripts/upload_google_drive.py`.
+When `VBOGS_GDRIVE_UPLOAD=1`, `scripts/run_pipeline_from_env.py` uploads the
+curated archive after a successful pipeline run. By default that source is:
+
+```text
+outputs/v1_0/<drive>.zip
+```
+
+Recommended service-account setup for a private Google Drive folder:
+
+1. Create a Google service account.
+2. Share the private Drive folder with the service account email.
+3. Copy the folder id from the Drive URL.
+4. Set these stack environment variables:
+
+```bash
+VBOGS_GDRIVE_UPLOAD=1
+VBOGS_GDRIVE_REMOTE=vbogs_gdrive
+VBOGS_GDRIVE_FOLDER_ID=<google-drive-folder-id>
+VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS={"type":"service_account",...}
+```
+
+If you mount the JSON credentials file into the container instead, set:
+
+```bash
+VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE=/run/secrets/vbogs-google-drive-service-account.json
+```
+
+Optional upload controls:
+
+| Environment variable | Description |
+| --- | --- |
+| `VBOGS_GDRIVE_DEST` | Destination path inside the configured remote/root folder. Empty means the folder root. |
+| `VBOGS_GDRIVE_SOURCE` | Override the upload source file or directory. |
+| `VBOGS_GDRIVE_SCOPE` | rclone Drive scope. Defaults to `drive` for service-account uploads. |
+| `VBOGS_GDRIVE_RCLONE_ARGS` | Extra arguments appended to the rclone command, for example `--progress --checksum`. |
+| `VBOGS_GDRIVE_DRY_RUN` | Set to `1` to print the upload command without transferring. |
+
+Manual upload example from inside `vbogs-pipeline`:
+
+```bash
+python scripts/upload_google_drive.py \
+  --config pipeline_config.portainer.yaml \
+  --folder-id <google-drive-folder-id> \
+  --service-account-file /run/secrets/vbogs-google-drive-service-account.json
+```
+
 ## KITTI-360 Inputs
 
 These override the default source-data discovery used by the prep and stereo

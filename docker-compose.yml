@@ -107,15 +107,34 @@ services:
     depends_on:
       - vbogs-torch
       - vbogs-jax
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
       VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
+      VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
+      VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
+      VBOGS_GDRIVE_DEST: ${VBOGS_GDRIVE_DEST:-}
+      VBOGS_GDRIVE_FOLDER_ID: ${VBOGS_GDRIVE_FOLDER_ID:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS:-}
+      VBOGS_GDRIVE_SCOPE: ${VBOGS_GDRIVE_SCOPE:-drive}
+      VBOGS_GDRIVE_SOURCE: ${VBOGS_GDRIVE_SOURCE:-}
+      VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
     volumes:
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
     command:
       - sh
       - -lc

@@ -164,3 +164,6 @@ def test_portainer_compose_uses_portainer_config():
 
     assert "pipeline_config.portainer.yaml" in portainer_compose
     assert "VBOGS_PIPELINE_CONFIG=pipeline_config.portainer.yaml" in stack_env
+    assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_compose
+    assert "VBOGS_GDRIVE_UPLOAD" in portainer_compose
+    assert "target: /workspace/VBOGS/outputs" in portainer_compose
