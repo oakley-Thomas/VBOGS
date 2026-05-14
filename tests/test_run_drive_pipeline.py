@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from scripts.run_drive_pipeline import (
@@ -10,6 +11,16 @@ from scripts.run_drive_pipeline import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def service_block(compose_text: str, service: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(service)}:\n(?P<block>.*?)(?=^  [\w-]+:|\Z)",
+        compose_text,
+        re.M | re.S,
+    )
+    assert match is not None
+    return match.group("block")
 
 
 def test_run_output_root_routes_v1_stage_outputs():
@@ -151,11 +162,43 @@ def test_environment_pipeline_configs_are_loadable():
 def test_dev_compose_binds_local_outputs_and_uses_dev_config():
     dev_compose = (REPO_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
     override_compose = (REPO_ROOT / "docker-compose.override.yml").read_text(encoding="utf-8")
+    dev_pipeline = service_block(dev_compose, "vbogs-pipeline")
+    override_pipeline = service_block(override_compose, "vbogs-pipeline")
 
     assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in dev_compose
     assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_compose
+    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in dev_pipeline
+    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_pipeline
     assert "pipeline_config.dev.yaml" in dev_compose
     assert "pipeline_config.dev.yaml" in override_compose
+
+
+def test_pipeline_image_includes_zip_tools():
+    pipeline_dockerfile = (REPO_ROOT / "docker/pipeline.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "\n    zip \\" in pipeline_dockerfile
+    assert "\n    unzip \\" in pipeline_dockerfile
+
+
+def test_pipeline_compose_mounts_match_shared_stack_volumes():
+    shared_targets = [
+        "/workspace/VBOGS/data",
+        "/workspace/VBOGS/data/KITTI-360",
+        "/workspace/VBOGS/outputs",
+        "/workspace/VBOGS/generated_configs",
+        "/data/COLMAP",
+        "/data/OCTREE-ANYGS",
+    ]
+
+    for compose_name in ("docker-compose.yml", "docker-compose.portainer.yml"):
+        pipeline = service_block(
+            (REPO_ROOT / compose_name).read_text(encoding="utf-8"),
+            "vbogs-pipeline",
+        )
+        for target in shared_targets:
+            assert f"target: {target}" in pipeline
 
 
 def test_portainer_compose_uses_portainer_config():

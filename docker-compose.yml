@@ -129,12 +129,28 @@ services:
       VBOGS_GDRIVE_SOURCE: ${VBOGS_GDRIVE_SOURCE:-}
       VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
     volumes:
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: false
       - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     command:
       - sh
       - -lc
