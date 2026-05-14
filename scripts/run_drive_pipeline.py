@@ -136,6 +136,17 @@ CONFIG_KEY_MAP = {
     "outputs": {
         "run_root": "run_output_root",
     },
+    "upload": {
+        "enabled": "upload_google_drive",
+        "source": "gdrive_source",
+        "remote": "gdrive_remote",
+        "dest": "gdrive_dest",
+        "folder_id": "gdrive_folder_id",
+        "service_account_file": "gdrive_service_account_file",
+        "scope": "gdrive_scope",
+        "rclone_args": "gdrive_rclone_args",
+        "dry_run": "gdrive_dry_run",
+    },
     "orchestration": {
         "compose_command": "compose_command",
         "compose_file": "compose_file",
@@ -284,6 +295,60 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Optional root for curated run outputs. When set, stage outputs are "
             "derived under `<root>/<drive>/`."
         ),
+    )
+    upload_group = parser.add_argument_group("Google Drive upload")
+    upload_group.add_argument(
+        "--upload-google-drive",
+        dest="upload_google_drive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Upload the final curated run zip after all selected stages succeed. "
+            "The default source is `<run-output-root>/<drive>.zip`."
+        ),
+    )
+    upload_group.add_argument(
+        "--gdrive-source",
+        type=Path,
+        default=None,
+        help="Optional file or directory to upload instead of the curated run zip.",
+    )
+    upload_group.add_argument(
+        "--gdrive-remote",
+        default=None,
+        help="rclone remote name. Defaults inside upload_google_drive.py.",
+    )
+    upload_group.add_argument(
+        "--gdrive-dest",
+        default=None,
+        help="Destination path inside the configured Drive remote/root folder.",
+    )
+    upload_group.add_argument(
+        "--gdrive-folder-id",
+        default=None,
+        help="Google Drive folder id used as rclone's root_folder_id.",
+    )
+    upload_group.add_argument(
+        "--gdrive-service-account-file",
+        default=None,
+        help="Path to a Google service-account JSON file inside vbogs-pipeline.",
+    )
+    upload_group.add_argument(
+        "--gdrive-scope",
+        default=None,
+        help="rclone Google Drive scope. Defaults to `drive` in the upload helper.",
+    )
+    upload_group.add_argument(
+        "--gdrive-rclone-args",
+        default=None,
+        help="Extra arguments appended to the rclone command, parsed with shlex.",
+    )
+    upload_group.add_argument(
+        "--gdrive-dry-run",
+        dest="gdrive_dry_run",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print the rclone upload command without transferring files.",
     )
     parser.add_argument(
         "--start-at",
@@ -990,17 +1055,54 @@ def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> 
     run_command([*compose_base(args), "up", "-d", *services], dry_run=args.dry_run)
 
 
+def build_upload_command(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        sys.executable,
+        "scripts/upload_google_drive.py",
+        "--config",
+        str(args.config) if args.config is not None else "",
+        "--drive",
+        args.drive,
+    ]
+
+    if args.run_output_root is not None:
+        cmd.extend(["--run-output-root", str(args.run_output_root)])
+
+    for arg_name, flag in (
+        ("gdrive_source", "--source"),
+        ("gdrive_remote", "--remote"),
+        ("gdrive_dest", "--dest"),
+        ("gdrive_folder_id", "--folder-id"),
+        ("gdrive_service_account_file", "--service-account-file"),
+        ("gdrive_scope", "--scope"),
+        ("gdrive_rclone_args", "--rclone-args"),
+    ):
+        value = getattr(args, arg_name)
+        if value is not None and value != "":
+            cmd.extend([flag, str(value)])
+
+    if args.dry_run or args.gdrive_dry_run:
+        cmd.append("--dry-run")
+    return cmd
+
+
 def main() -> None:
     args = parse_args()
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
     print(f"Drive: {args.drive}")
     print("Stages: " + ", ".join(step.name for step in steps))
+    if args.upload_google_drive:
+        print("Upload: Google Drive after successful stages")
     run_optional_up(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)
         run_command([*exec_prefix(args, step.service), *step.command], dry_run=args.dry_run)
+
+    if args.upload_google_drive:
+        print("\n=== upload (vbogs-pipeline) ===", flush=True)
+        run_command(build_upload_command(args), dry_run=args.dry_run)
 
     print("\nPipeline completed.")
 

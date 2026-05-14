@@ -12,6 +12,17 @@ pipeline:
 outputs:
   run_root: outputs/v1_0
 
+upload:
+  enabled: false
+  source: null
+  remote: vbogs_gdrive
+  dest: null
+  folder_id: null
+  service_account_file: null
+  scope: drive
+  rclone_args: null
+  dry_run: false
+
 inputs:
   # Leave null to use the repo/container default KITTI-360 layout.
   raw_root: null

@@ -85,11 +85,27 @@ docker compose exec vbogs-pipeline nvidia-smi
 ## Google Drive Upload
 
 The pipeline image includes `rclone` and `scripts/upload_google_drive.py`.
-When `VBOGS_GDRIVE_UPLOAD=1`, `scripts/run_pipeline_from_env.py` uploads the
-curated archive after a successful pipeline run. By default that source is:
+Pass `--upload-google-drive` to `scripts/run_drive_pipeline.py`, set
+`upload.enabled: true` in the pipeline config, or set `VBOGS_GDRIVE_UPLOAD=1`
+for `scripts/run_pipeline_from_env.py`. The upload runs after all selected
+stages succeed. By default the source is:
 
 ```text
 outputs/v1_0/<drive>.zip
+```
+
+Config example:
+
+```yaml
+upload:
+  enabled: true
+  remote: vbogs_gdrive
+  dest: experiments
+  folder_id: <google-drive-folder-id>
+  service_account_file: /run/secrets/vbogs-google-drive-service-account.json
+  scope: drive
+  rclone_args: --progress --checksum
+  dry_run: false
 ```
 
 Recommended service-account setup for a private Google Drive folder:
@@ -114,13 +130,16 @@ VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE=/run/secrets/vbogs-google-drive-service-accoun
 
 Optional upload controls:
 
-| Environment variable | Description |
+| CLI/config/env | Description |
 | --- | --- |
-| `VBOGS_GDRIVE_DEST` | Destination path inside the configured remote/root folder. Empty means the folder root. |
-| `VBOGS_GDRIVE_SOURCE` | Override the upload source file or directory. |
-| `VBOGS_GDRIVE_SCOPE` | rclone Drive scope. Defaults to `drive` for service-account uploads. |
-| `VBOGS_GDRIVE_RCLONE_ARGS` | Extra arguments appended to the rclone command, for example `--progress --checksum`. |
-| `VBOGS_GDRIVE_DRY_RUN` | Set to `1` to print the upload command without transferring. |
+| `--gdrive-dest` / `upload.dest` / `VBOGS_GDRIVE_DEST` | Destination path inside the configured remote/root folder. Empty means the folder root. |
+| `--gdrive-source` / `upload.source` / `VBOGS_GDRIVE_SOURCE` | Override the upload source file or directory. |
+| `--gdrive-folder-id` / `upload.folder_id` / `VBOGS_GDRIVE_FOLDER_ID` | Private Drive folder id to use as the rclone root. |
+| `--gdrive-service-account-file` / `upload.service_account_file` / `VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE` | Service-account JSON path inside the pipeline container. |
+| `VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS` | Raw service-account JSON. Keep this in environment/secrets, not in pipeline configs. |
+| `--gdrive-scope` / `upload.scope` / `VBOGS_GDRIVE_SCOPE` | rclone Drive scope. Defaults to `drive` for service-account uploads. |
+| `--gdrive-rclone-args` / `upload.rclone_args` / `VBOGS_GDRIVE_RCLONE_ARGS` | Extra arguments appended to the rclone command, for example `--progress --checksum`. |
+| `--gdrive-dry-run` / `upload.dry_run` / `VBOGS_GDRIVE_DRY_RUN` | Print the rclone upload command without transferring. |
 
 Manual upload example from inside `vbogs-pipeline`:
 

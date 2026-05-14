@@ -102,6 +102,7 @@ services:
       VBOGS_GDRIVE_SCOPE: ${VBOGS_GDRIVE_SCOPE:-drive}
       VBOGS_GDRIVE_SOURCE: ${VBOGS_GDRIVE_SOURCE:-}
       VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
+      VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
     volumes:
       - type: volume
         source: vbogs-data

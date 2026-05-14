@@ -1,9 +1,11 @@
 import re
+import sys
 from pathlib import Path
 
 from scripts.run_drive_pipeline import (
     TORCH_SERVICE,
     build_parser,
+    build_upload_command,
     build_steps,
     load_config_defaults,
     selected_steps,
@@ -124,6 +126,79 @@ def test_config_default_sets_gaussian_type():
 
     gaussian_type_index = train_step.command.index("--gaussian-type")
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
+
+
+def test_config_default_enables_google_drive_upload(tmp_path):
+    config_path = tmp_path / "pipeline_config.yaml"
+    config_path.write_text(
+        """
+pipeline:
+  drive: drive_sync
+outputs:
+  run_root: outputs/custom
+upload:
+  enabled: true
+  dest: experiments
+  folder_id: folder123
+  service_account_file: /run/secrets/gdrive.json
+  dry_run: true
+""",
+        encoding="utf-8",
+    )
+
+    defaults = load_config_defaults(config_path)
+    parser = build_parser(defaults)
+    args = parser.parse_args([])
+
+    assert args.upload_google_drive is True
+    assert args.gdrive_dest == "experiments"
+    assert args.gdrive_folder_id == "folder123"
+    assert args.gdrive_service_account_file == "/run/secrets/gdrive.json"
+
+
+def test_google_drive_upload_command_uses_curated_zip_defaults(monkeypatch):
+    monkeypatch.setenv(
+        "VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS",
+        '{"private_key":"secret"}',
+    )
+    parser = build_parser(
+        {
+            "drive": "drive_sync",
+            "run_output_root": "outputs/custom",
+        }
+    )
+    args = parser.parse_args(
+        [
+            "--config",
+            "pipeline_config.portainer.yaml",
+            "--upload-google-drive",
+            "--gdrive-folder-id",
+            "folder123",
+            "--gdrive-service-account-file",
+            "/run/secrets/gdrive.json",
+            "--gdrive-dest",
+            "runs",
+            "--gdrive-dry-run",
+        ]
+    )
+
+    cmd = build_upload_command(args)
+
+    assert cmd[:4] == [
+        sys.executable,
+        "scripts/upload_google_drive.py",
+        "--config",
+        "pipeline_config.portainer.yaml",
+    ]
+    assert "--drive" in cmd
+    assert cmd[cmd.index("--drive") + 1] == "drive_sync"
+    assert "--run-output-root" in cmd
+    assert cmd[cmd.index("--run-output-root") + 1] == "outputs/custom"
+    assert "--folder-id" in cmd
+    assert "--service-account-file" in cmd
+    assert "--dry-run" in cmd
+    assert "--service-account-credentials" not in cmd
+    assert '{"private_key":"secret"}' not in cmd
 
 
 def test_bucket_step_forwards_point_controls():

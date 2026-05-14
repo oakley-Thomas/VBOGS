@@ -11,6 +11,15 @@ import sys
 
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
+UPLOAD_ENV_OPTIONS = (
+    ("VBOGS_GDRIVE_SOURCE", "--gdrive-source"),
+    ("VBOGS_GDRIVE_REMOTE", "--gdrive-remote"),
+    ("VBOGS_GDRIVE_DEST", "--gdrive-dest"),
+    ("VBOGS_GDRIVE_FOLDER_ID", "--gdrive-folder-id"),
+    ("VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE", "--gdrive-service-account-file"),
+    ("VBOGS_GDRIVE_SCOPE", "--gdrive-scope"),
+    ("VBOGS_GDRIVE_RCLONE_ARGS", "--gdrive-rclone-args"),
+)
 
 
 def truthy(value: str | None) -> bool:
@@ -54,9 +63,7 @@ def upload_cmd(config: str, drive: str | None) -> list[str]:
     return cmd
 
 
-def main() -> None:
-    config = os.environ.get("VBOGS_PIPELINE_CONFIG") or "pipeline_config.yaml"
-    drive = os.environ.get("VBOGS_DRIVE")
+def pipeline_cmd(config: str, drive: str | None) -> list[str]:
     cmd = [
         sys.executable,
         "scripts/run_drive_pipeline.py",
@@ -72,10 +79,20 @@ def main() -> None:
     if extra_args:
         cmd.extend(shlex.split(extra_args))
 
-    run_printed(cmd)
-
     if truthy(os.environ.get("VBOGS_GDRIVE_UPLOAD")):
-        run_printed(upload_cmd(config, drive))
+        cmd.append("--upload-google-drive")
+        for env_name, flag in UPLOAD_ENV_OPTIONS:
+            append_env_option(cmd, env_name, flag)
+        if truthy(os.environ.get("VBOGS_GDRIVE_DRY_RUN")):
+            cmd.append("--gdrive-dry-run")
+
+    return cmd
+
+
+def main() -> None:
+    config = os.environ.get("VBOGS_PIPELINE_CONFIG") or "pipeline_config.yaml"
+    drive = os.environ.get("VBOGS_DRIVE")
+    run_printed(pipeline_cmd(config, drive))
 
 
 if __name__ == "__main__":
