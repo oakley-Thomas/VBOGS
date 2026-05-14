@@ -52,7 +52,7 @@ python scripts/run_drive_pipeline.py --config pipeline_config.dev.yaml --use-ser
 | `--config CONFIG` | `pipeline_config.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
 | `--drive DRIVE` | Config: `pipeline.drive` | KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`. Required if not set in config. |
 | `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
-| `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `inspect` | Last stage to run. Use `bundle` for the full curated run output. |
+| `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | Parser: `inspect`; profile configs usually use `bundle` | Last stage to run. Use `bundle` for the full curated run output. |
 | `--run-output-root RUN_OUTPUT_ROOT` | Config: `outputs.run_root` | Optional root for curated outputs. When set, stage outputs are derived under `<root>/<drive>/`. |
 | `--dry-run` | `false` | Print the Docker/stage commands without executing them. |
 
@@ -183,7 +183,7 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | --- | --- | --- |
 | `--gpu GPU` | `0` | GPU id passed to the Octree-AnyGS training wrapper. |
 | `--resolution RESOLUTION` | `4` | Octree-AnyGS image divisor. Higher values reduce memory use and image fidelity. |
-| `--iterations ITERATIONS` | Config: `30000` | Number of training iterations. |
+| `--iterations ITERATIONS` | Profile-specific config; parser: `15000` | Number of training iterations. |
 | `--llffhold LLFFHOLD` | `8` | Held-out test frame cadence used by the Octree-AnyGS data loader. |
 | `--gaussian-type {implicit3D,explicit3D}` | `implicit3D` | Octree-AnyGS Gaussian representation. `implicit3D` is the neural default; `explicit3D` uses explicit SH 3D Gaussians. |
 | `--feat-dim FEAT_DIM` | `16` | Neural anchor feature dimension. Lower values reduce VRAM pressure. Ignored for `explicit3D`. |
@@ -228,10 +228,12 @@ under `data/m4/<drive>/`.
 | --- | --- | --- |
 | `--jax-device JAX_DEVICE` | `0` | JAX device index used for VBGS fitting. |
 | `--fit-mode {batched,loop}` | `batched` | Fit implementation. `batched` is the normal path; `loop` is simpler but slower. |
-| `--batch-size BATCH_SIZE` | `5000` | Number of anchors/assignments processed per batch, depending on fit mode internals. |
+| `--batch-size BATCH_SIZE` | `5000` | VBEM sufficient-stat batch size and default padded-point budget input for batched fitting. |
+| `--batch-buckets BATCH_BUCKETS` | `64,128,256,512,1024,2048,4096,5000` | Comma-separated point-count buckets used by `batched` mode. Anchors are padded to the smallest bucket that fits. |
+| `--no-auto-extend-buckets` | `false` | Disable automatic dense-tail bucket extension for anchors above the largest configured bucket. |
 | `--vmap-group-size VMAP_GROUP_SIZE` | `64` | Group size for vectorized JAX fitting work. |
+| `--max-padded-points-per-group MAX_PADDED_POINTS_PER_GROUP` | `0` | Maximum padded anchor-points per batched call. `0` means `vmap_group_size * batch_size`. |
 | `--log-every LOG_EVERY` | `100` | Progress logging interval. |
-| `--max-observed-anchors MAX_OBSERVED_ANCHORS` | `0` | Smoke-test cap for observed anchors. `0` means full fit. Positive values write `anchor_posterior.smoke.npz`. |
 
 ## `inspect`
 
@@ -337,11 +339,12 @@ The default config file uses section names that map to CLI arguments:
 | `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
-| `fit` | `jax_device`, `fit_mode`, `batch_size`, `vmap_group_size`, `log_every`, `max_observed_anchors` |
+| `fit` | `jax_device`, `fit_mode`, `batch_size`, `batch_buckets`, `no_auto_extend_buckets`, `vmap_group_size`, `max_padded_points_per_group`, `log_every` |
 | `inspect` | `top_k`, `sample_points`, `anchor_id`, `export_ply` |
 | `uncertainty` | `u_max`, `no_histogram` |
 | `map_viz` | `output_dir`, `vmin`, `vmax`, `percentile_low`, `percentile_high`, `observed_only`, `no_split_levels`, `no_trajectory` |
 | `render` | `split`, `resolution`, `max_views`, `colormap`, `vmin`, `vmax`, `output_dir` |
 | `nbv` | `candidate_source`, `max_candidates`, `top_k`, `save_top_images`, `force_all_levels`, `output_dir` |
 | `outputs` | `run_root` |
+| `upload` | `enabled`, `source`, `remote`, `dest`, `folder_id`, `service_account_file`, `scope`, `rclone_args`, `dry_run` |
 | `orchestration` | `compose_command`, `compose_file`, `project_name`, `torch_container`, `jax_container`, `use_service_labels`, `label_project` |

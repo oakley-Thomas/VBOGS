@@ -6,7 +6,9 @@ main scalable scene representation with VBGS for per-anchor Bayesian
 uncertainty, then uses that uncertainty to choose the next camera view that
 should be most informative.
 
-The algorithm has five stages.
+This is the narrative companion to the authoritative pseudocode in
+[Algorithm.txt](Algorithm.txt) and the milestone checklist in
+[../PLAN.md](../PLAN.md). The algorithm has five stages.
 
 ## 1. Train the Octree-AnyGS Scene
 

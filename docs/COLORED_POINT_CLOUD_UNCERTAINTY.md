@@ -2,20 +2,23 @@
 
 This note explains how VBOGS uses the colored stereo point cloud to calculate
 per-anchor uncertainty. It follows the implemented pipeline from point-cloud
-generation through VBGS fitting and final `U.npy` export.
+generation through VBGS fitting and final `U.npy` export. For the full
+pseudocode, see [Algorithm.txt](Algorithm.txt).
 
 ## Summary
 
-The colored point cloud is converted into normalized 6D samples:
+The colored point cloud starts as world-frame 6D samples:
 
 ```text
 [x_world, y_world, z_world, r, g, b]
 ```
 
-Each sample is assigned to the Octree-AnyGS anchors whose grid cells contain its
-world-space position. For each observed anchor, VBOGS fits a VBGS mixture model
-over the anchor's local 6D samples. The fitted Bayesian posterior is then
-reduced to one scalar uncertainty value per anchor.
+Those samples are globally normalized for VBGS fitting, while the original
+world-frame `xyz` is kept for anchor bucketing. Each sample is assigned to the
+Octree-AnyGS anchors whose grid cells contain its world-space position. For each
+observed anchor, VBOGS fits a VBGS mixture model over the anchor's local
+normalized 6D samples. The fitted Bayesian posterior is then reduced to one
+scalar uncertainty value per anchor.
 
 The color channels are not only saved for visualization. They participate in
 the VBGS likelihood, so the posterior reflects both geometric uncertainty and
@@ -46,7 +49,7 @@ The output artifact is `points_world.npz`, with:
 
 ```python
 points_world = concatenate([xyz_world, rgb], axis=1)
-points_norm = normalize(points_world)
+points_norm = normalize_data(points_world)
 ```
 
 Two coordinate versions are kept because they serve different purposes:
@@ -106,8 +109,9 @@ The saved posterior includes:
 | `alpha` | Dirichlet mixture counts/weights |
 | `spatial_mean`, `spatial_kappa`, `spatial_u`, `spatial_n` | Spatial Normal-Wishart posterior |
 | `delta_mean`, `delta_kappa`, `delta_u`, `delta_n` | Color/delta posterior |
+| `point_count`, `observed_anchor_ids` | Assignment counts and observed-anchor lookup |
 | `final_k` | Selected component count for the anchor |
-| `is_observed` | Whether the anchor had enough assigned points |
+| `is_observed`, `fit_completed` | Whether the anchor had enough points and completed fitting |
 
 ## 4. Convert the Posterior to Scalar Uncertainty
 
