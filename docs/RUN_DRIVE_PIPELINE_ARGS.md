@@ -171,17 +171,24 @@ Then set this Portainer stack environment variable and redeploy:
 VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
 ```
 
+The host port defaults to `22022`. If that port is already in use on the
+server, set one more stack variable, for example:
+
+```bash
+VBOGS_TRANSFER_HOST_PORT=32222
+```
+
 Download the curated run zip from your local machine:
 
 ```bash
-scp -i ~/.ssh/vbogs_portainer -P 2222 \
+scp -i ~/.ssh/vbogs_portainer -P 22022 \
   vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>.zip .
 ```
 
 Or mirror a full curated output directory:
 
 ```bash
-rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 2222" \
+rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 22022" \
   vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>/ ./vbogs-run/
 ```
 

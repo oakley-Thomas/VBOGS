@@ -175,7 +175,7 @@ services:
     environment:
       VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}
     ports:
-      - "2222:2222"
+      - "${VBOGS_TRANSFER_HOST_PORT:-22022}:2222"
     volumes:
       - type: volume
         source: vbogs-data
