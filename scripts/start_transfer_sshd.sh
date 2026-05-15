@@ -2,29 +2,18 @@
 
 set -euo pipefail
 
-user="${VBOGS_TRANSFER_USER:-vbogs}"
-uid="${VBOGS_TRANSFER_UID:-1000}"
-gid="${VBOGS_TRANSFER_GID:-1000}"
-port="${VBOGS_TRANSFER_PORT:-2222}"
+user="vbogs"
+uid="1000"
+gid="1000"
+port="2222"
 keys="${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}"
-keys_file="${VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE:-}"
 
-if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
-  echo "error: VBOGS_TRANSFER_PORT must be an integer from 1 to 65535" >&2
+if [[ -z "$keys" ]]; then
+  echo "error: set VBOGS_TRANSFER_AUTHORIZED_KEYS to one or more SSH public keys" >&2
   exit 2
 fi
 
-if [[ -z "$keys" && -z "$keys_file" ]]; then
-  echo "error: set VBOGS_TRANSFER_AUTHORIZED_KEYS or VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE" >&2
-  exit 2
-fi
-
-if [[ -n "$keys_file" && ! -f "$keys_file" ]]; then
-  echo "error: authorized keys file not found: $keys_file" >&2
-  exit 2
-fi
-
-if [[ "$user" != "root" ]] && ! id "$user" >/dev/null 2>&1; then
+if ! id "$user" >/dev/null 2>&1; then
   if ! getent group "$user" >/dev/null 2>&1; then
     groupadd --gid "$gid" "$user" 2>/dev/null || groupadd "$user"
   fi
@@ -42,14 +31,7 @@ install -d -m 700 -o "$user" -g "$user" "$home_dir/.ssh"
 authorized_keys="$home_dir/.ssh/authorized_keys"
 : > "$authorized_keys"
 
-if [[ -n "$keys_file" ]]; then
-  cat "$keys_file" >> "$authorized_keys"
-  printf '\n' >> "$authorized_keys"
-fi
-
-if [[ -n "$keys" ]]; then
-  printf '%s\n' "$keys" >> "$authorized_keys"
-fi
+printf '%s\n' "$keys" >> "$authorized_keys"
 
 if ! grep -Eq '^[[:space:]]*(ssh-(rsa|ed25519)|ecdsa-sha2-nistp(256|384|521)) ' "$authorized_keys"; then
   echo "error: authorized keys do not contain a supported public key" >&2

@@ -155,8 +155,8 @@ python scripts/upload_google_drive.py \
 The pipeline image also includes an optional SSH/SFTP transfer mode for pulling
 artifacts from a Portainer deployment without using the volume browser. The
 Portainer compose file runs this as a separate `vbogs-transfer` service using
-the same lightweight pipeline image. It is disabled by default, requires a
-public key, disables password login, does not mount the Docker socket, and mounts
+the same lightweight pipeline image. It stays idle unless an SSH public key is
+provided, disables password login, does not mount the Docker socket, and mounts
 the VBOGS volumes read-only.
 
 Create a local key if you do not already have one:
@@ -165,12 +165,9 @@ Create a local key if you do not already have one:
 ssh-keygen -t ed25519 -f ~/.ssh/vbogs_portainer
 ```
 
-Then set these Portainer stack environment variables and redeploy:
+Then set this Portainer stack environment variable and redeploy:
 
 ```bash
-VBOGS_TRANSFER_ENABLE=1
-VBOGS_TRANSFER_HOST_PORT=2222
-VBOGS_TRANSFER_USER=vbogs
 VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
 ```
 
@@ -189,9 +186,9 @@ rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 2222" \
 ```
 
 Other useful read-only paths are `/workspace/VBOGS/data`, `/data/COLMAP`, and
-`/data/OCTREE-ANYGS`. If a file is not readable by the unprivileged `vbogs`
-user, set `VBOGS_TRANSFER_USER=root` temporarily and redeploy, then disable the
-service again after downloading.
+`/data/OCTREE-ANYGS`. To disable access again, remove
+`VBOGS_TRANSFER_AUTHORIZED_KEYS` from the Portainer stack environment and
+redeploy.
 
 ## KITTI-360 Inputs
 

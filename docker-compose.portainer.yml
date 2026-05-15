@@ -141,15 +141,9 @@ services:
     image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
     working_dir: /workspace/VBOGS
     environment:
-      VBOGS_TRANSFER_ENABLE: ${VBOGS_TRANSFER_ENABLE:-0}
-      VBOGS_TRANSFER_USER: ${VBOGS_TRANSFER_USER:-vbogs}
-      VBOGS_TRANSFER_UID: ${VBOGS_TRANSFER_UID:-1000}
-      VBOGS_TRANSFER_GID: ${VBOGS_TRANSFER_GID:-1000}
-      VBOGS_TRANSFER_PORT: ${VBOGS_TRANSFER_PORT:-2222}
       VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}
-      VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE: ${VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE:-}
     ports:
-      - "${VBOGS_TRANSFER_HOST_PORT:-2222}:${VBOGS_TRANSFER_PORT:-2222}"
+      - "2222:2222"
     volumes:
       - type: volume
         source: vbogs-data
@@ -179,10 +173,10 @@ services:
       - sh
       - -lc
       - |
-        if [ "${VBOGS_TRANSFER_ENABLE:-0}" = "1" ]; then
+        if [ -n "${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}" ]; then
           exec vbogs-transfer-sshd
         else
-          echo "vbogs-transfer idle. Set VBOGS_TRANSFER_ENABLE=1 and VBOGS_TRANSFER_AUTHORIZED_KEYS to enable SSH/SFTP downloads."
+          echo "vbogs-transfer idle. Set VBOGS_TRANSFER_AUTHORIZED_KEYS to enable SSH/SFTP downloads."
           sleep infinity
         fi
 
