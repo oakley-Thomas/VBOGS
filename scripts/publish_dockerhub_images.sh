@@ -4,11 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/publish_dockerhub_images.sh [--tag-only] [service ...]
+  bash scripts/publish_dockerhub_images.sh [--tag TAG] [--tag-only] [service ...]
 
 Retag locally built VBOGS images for Docker Hub and push them.
 
 Options:
+  --tag TAG                     Destination tag for all images. Overrides VBOGS_IMAGE_TAG.
   --tag-only                    Retag images without pushing.
 
 Services:
@@ -18,7 +19,7 @@ Services:
 
 Environment:
   DOCKERHUB_NAMESPACE          Docker Hub namespace/org. Default: oakleyth
-  VBOGS_IMAGE_TAG              Destination tag for all images. Default: latest
+  VBOGS_IMAGE_TAG              Destination tag when --tag is omitted. Default: latest
   VBOGS_LOCAL_TORCH_IMAGE      Source Torch image. Default: local/vbogs-torch
   VBOGS_LOCAL_JAX_IMAGE        Source JAX image. Default: local/vbogs-jax
   VBOGS_LOCAL_PIPELINE_IMAGE   Source pipeline image. Default: local/vbogs-pipeline
@@ -28,11 +29,12 @@ Environment:
 
 Example:
   bash scripts/build_stack_serial.sh
-  bash scripts/publish_dockerhub_images.sh
+  bash scripts/publish_dockerhub_images.sh --tag latest
 EOF
 }
 
 push_images=1
+image_tag="${VBOGS_IMAGE_TAG:-latest}"
 services=()
 
 while [ "$#" -gt 0 ]; do
@@ -43,6 +45,19 @@ while [ "$#" -gt 0 ]; do
       ;;
     --tag-only)
       push_images=0
+      shift
+      ;;
+    --tag)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for --tag" >&2
+        usage >&2
+        exit 1
+      fi
+      image_tag="$2"
+      shift 2
+      ;;
+    --tag=*)
+      image_tag="${1#*=}"
       shift
       ;;
     --)
@@ -63,7 +78,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 dockerhub_namespace="${DOCKERHUB_NAMESPACE:-oakleyth}"
-image_tag="${VBOGS_IMAGE_TAG:-latest}"
+
+if [ -z "${image_tag}" ]; then
+  echo "Image tag cannot be empty." >&2
+  usage >&2
+  exit 1
+fi
 
 torch_source="${VBOGS_LOCAL_TORCH_IMAGE:-local/vbogs-torch}"
 jax_source="${VBOGS_LOCAL_JAX_IMAGE:-local/vbogs-jax}"

@@ -253,6 +253,7 @@ def test_pipeline_image_includes_zip_tools():
         encoding="utf-8"
     )
 
+    assert "\n    ffmpeg \\" in pipeline_dockerfile
     assert "\n    zip \\" in pipeline_dockerfile
     assert "\n    unzip \\" in pipeline_dockerfile
 

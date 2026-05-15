@@ -11,6 +11,7 @@ from scripts.run_exp02_all_drives import (
     discover_drives,
     normalize_extra_args,
 )
+from vbogs.data_layout import resolve_kitti360_path
 
 
 def make_drive(raw_root: Path, poses_root: Path, drive: str, *, pose: bool = True) -> None:
@@ -83,3 +84,11 @@ def test_build_pipeline_command_forwards_roots_and_extra_args():
 
 def test_normalize_extra_args_strips_passthrough_separator():
     assert normalize_extra_args(["--", "--use-service-labels"]) == ["--use-service-labels"]
+
+
+def test_raw_layout_resolver_accepts_kitti360_data_2d_raw(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    raw_root = tmp_path / "data" / "KITTI-360" / "data_2d_raw"
+    raw_root.mkdir(parents=True)
+
+    assert resolve_kitti360_path(None, kind="raw") == Path("data/KITTI-360/data_2d_raw")
