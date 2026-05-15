@@ -163,6 +163,61 @@ services:
           sleep infinity
         fi
 
+  vbogs-transfer:
+    image: ${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+    working_dir: /workspace/VBOGS
+    environment:
+      VBOGS_TRANSFER_ENABLE: ${VBOGS_TRANSFER_ENABLE:-0}
+      VBOGS_TRANSFER_USER: ${VBOGS_TRANSFER_USER:-vbogs}
+      VBOGS_TRANSFER_UID: ${VBOGS_TRANSFER_UID:-1000}
+      VBOGS_TRANSFER_GID: ${VBOGS_TRANSFER_GID:-1000}
+      VBOGS_TRANSFER_PORT: ${VBOGS_TRANSFER_PORT:-2222}
+      VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}
+      VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE: ${VBOGS_TRANSFER_AUTHORIZED_KEYS_FILE:-}
+    ports:
+      - "${VBOGS_TRANSFER_HOST_PORT:-2222}:${VBOGS_TRANSFER_PORT:-2222}"
+    volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+        read_only: true
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: true
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+        read_only: true
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+        read_only: true
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+        read_only: true
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+        read_only: true
+    command:
+      - sh
+      - -lc
+      - |
+        if [ "${VBOGS_TRANSFER_ENABLE:-0}" = "1" ]; then
+          exec vbogs-transfer-sshd
+        else
+          echo "vbogs-transfer idle. Set VBOGS_TRANSFER_ENABLE=1 and VBOGS_TRANSFER_AUTHORIZED_KEYS to enable SSH/SFTP downloads."
+          sleep infinity
+        fi
+
 volumes:
   COLMAP:
     external: true

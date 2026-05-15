@@ -150,6 +150,49 @@ python scripts/upload_google_drive.py \
   --service-account-file /run/secrets/vbogs-google-drive-service-account.json
 ```
 
+## SSH/SFTP Downloads from Portainer
+
+The pipeline image also includes an optional SSH/SFTP transfer mode for pulling
+artifacts from a Portainer deployment without using the volume browser. The
+Portainer compose file runs this as a separate `vbogs-transfer` service using
+the same lightweight pipeline image. It is disabled by default, requires a
+public key, disables password login, does not mount the Docker socket, and mounts
+the VBOGS volumes read-only.
+
+Create a local key if you do not already have one:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/vbogs_portainer
+```
+
+Then set these Portainer stack environment variables and redeploy:
+
+```bash
+VBOGS_TRANSFER_ENABLE=1
+VBOGS_TRANSFER_HOST_PORT=2222
+VBOGS_TRANSFER_USER=vbogs
+VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
+```
+
+Download the curated run zip from your local machine:
+
+```bash
+scp -i ~/.ssh/vbogs_portainer -P 2222 \
+  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>.zip .
+```
+
+Or mirror a full curated output directory:
+
+```bash
+rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 2222" \
+  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>/ ./vbogs-run/
+```
+
+Other useful read-only paths are `/workspace/VBOGS/data`, `/data/COLMAP`, and
+`/data/OCTREE-ANYGS`. If a file is not readable by the unprivileged `vbogs`
+user, set `VBOGS_TRANSFER_USER=root` temporarily and redeploy, then disable the
+service again after downloading.
+
 ## KITTI-360 Inputs
 
 These override the default source-data discovery used by the prep and stereo
