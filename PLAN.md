@@ -1,6 +1,6 @@
 # VBOGS Implementation Plan
 
-Actionable plan derived from [docs/Algorithm.txt](docs/Algorithm.txt). Check items off as they complete.
+Actionable plan derived from [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex). Check items off as they complete.
 
 ---
 
@@ -36,7 +36,7 @@ M2 and M3 are independent — run in parallel. M4a onward is strictly linear.
 
 ## 2. Milestones
 
-Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [docs/Algorithm.txt](docs/Algorithm.txt) plus the files listed.
+Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) plus the files listed.
 
 ### M1 — Environment setup [LLM]
 
@@ -106,7 +106,7 @@ Depends on: M4a, starting hyperparameters. Runs in `vbogs-jax`.
 Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`, `compute_elbo_delta`), [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) (`get_volume_delta_mixture`).
 
 - [x] Script `scripts/fit_anchors.py`
-- [x] Implement `FitAnchor(pts_a, K)` per Stage 3 of [docs/Algorithm.txt](docs/Algorithm.txt)
+- [x] Implement `FitAnchor(pts_a, K)` per Stage 3 of [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex)
 - [x] Implement K-growth loop with ELBO comparison
 - [x] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
 - [x] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
@@ -188,7 +188,7 @@ Even if an LLM could produce plausible output, these need human judgment:
 
 When handing a milestone to an LLM, the prompt should include:
 
-1. Link to this file and [docs/Algorithm.txt](docs/Algorithm.txt) for context
+1. Link to this file and [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) for context
 2. The specific stage's pseudocode excerpt
 3. The relevant Octree-AnyGS / vbgs files listed in the milestone
 4. The filesystem contract (inputs read, outputs written, formats)

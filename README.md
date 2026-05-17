@@ -91,7 +91,7 @@ python scripts/run_drive_pipeline.py \
 
 ```
 **NOTE:** For the full list of pipeline flags, see
-[docs/RUN_DRIVE_PIPELINE_ARGS.md](docs/RUN_DRIVE_PIPELINE_ARGS.md).
+[docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md](docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md)
 
 **NOTE:** For local development, `docker-compose.override.yml` bind-mounts the repo's
 `outputs/` directory into the Torch and JAX containers. Final render artifacts

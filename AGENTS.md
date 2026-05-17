@@ -10,18 +10,20 @@ It is **mid-implementation**: M1 through M6 now have repo-owned entry points and
 
 ## Read these first
 
-1. **[docs/Algorithm.txt](docs/Algorithm.txt)** — authoritative pseudocode. Five stages. Every design decision is captured here.
+1. **[docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex)** — authoritative formatted algorithm specification. Five stages. Every design decision is captured here.
 2. **[PLAN.md](PLAN.md)** — milestone breakdown (M1–M7) with checkboxes, dependencies, and which env each task runs in.
 3. This file — repo conventions and pitfalls.
 
-If a user request conflicts with [docs/Algorithm.txt](docs/Algorithm.txt), flag it and ask — don't silently diverge.
+If a user request conflicts with [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex), flag it and ask — don't silently diverge.
 
 ## Repository layout
 
 ```
 VBOGS/
 ├── docs/
-│   └── Algorithm.txt      # spec — the source of truth
+│   ├── documentation/     # operator and narrative docs
+│   ├── manuscript/        # algorithm/formula LaTeX sources
+│   └── references/        # paper PDFs and external references
 ├── PLAN.md                # milestone checklist
 ├── AGENTS.md              # this file
 ├── README.md
@@ -57,7 +59,7 @@ Both envs live alongside one another; each script declares which one it needs (s
 
 ## Terminology
 
-- **Anchor = voxel.** Octree-AnyGS stores a flat tensor of anchors, each with a level. The anchor's cell size is `voxel_size / fork^level`. There is no separate "voxel" object. When [docs/Algorithm.txt](docs/Algorithm.txt) or code says "voxel," it means "anchor at that level's cell size."
+- **Anchor = voxel.** Octree-AnyGS stores a flat tensor of anchors, each with a level. The anchor's cell size is `voxel_size / fork^level`. There is no separate "voxel" object. When [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) or code says "voxel," it means "anchor at that level's cell size."
 - **Per-anchor uncertainty** — a scalar `U[i]` on each anchor derived from the VBGS posterior for points falling in that anchor's cell.
 - **Next-best view (NBV)** — output of Stage 5; a camera pose chosen to maximize alpha-normalized expected posterior entropy.
 
@@ -81,10 +83,10 @@ tests/            # integration tests against small fixtures as they are added
 ## Common pitfalls
 
 - **"Leaf voxel" doesn't exist.** Octree-AnyGS has no leaf concept — anchors at different levels coexist, LOD selection picks among them at render time. Per-anchor GMMs receive points from **every level that contains them**, not just the finest (otherwise coarse anchors in well-sampled regions look spuriously uncertain).
-- **`generate_gaussians` color comes from an MLP.** There is no aux channel on anchors. To render a scalar (like uncertainty), reuse `generate_gaussians` for geometry, then substitute your own color tensor before calling `gsplat.rasterization`. See Stage 5 in [docs/Algorithm.txt](docs/Algorithm.txt).
+- **`generate_gaussians` color comes from an MLP.** There is no aux channel on anchors. To render a scalar (like uncertainty), reuse `generate_gaussians` for geometry, then substitute your own color tensor before calling `gsplat.rasterization`. See Stage 5 in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex).
 - **Padding in `octree_sample`.** Anchor positions are stored as `grid_coord * cur_size + init_pos + padding * cur_size`. When bucketing points, don't subtract padding — just recompute grid coords for both points and anchors; the offset cancels.
 - **ELBO across K is biased.** The KL term scales with component count. Per-point mean ELBO is our pragmatic choice, not a principled one. If model selection looks wrong, the fix is held-out log-likelihood or BIC, not tuning `ELBO_IMPROVEMENT_TOL` into oblivion.
-- **NBV can't see empty space.** `render_scalar` only splats through existing anchors. Truly unobserved volumes don't contribute to the score. This is a known limitation documented in [docs/Algorithm.txt](docs/Algorithm.txt); don't try to "fix" it without talking to the user — the extension is non-trivial.
+- **NBV can't see empty space.** `render_scalar` only splats through existing anchors. Truly unobserved volumes don't contribute to the score. This is a known limitation documented in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex); don't try to "fix" it without talking to the user — the extension is non-trivial.
 
 ## When in doubt
 

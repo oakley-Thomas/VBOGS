@@ -5,13 +5,14 @@ Start here when you need repo-owned documentation beyond the top-level
 
 | Document | Use it for |
 | --- | --- |
-| [Algorithm.txt](Algorithm.txt) | Authoritative five-stage pseudocode and design constraints |
+| [manuscript/Algorithm.tex](manuscript/Algorithm.tex) | Authoritative formatted algorithm specification and design constraints |
+| [manuscript/PER_ANCHOR_UNCERTAINTY_FORMULAS.tex](manuscript/PER_ANCHOR_UNCERTAINTY_FORMULAS.tex) | Per-anchor uncertainty derivation and formulas |
 | [../PLAN.md](../PLAN.md) | Milestone status, dependencies, and remaining validation work |
-| [ALGORITHM_OVERVIEW.md](ALGORITHM_OVERVIEW.md) | Plain-language walkthrough of the algorithm |
-| [COLORED_POINT_CLOUD_UNCERTAINTY.md](COLORED_POINT_CLOUD_UNCERTAINTY.md) | How stereo RGB points become per-anchor uncertainty |
-| [RUN_DRIVE_PIPELINE_ARGS.md](RUN_DRIVE_PIPELINE_ARGS.md) | Full `scripts/run_drive_pipeline.py` CLI/config reference |
+| [documentation/ALGORITHM_OVERVIEW.md](documentation/ALGORITHM_OVERVIEW.md) | Plain-language walkthrough of the algorithm |
+| [documentation/RUN_DRIVE_PIPELINE_ARGS.md](documentation/RUN_DRIVE_PIPELINE_ARGS.md) | Full `scripts/run_drive_pipeline.py` CLI/config reference |
 | [../Usage.md](../Usage.md) | Short operator quickstart |
-| [VBGS_VARIATIONAL_INFERENCE_SLIDEDECK.tex](VBGS_VARIATIONAL_INFERENCE_SLIDEDECK.tex) | LaTeX slide deck explaining the VBGS inference adaptation |
+| [references/VBGS-Paper.pdf](references/VBGS-Paper.pdf) | Local copy of the VBGS paper |
+| [references/OctreeGS.pdf](references/OctreeGS.pdf) | Local copy of the Octree-GS paper |
 
-`VBGS-Paper.pdf` is kept as a local paper copy and is not maintained as
+Files under `references/` are local paper copies and are not maintained as
 repo-authored documentation.

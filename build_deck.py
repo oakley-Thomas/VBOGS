@@ -614,7 +614,7 @@ code_items = [
     ("  render.py", "render_scalar — scalar splatting", GREY),
     ("  data_layout.py / io.py / fit_planning.py", "", GREY),
     ("Octree-AnyGS/  ·  vbgs/", "read-only submodules", GOLD),
-    ("docs/Algorithm.txt", "authoritative pseudocode", GOLD),
+    ("docs/manuscript/Algorithm.tex", "authoritative algorithm spec", GOLD),
     ("docker/  ·  *compose*.yml", "containerisation", GOLD),
 ]
 cy = Inches(2.3)

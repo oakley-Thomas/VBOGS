@@ -2,7 +2,7 @@
 
 This is the short operator guide for the repo-owned Docker pipeline. For the
 complete argument reference, see
-[docs/RUN_DRIVE_PIPELINE_ARGS.md](docs/RUN_DRIVE_PIPELINE_ARGS.md).
+[docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md](docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md).
 
 ## Build the Stack
 
