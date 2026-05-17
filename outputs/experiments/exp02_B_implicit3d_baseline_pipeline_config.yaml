@@ -1,0 +1,78 @@
+# Implicit 3D baseline experiment: neural-anchor comparison profile.
+
+pipeline:
+  drive: 2013_05_28_drive_0007_sync
+  start_at: prepare
+  stop_after: bundle
+  dry_run: false
+
+outputs:
+  run_root: outputs/experiments/exp02_implicit3d_baseline
+
+inputs:
+  raw_root: null
+  poses_root: null
+  calibration_dir: null
+
+prepare:
+  frame_step: 1
+  max_frames: 1000
+  copy_mode: symlink
+  seed_mode: stereo
+
+train:
+  gpu: "0"
+  resolution: 4
+  iterations: 120000
+  llffhold: 8
+  gaussian_type: implicit3D
+  feat_dim: 16
+  base_layer: 9
+  visible_threshold: 0.02
+  write_config_only: false
+
+stereo:
+  matcher: sgbm
+  pixel_step: 1
+  max_points_per_frame: 300000
+  write_ply: true
+
+bucket:
+  model_path: null
+  bucket_iteration: -1
+  point_chunk_size: 1000000
+  max_points: 10000000
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 500
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null
+
+uncertainty:
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  resolution: 1
+  max_views: 0
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  top_k: 10
+  save_top_images: 5
+  force_all_levels: false
+  output_dir: null

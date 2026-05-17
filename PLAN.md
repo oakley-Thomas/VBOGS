@@ -1,6 +1,6 @@
 # VBOGS Implementation Plan
 
-Actionable plan derived from [Algorithm.txt](Algorithm.txt). Check items off as they complete.
+Actionable plan derived from [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex). Check items off as they complete.
 
 ---
 
@@ -36,7 +36,7 @@ M2 and M3 are independent — run in parallel. M4a onward is strictly linear.
 
 ## 2. Milestones
 
-Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [Algorithm.txt](Algorithm.txt) plus the files listed.
+Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) plus the files listed.
 
 ### M1 — Environment setup [LLM]
 
@@ -106,16 +106,18 @@ Depends on: M4a, starting hyperparameters. Runs in `vbogs-jax`.
 Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`, `compute_elbo_delta`), [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) (`get_volume_delta_mixture`).
 
 - [x] Script `scripts/fit_anchors.py`
-- [x] Implement `FitAnchor(pts_a, K)` per Stage 3 of Algorithm.txt
+- [x] Implement `FitAnchor(pts_a, K)` per Stage 3 of [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex)
 - [x] Implement K-growth loop with ELBO comparison
 - [x] Unobserved (pts < `MIN_POINTS_PER_ANCHOR`) → emit `None`/sentinel
 - [x] Save `anchor_posterior.npz` — per-anchor `(mean, kappa, u, n)` for likelihood + delta, plus Dirichlet `alpha`, plus final `K`, plus an `is_observed` mask
 - [x] Deterministic shard mode for parallel anchor fitting, plus shard merge back to `anchor_posterior.npz`
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
-- [ ] Decide: loop vs `jax.vmap` across anchors (defer until N_anchors is known)
+- [x] Implement grouped batched fitting with `jax.vmap`; keep the one-anchor loop as a debugging fallback
 
-Implementation is in place and smoke-tested in `vbogs-jax`, but the full-scene
-fit has not been run to completion yet. Current smoke artifacts live under
+Implementation is in place and smoke-tested in `vbogs-jax`. The default path is
+now grouped/batched fitting, with point-count buckets controlling padding and
+memory use. The full-scene fit still needs a completion/quality pass before M7.
+Current smoke artifacts live under
 `data/m4/2013_05_28_drive_0008_sync/` as `anchor_posterior.smoke.npz` and
 `fit_metadata.smoke.json`.
 
@@ -143,9 +145,11 @@ Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_rend
 - [x] NBV loop: `score = sum(unc_image) / (sum(alpha_image) + EPS)`
 - [x] Return best pose + diagnostic dump of top-K candidates
 
-Initial implementation lives in `vbogs/render.py` and `scripts/score_nbv.py`.
-It has syntax/CLI verification, but still needs a full torch/GPU render
-validation pass on a completed M5 `U.npy`.
+Initial implementation lives in `vbogs/render.py` and `scripts/score_nbv.py`,
+with diagnostic render, map visualization, NBV visualization, and bundle stages
+available through `scripts/run_drive_pipeline.py`. It has syntax/CLI
+verification, but still needs a full torch/GPU render validation pass on a
+completed M5 `U.npy`.
 
 ### M7 — End-to-end viz + validation [you]
 
@@ -184,7 +188,7 @@ Even if an LLM could produce plausible output, these need human judgment:
 
 When handing a milestone to an LLM, the prompt should include:
 
-1. Link to this file and [Algorithm.txt](Algorithm.txt) for context
+1. Link to this file and [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) for context
 2. The specific stage's pseudocode excerpt
 3. The relevant Octree-AnyGS / vbgs files listed in the milestone
 4. The filesystem contract (inputs read, outputs written, formats)

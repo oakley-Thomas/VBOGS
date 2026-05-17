@@ -11,7 +11,9 @@ export VBOGS_PIPELINE_IMAGE="${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 export VBOGS_TORCH_MAX_JOBS="${VBOGS_TORCH_MAX_JOBS:-1}"
 
-if [ -z "${VBOGS_TORCH_CUDA_ARCH_LIST:-}" ]; then
+DEFAULT_TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
+
+detect_torch_cuda_arch() {
   detected_arch=""
   if command -v nvidia-smi >/dev/null 2>&1; then
     if detected_arch="$(nvidia-smi --id=0 --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null)"; then
@@ -19,7 +21,14 @@ if [ -z "${VBOGS_TORCH_CUDA_ARCH_LIST:-}" ]; then
       detected_arch="${detected_arch//[[:space:]]/}"
     fi
   fi
-  export VBOGS_TORCH_CUDA_ARCH_LIST="${detected_arch:-12.0}"
+  printf '%s' "${detected_arch}"
+}
+
+if [ -z "${VBOGS_TORCH_CUDA_ARCH_LIST:-}" ]; then
+  export VBOGS_TORCH_CUDA_ARCH_LIST="${DEFAULT_TORCH_CUDA_ARCH_LIST}"
+elif [ "${VBOGS_TORCH_CUDA_ARCH_LIST}" = "auto" ]; then
+  detected_arch="$(detect_torch_cuda_arch)"
+  export VBOGS_TORCH_CUDA_ARCH_LIST="${detected_arch:-${DEFAULT_TORCH_CUDA_ARCH_LIST}}"
 fi
 
 services=("$@")

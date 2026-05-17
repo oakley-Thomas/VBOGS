@@ -60,6 +60,16 @@ def parse_args() -> argparse.Namespace:
         help="Camera split to render.",
     )
     parser.add_argument(
+        "--resolution",
+        type=int,
+        default=2,
+        help=(
+            "Octree-AnyGS image divisor/target width for this render pass. "
+            "Smaller divisors produce higher-resolution views; defaults to 2, "
+            "which renders twice the width and height of a model trained with 4."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -144,7 +154,14 @@ def add_octree_to_path(octree_root: Path) -> Path:
     return octree_root
 
 
-def load_scene(model_path: Path, octree_root: Path, iteration: int, ape_code: int, quiet: bool):
+def load_scene(
+    model_path: Path,
+    octree_root: Path,
+    iteration: int,
+    ape_code: int,
+    quiet: bool,
+    resolution: int | None = None,
+):
     add_octree_to_path(octree_root)
 
     from scene import Scene
@@ -153,6 +170,10 @@ def load_scene(model_path: Path, octree_root: Path, iteration: int, ape_code: in
     with (model_path / "config.yaml").open("r", encoding="utf-8") as handle:
         cfg = yaml.load(handle, Loader=yaml.FullLoader)
     dataset, opt, pipe = parse_cfg(cfg)
+    if resolution is not None:
+        if resolution == 0:
+            raise ValueError("--resolution must be non-zero")
+        dataset.resolution = resolution
     dataset.model_path = str(model_path)
 
     model_config = dataset.model_config
@@ -316,6 +337,8 @@ def render_splits(
                         "split": split_name,
                         "index": index,
                         "image_name": stem,
+                        "width": int(view.image_width),
+                        "height": int(view.image_height),
                         "alpha_sum": alpha_sum,
                         "uncertainty_mean": (
                             float(unc_image.sum().item() / alpha_sum) if alpha_sum > 0.0 else 0.0
@@ -342,6 +365,7 @@ def main() -> None:
         args.iteration,
         args.ape,
         args.quiet,
+        args.resolution,
     )
     loaded_iteration = int(scene.loaded_iter)
     anchor_count = int(gaussians.get_anchor.shape[0])
@@ -371,6 +395,7 @@ def main() -> None:
         "uncertainty_path": str(uncertainty_path),
         "iteration": loaded_iteration,
         "split": args.split,
+        "resolution": args.resolution,
         "vmin": vmin,
         "vmax": vmax,
         "colormap": args.colormap,

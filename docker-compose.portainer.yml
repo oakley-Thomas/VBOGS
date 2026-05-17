@@ -81,12 +81,48 @@ services:
     depends_on:
       - vbogs-torch
       - vbogs-jax
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
-      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.yaml}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.portainer.yaml}
+      VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
+      VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
+      VBOGS_GDRIVE_DEST: ${VBOGS_GDRIVE_DEST:-}
+      VBOGS_GDRIVE_FOLDER_ID: ${VBOGS_GDRIVE_FOLDER_ID:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS:-}
+      VBOGS_GDRIVE_SCOPE: ${VBOGS_GDRIVE_SCOPE:-drive}
+      VBOGS_GDRIVE_SOURCE: ${VBOGS_GDRIVE_SOURCE:-}
+      VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
+      VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
     volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: false
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -98,6 +134,49 @@ services:
           python scripts/run_pipeline_from_env.py
         else
           echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."
+          sleep infinity
+        fi
+
+  vbogs-transfer:
+    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    working_dir: /workspace/VBOGS
+    environment:
+      VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}
+    ports:
+      - "${VBOGS_TRANSFER_HOST_PORT:-22022}:2222"
+    volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+        read_only: true
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: true
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+        read_only: true
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+        read_only: true
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+        read_only: true
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+        read_only: true
+    command:
+      - sh
+      - -lc
+      - |
+        if [ -n "${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}" ]; then
+          exec vbogs-transfer-sshd
+        else
+          echo "vbogs-transfer idle. Set VBOGS_TRANSFER_AUTHORIZED_KEYS to enable SSH/SFTP downloads."
           sleep infinity
         fi
 

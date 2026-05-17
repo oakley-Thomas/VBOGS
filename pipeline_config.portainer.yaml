@@ -1,0 +1,103 @@
+# Portainer pipeline configuration.
+#
+# Use this with `docker-compose.portainer.yml`. Outputs are written to the
+# stack-managed `vbogs-outputs` Docker volume at `/workspace/VBOGS/outputs`.
+
+pipeline:
+  drive: 2013_05_28_drive_0007_sync
+  start_at: prepare
+  stop_after: bundle
+  dry_run: false
+
+outputs:
+  run_root: outputs/v1_0
+
+upload:
+  enabled: false
+  source: null
+  remote: vbogs_gdrive
+  dest: null
+  folder_id: null
+  service_account_file: null
+  scope: drive
+  rclone_args: null
+  dry_run: false
+
+inputs:
+  # Leave null to use the repo/container default KITTI-360 layout.
+  raw_root: null
+  poses_root: null
+  calibration_dir: null
+
+prepare:
+  frame_step: 1
+  max_frames: 1000
+  copy_mode: symlink
+  seed_mode: stereo
+
+train:
+  gpu: "0"
+  # Leave null to use 6009 + GPU index, so concurrent GPU 0/GPU 1 training
+  # processes bind different Octree-AnyGS GUI ports.
+  port: null
+  # High-quality 48 GB VRAM profile: half-res training, a finer octree,
+  # lower visibility pruning, and a longer Octree-AnyGS optimization run.
+  resolution: 2
+  iterations: 90000
+  llffhold: 8
+  gaussian_type: explicit3D
+  feat_dim: 16
+  base_layer: 10
+  visible_threshold: 0.01
+  write_config_only: false
+
+stereo:
+  matcher: sgbm
+  pixel_step: 1
+  max_points_per_frame: 100000
+  write_ply: true
+
+bucket:
+  # Leave null to use the latest Octree-AnyGS run under /data/OCTREE-ANYGS/<drive>.
+  model_path: null
+  bucket_iteration: -1
+  point_chunk_size: 1000000
+  max_points: 0
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 500
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null
+
+uncertainty:
+  # Leave null to assign unobserved anchors the maximum finite observed U.
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  # Render diagnostics at half-resolution KITTI width/height. This is sharper
+  # than the conservative training divisor of 4, but lighter than full-res.
+  resolution: 2
+  # 0 means render every camera in the selected split. Use 1 for a smoke run.
+  max_views: 0
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  top_k: 10
+  save_top_images: 5
+  force_all_levels: false
+  output_dir: null

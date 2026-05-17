@@ -14,6 +14,35 @@ from typing import Any, Dict
 import yaml
 
 
+GAUSSIAN_TYPES = ("implicit3D", "explicit3D")
+IMPLICIT_ONLY_MODEL_KWARGS = ("feat_dim", "view_dim", "appearance_dim", "n_offsets")
+IMPLICIT_ONLY_OPTIM_KEYS = (
+    "mlp_opacity_lr_init",
+    "mlp_opacity_lr_final",
+    "mlp_opacity_lr_delay_mult",
+    "mlp_opacity_lr_max_steps",
+    "mlp_cov_lr_init",
+    "mlp_cov_lr_final",
+    "mlp_cov_lr_delay_mult",
+    "mlp_cov_lr_max_steps",
+    "mlp_color_lr_init",
+    "mlp_color_lr_final",
+    "mlp_color_lr_delay_mult",
+    "mlp_color_lr_max_steps",
+    "appearance_lr_init",
+    "appearance_lr_final",
+    "appearance_lr_delay_mult",
+    "appearance_lr_max_steps",
+)
+EXPLICIT_OPTIM_OVERRIDES: Dict[str, Any] = {
+    "feature_lr": 0.0025,
+    "opacity_lr": 0.05,
+    "scaling_lr": 0.005,
+    "rotation_lr": 0.001,
+    "lambda_dreg": 0.0,
+}
+
+
 LOCAL_16GB_CONFIG: Dict[str, Any] = {
     "model_params": {
         "model_config": {
@@ -164,10 +193,22 @@ def parse_args() -> argparse.Namespace:
         help="Held-out test frame cadence for eval mode.",
     )
     parser.add_argument(
+        "--gaussian-type",
+        choices=GAUSSIAN_TYPES,
+        default="implicit3D",
+        help=(
+            "Octree-AnyGS Gaussian representation. `implicit3D` is the neural "
+            "default; `explicit3D` uses explicit SH 3D Gaussians."
+        ),
+    )
+    parser.add_argument(
         "--feat-dim",
         type=int,
         default=16,
-        help="Anchor feature dimension. Lower values reduce VRAM pressure.",
+        help=(
+            "Implicit neural anchor feature dimension. Lower values reduce VRAM "
+            "pressure. Ignored for --gaussian-type explicit3D."
+        ),
     )
     parser.add_argument(
         "--base-layer",
@@ -187,6 +228,15 @@ def parse_args() -> argparse.Namespace:
         help="GPU id passed through to Octree-AnyGS/train.py.",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            "Network GUI port passed through to Octree-AnyGS/train.py. "
+            "Defaults to 6009 + GPU index for nonnegative integer GPU ids."
+        ),
+    )
+    parser.add_argument(
         "--write-config-only",
         action="store_true",
         help="Generate the config but do not launch training.",
@@ -202,11 +252,38 @@ def parse_args() -> argparse.Namespace:
         default=Path("Octree-AnyGS"),
         help="Path to the Octree-AnyGS submodule.",
     )
+    parser.add_argument(
+        "--skip-stack-check",
+        action="store_true",
+        help="Skip the Torch CUDA/gsplat preflight before launching training.",
+    )
     return parser.parse_args()
+
+
+def apply_gaussian_type_config(cfg: Dict[str, Any], gaussian_type: str) -> None:
+    if gaussian_type == "implicit3D":
+        return
+    if gaussian_type != "explicit3D":
+        raise ValueError(f"Unknown Gaussian type: {gaussian_type}")
+
+    model_kwargs = cfg["model_params"]["model_config"]["kwargs"]
+    model_kwargs["gs_attr"] = "explicit3D"
+    model_kwargs["color_attr"] = "SH2"
+    model_kwargs["render_mode"] = "RGB"
+    for key in IMPLICIT_ONLY_MODEL_KWARGS:
+        model_kwargs.pop(key, None)
+
+    optim_params = cfg["optim_params"]
+    for key in IMPLICIT_ONLY_OPTIM_KEYS:
+        optim_params.pop(key, None)
+    optim_params.update(EXPLICIT_OPTIM_OVERRIDES)
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     cfg = copy.deepcopy(LOCAL_16GB_CONFIG)
+    gaussian_type = getattr(args, "gaussian_type", "implicit3D")
+    apply_gaussian_type_config(cfg, gaussian_type)
+
     scene_name = args.scene_name or args.dataset_path.name
     model_params = cfg["model_params"]
     model_params["source_path"] = str(args.dataset_path.resolve())
@@ -222,18 +299,23 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params["llffhold"] = args.llffhold
 
     model_kwargs = model_params["model_config"]["kwargs"]
-    model_kwargs["feat_dim"] = args.feat_dim
+    if gaussian_type == "implicit3D":
+        model_kwargs["feat_dim"] = args.feat_dim
     model_kwargs["base_layer"] = args.base_layer
     model_kwargs["visible_threshold"] = args.visible_threshold
 
     optim_params = cfg["optim_params"]
     optim_params["iterations"] = args.iterations
-    optim_params["position_lr_max_steps"] = args.iterations
-    optim_params["offset_lr_max_steps"] = args.iterations
-    optim_params["mlp_opacity_lr_max_steps"] = args.iterations
-    optim_params["mlp_cov_lr_max_steps"] = args.iterations
-    optim_params["mlp_color_lr_max_steps"] = args.iterations
-    optim_params["appearance_lr_max_steps"] = args.iterations
+    for key in (
+        "position_lr_max_steps",
+        "offset_lr_max_steps",
+        "mlp_opacity_lr_max_steps",
+        "mlp_cov_lr_max_steps",
+        "mlp_color_lr_max_steps",
+        "appearance_lr_max_steps",
+    ):
+        if key in optim_params:
+            optim_params[key] = args.iterations
     optim_params["update_until"] = min(args.iterations - 1000, optim_params["update_until"])
     return cfg
 
@@ -251,6 +333,20 @@ def write_config(path: Path, cfg: Dict[str, Any]) -> None:
         yaml.safe_dump(cfg, handle, sort_keys=False)
 
 
+def parse_gpu_index(gpu: str) -> int:
+    try:
+        return int(gpu)
+    except ValueError:
+        return -1
+
+
+def resolve_gui_port(gpu: str, explicit_port: int | None) -> int:
+    if explicit_port is not None:
+        return explicit_port
+    gpu_index = parse_gpu_index(gpu)
+    return 6009 + gpu_index if gpu_index >= 0 else 6009
+
+
 def main() -> None:
     args = parse_args()
     cfg = build_config(args)
@@ -266,6 +362,23 @@ def main() -> None:
     if not train_script.exists():
         raise FileNotFoundError(f"Octree-AnyGS training script not found: {train_script}")
 
+    if not args.skip_stack_check:
+        check_script = Path(__file__).resolve().with_name("check_torch_stack.py")
+        device_index = 0
+        parsed_gpu = parse_gpu_index(args.gpu)
+        if parsed_gpu >= 0:
+            device_index = parsed_gpu
+        check_cmd = [
+            args.python,
+            str(check_script),
+            "--repo-root",
+            str(octree_root.parent),
+            "--device-index",
+            str(device_index),
+        ]
+        print("Checking Torch stack:", " ".join(check_cmd))
+        subprocess.run(check_cmd, cwd=str(octree_root.parent), check=True)
+
     cmd = [
         args.python,
         str(train_script),
@@ -273,6 +386,8 @@ def main() -> None:
         str(config_path.resolve()),
         "--gpu",
         str(args.gpu),
+        "--port",
+        str(resolve_gui_port(args.gpu, args.port)),
     ]
     print("Launching:", " ".join(cmd))
     subprocess.run(cmd, cwd=str(octree_root.parent), check=True)

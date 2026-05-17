@@ -36,6 +36,9 @@ STAGES = (
     "uncertainty",
     "map-viz",
     "render",
+    "nbv",
+    "nbv-viz",
+    "bundle",
 )
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
@@ -64,9 +67,11 @@ CONFIG_KEY_MAP = {
         "resolution": "resolution",
         "iterations": "iterations",
         "llffhold": "llffhold",
+        "gaussian_type": "gaussian_type",
         "feat_dim": "feat_dim",
         "base_layer": "base_layer",
         "visible_threshold": "visible_threshold",
+        "port": "train_port",
         "write_config_only": "write_config_only",
     },
     "stereo": {
@@ -78,14 +83,18 @@ CONFIG_KEY_MAP = {
     "bucket": {
         "model_path": "model_path",
         "bucket_iteration": "bucket_iteration",
+        "point_chunk_size": "bucket_point_chunk_size",
+        "max_points": "bucket_max_points",
     },
     "fit": {
         "jax_device": "jax_device",
         "fit_mode": "fit_mode",
         "batch_size": "batch_size",
+        "batch_buckets": "batch_buckets",
+        "no_auto_extend_buckets": "no_auto_extend_buckets",
         "vmap_group_size": "vmap_group_size",
+        "max_padded_points_per_group": "max_padded_points_per_group",
         "log_every": "log_every",
-        "max_observed_anchors": "max_observed_anchors",
     },
     "inspect": {
         "top_k": "inspect_top_k",
@@ -109,11 +118,34 @@ CONFIG_KEY_MAP = {
     },
     "render": {
         "split": "render_split",
+        "resolution": "render_resolution",
         "max_views": "render_max_views",
         "colormap": "render_colormap",
         "vmin": "render_vmin",
         "vmax": "render_vmax",
         "output_dir": "render_output_dir",
+    },
+    "nbv": {
+        "candidate_source": "nbv_candidate_source",
+        "max_candidates": "nbv_max_candidates",
+        "top_k": "nbv_top_k",
+        "save_top_images": "nbv_save_top_images",
+        "force_all_levels": "nbv_force_all_levels",
+        "output_dir": "nbv_output_dir",
+    },
+    "outputs": {
+        "run_root": "run_output_root",
+    },
+    "upload": {
+        "enabled": "upload_google_drive",
+        "source": "gdrive_source",
+        "remote": "gdrive_remote",
+        "dest": "gdrive_dest",
+        "folder_id": "gdrive_folder_id",
+        "service_account_file": "gdrive_service_account_file",
+        "scope": "gdrive_scope",
+        "rclone_args": "gdrive_rclone_args",
+        "dry_run": "gdrive_dry_run",
     },
     "orchestration": {
         "compose_command": "compose_command",
@@ -256,6 +288,69 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Print the commands that would run without executing them.",
     )
     parser.add_argument(
+        "--run-output-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional root for curated run outputs. When set, stage outputs are "
+            "derived under `<root>/<drive>/`."
+        ),
+    )
+    upload_group = parser.add_argument_group("Google Drive upload")
+    upload_group.add_argument(
+        "--upload-google-drive",
+        dest="upload_google_drive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Upload the final curated run zip after all selected stages succeed. "
+            "The default source is `<run-output-root>/<drive>.zip`."
+        ),
+    )
+    upload_group.add_argument(
+        "--gdrive-source",
+        type=Path,
+        default=None,
+        help="Optional file or directory to upload instead of the curated run zip.",
+    )
+    upload_group.add_argument(
+        "--gdrive-remote",
+        default=None,
+        help="rclone remote name. Defaults inside upload_google_drive.py.",
+    )
+    upload_group.add_argument(
+        "--gdrive-dest",
+        default=None,
+        help="Destination path inside the configured Drive remote/root folder.",
+    )
+    upload_group.add_argument(
+        "--gdrive-folder-id",
+        default=None,
+        help="Google Drive folder id used as rclone's root_folder_id.",
+    )
+    upload_group.add_argument(
+        "--gdrive-service-account-file",
+        default=None,
+        help="Path to a Google service-account JSON file inside vbogs-pipeline.",
+    )
+    upload_group.add_argument(
+        "--gdrive-scope",
+        default=None,
+        help="rclone Google Drive scope. Defaults to `drive` in the upload helper.",
+    )
+    upload_group.add_argument(
+        "--gdrive-rclone-args",
+        default=None,
+        help="Extra arguments appended to the rclone command, parsed with shlex.",
+    )
+    upload_group.add_argument(
+        "--gdrive-dry-run",
+        dest="gdrive_dry_run",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print the rclone upload command without transferring files.",
+    )
+    parser.add_argument(
         "--start-at",
         choices=STAGES,
         default="prepare",
@@ -291,9 +386,27 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     train_group.add_argument("--resolution", type=int, default=4)
     train_group.add_argument("--iterations", type=int, default=15000)
     train_group.add_argument("--llffhold", type=int, default=8)
+    train_group.add_argument(
+        "--gaussian-type",
+        choices=("implicit3D", "explicit3D"),
+        default="implicit3D",
+        help=(
+            "Octree-AnyGS Gaussian representation. `implicit3D` is the neural "
+            "default; `explicit3D` uses explicit SH 3D Gaussians."
+        ),
+    )
     train_group.add_argument("--feat-dim", type=int, default=16)
     train_group.add_argument("--base-layer", type=int, default=9)
     train_group.add_argument("--visible-threshold", type=float, default=0.02)
+    train_group.add_argument(
+        "--train-port",
+        type=int,
+        default=None,
+        help=(
+            "Octree-AnyGS network GUI port for training. Defaults in the wrapper "
+            "to 6009 + GPU index."
+        ),
+    )
     train_group.add_argument(
         "--write-config-only",
         action="store_true",
@@ -313,6 +426,18 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     bucket_group = parser.add_argument_group("anchor bucketing")
     bucket_group.add_argument("--model-path", type=Path, default=None)
     bucket_group.add_argument("--bucket-iteration", type=int, default=-1)
+    bucket_group.add_argument(
+        "--bucket-point-chunk-size",
+        type=int,
+        default=1_000_000,
+        help="Number of stereo points processed per bucketing chunk.",
+    )
+    bucket_group.add_argument(
+        "--bucket-max-points",
+        type=int,
+        default=0,
+        help="Optional deterministic cap on points used by bucket_points.py; 0 keeps all.",
+    )
 
     fit_group = parser.add_argument_group("VBGS anchor fitting")
     fit_group.add_argument("--jax-device", type=int, default=0)
@@ -322,15 +447,32 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default="batched",
     )
     fit_group.add_argument("--batch-size", type=int, default=5000)
+    fit_group.add_argument(
+        "--batch-buckets",
+        default="64,128,256,512,1024,2048,4096,5000",
+        help="Comma-separated point-count buckets forwarded to fit_anchors.py.",
+    )
+    fit_group.add_argument(
+        "--no-auto-extend-buckets",
+        action="store_true",
+        help="Disable automatic dense-tail bucket extension during VBGS fitting.",
+    )
     fit_group.add_argument("--vmap-group-size", type=int, default=64)
+    fit_group.add_argument(
+        "--max-padded-points-per-group",
+        type=int,
+        default=0,
+        help=(
+            "Maximum padded anchor-points per batched VBGS fit call. "
+            "Defaults to `--vmap-group-size * --batch-size`."
+        ),
+    )
     fit_group.add_argument("--log-every", type=int, default=100)
     fit_group.add_argument(
         "--max-observed-anchors",
         type=int,
         default=0,
-        help=(
-            "Optional smoke-test cap for M4b. Leave at 0 for the full fit."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     inspect_group = parser.add_argument_group("anchor fit inspection")
@@ -417,6 +559,15 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Camera split rendered by the final diagnostic stage.",
     )
     render_group.add_argument(
+        "--render-resolution",
+        type=int,
+        default=2,
+        help=(
+            "Octree-AnyGS image divisor/target width for diagnostic renders. "
+            "Smaller divisors produce higher-resolution views."
+        ),
+    )
+    render_group.add_argument(
         "--render-max-views",
         type=int,
         default=0,
@@ -437,6 +588,43 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Optional render output root. Defaults to "
             "`outputs/uncertainty_views/<drive>` in the Torch container."
         ),
+    )
+
+    nbv_group = parser.add_argument_group("next-best-view scoring")
+    nbv_group.add_argument(
+        "--nbv-candidate-source",
+        choices=("test", "train", "lattice"),
+        default="test",
+        help="Candidate camera set passed to score_nbv.py.",
+    )
+    nbv_group.add_argument(
+        "--nbv-max-candidates",
+        type=int,
+        default=0,
+        help="Optional candidate cap for NBV scoring. `0` scores all candidates.",
+    )
+    nbv_group.add_argument(
+        "--nbv-top-k",
+        type=int,
+        default=10,
+        help="Number of ranked NBV candidates saved in nbv_scores.json.",
+    )
+    nbv_group.add_argument(
+        "--nbv-save-top-images",
+        type=int,
+        default=5,
+        help="Number of top uncertainty/alpha arrays saved for NBV visualization.",
+    )
+    nbv_group.add_argument(
+        "--nbv-force-all-levels",
+        action="store_true",
+        help="Force all Octree-AnyGS levels active while scoring NBV candidates.",
+    )
+    nbv_group.add_argument(
+        "--nbv-output-dir",
+        type=Path,
+        default=None,
+        help="Optional NBV output directory. Defaults to `data/m6/<drive>`.",
     )
     parser.set_defaults(**(config_defaults or {}))
     return parser
@@ -476,10 +664,37 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
     return [flag, str(value)]
 
 
+def run_output_dir(args: argparse.Namespace) -> Path | None:
+    if args.run_output_root is None:
+        return None
+    return Path(args.run_output_root) / args.drive
+
+
+def derived_output_dir(
+    explicit: Path | None,
+    base_dir: Path | None,
+    *parts: str,
+) -> Path | None:
+    if explicit is not None:
+        return Path(explicit)
+    if base_dir is None:
+        return None
+    return base_dir.joinpath(*parts)
+
+
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     dataset_path = f"/data/COLMAP/{args.drive}"
     selection_metadata = f"{dataset_path}/metadata.json"
     bucket_root = f"data/m4/{args.drive}"
+    run_dir = run_output_dir(args)
+    map_viz_output_dir = derived_output_dir(
+        args.map_viz_output_dir,
+        run_dir,
+        "pointclouds",
+        "anchors",
+    )
+    render_output_dir = derived_output_dir(args.render_output_dir, run_dir, "views")
+    nbv_output_dir = derived_output_dir(args.nbv_output_dir, run_dir, "nbv")
 
     prepare_cmd = (
         "python",
@@ -512,12 +727,15 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.iterations),
         "--llffhold",
         str(args.llffhold),
+        "--gaussian-type",
+        args.gaussian_type,
         "--feat-dim",
         str(args.feat_dim),
         "--base-layer",
         str(args.base_layer),
         "--visible-threshold",
         str(args.visible_threshold),
+        *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
     )
 
@@ -547,6 +765,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.drive,
         "--iteration",
         str(args.bucket_iteration),
+        "--point-chunk-size",
+        str(args.bucket_point_chunk_size),
+        "--max-points",
+        str(args.bucket_max_points),
         *maybe_option("--model-path", args.model_path),
     )
 
@@ -561,19 +783,18 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.fit_mode,
         "--batch-size",
         str(args.batch_size),
+        "--batch-buckets",
+        args.batch_buckets,
         "--vmap-group-size",
         str(args.vmap_group_size),
+        *(("--no-auto-extend-buckets",) if args.no_auto_extend_buckets else ()),
+        "--max-padded-points-per-group",
+        str(args.max_padded_points_per_group),
         "--log-every",
         str(args.log_every),
-        "--max-observed-anchors",
-        str(args.max_observed_anchors),
     )
 
-    posterior_name = (
-        "anchor_posterior.smoke.npz"
-        if args.max_observed_anchors > 0
-        else "anchor_posterior.npz"
-    )
+    posterior_name = "anchor_posterior.npz"
     inspect_cmd = (
         "python",
         "scripts/inspect_anchor_fits.py",
@@ -620,7 +841,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--percentile-high",
         str(args.map_viz_percentile_high),
         *maybe_option("--poses-root", args.poses_root),
-        *maybe_option("--output-dir", args.map_viz_output_dir),
+        *maybe_option("--output-dir", map_viz_output_dir),
         *maybe_option("--vmin", args.map_viz_vmin),
         *maybe_option("--vmax", args.map_viz_vmax),
         *(("--observed-only",) if args.map_viz_observed_only else ()),
@@ -635,13 +856,51 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         args.drive,
         "--split",
         args.render_split,
+        *maybe_option("--resolution", args.render_resolution),
         "--max-views",
         str(args.render_max_views),
         "--colormap",
         args.render_colormap,
         *maybe_option("--vmin", args.render_vmin),
         *maybe_option("--vmax", args.render_vmax),
-        *maybe_option("--output-dir", args.render_output_dir),
+        *maybe_option("--output-dir", render_output_dir),
+    )
+
+    nbv_cmd = (
+        "python",
+        "scripts/score_nbv.py",
+        "--drive",
+        args.drive,
+        "--candidate-source",
+        args.nbv_candidate_source,
+        "--max-candidates",
+        str(args.nbv_max_candidates),
+        "--top-k",
+        str(args.nbv_top_k),
+        "--save-top-images",
+        str(args.nbv_save_top_images),
+        *maybe_option("--output-root", nbv_output_dir),
+        *(("--force-all-levels",) if args.nbv_force_all_levels else ()),
+    )
+
+    nbv_viz_cmd = (
+        "python",
+        "scripts/visualize_m6.py",
+        "--drive",
+        args.drive,
+        *maybe_option("--m6-root", nbv_output_dir),
+        *maybe_option("--output-dir", nbv_output_dir / "viz" if nbv_output_dir else None),
+    )
+
+    bundle_cmd = (
+        "python",
+        "scripts/bundle_run_outputs.py",
+        "--drive",
+        args.drive,
+        *maybe_option("--run-output-dir", run_dir),
+        *maybe_option("--map-viz-output-dir", map_viz_output_dir),
+        *maybe_option("--render-output-dir", render_output_dir),
+        *maybe_option("--nbv-output-dir", nbv_output_dir),
     )
 
     return [
@@ -654,6 +913,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         PipelineStep("uncertainty", JAX_SERVICE, uncertainty_cmd),
         PipelineStep("map-viz", TORCH_SERVICE, map_viz_cmd),
         PipelineStep("render", TORCH_SERVICE, render_cmd),
+        PipelineStep("nbv", TORCH_SERVICE, nbv_cmd),
+        PipelineStep("nbv-viz", TORCH_SERVICE, nbv_viz_cmd),
+        PipelineStep("bundle", TORCH_SERVICE, bundle_cmd),
     ]
 
 
@@ -793,17 +1055,54 @@ def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> 
     run_command([*compose_base(args), "up", "-d", *services], dry_run=args.dry_run)
 
 
+def build_upload_command(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        sys.executable,
+        "scripts/upload_google_drive.py",
+        "--config",
+        str(args.config) if args.config is not None else "",
+        "--drive",
+        args.drive,
+    ]
+
+    if args.run_output_root is not None:
+        cmd.extend(["--run-output-root", str(args.run_output_root)])
+
+    for arg_name, flag in (
+        ("gdrive_source", "--source"),
+        ("gdrive_remote", "--remote"),
+        ("gdrive_dest", "--dest"),
+        ("gdrive_folder_id", "--folder-id"),
+        ("gdrive_service_account_file", "--service-account-file"),
+        ("gdrive_scope", "--scope"),
+        ("gdrive_rclone_args", "--rclone-args"),
+    ):
+        value = getattr(args, arg_name)
+        if value is not None and value != "":
+            cmd.extend([flag, str(value)])
+
+    if args.dry_run or args.gdrive_dry_run:
+        cmd.append("--dry-run")
+    return cmd
+
+
 def main() -> None:
     args = parse_args()
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
     print(f"Drive: {args.drive}")
     print("Stages: " + ", ".join(step.name for step in steps))
+    if args.upload_google_drive:
+        print("Upload: Google Drive after successful stages")
     run_optional_up(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)
         run_command([*exec_prefix(args, step.service), *step.command], dry_run=args.dry_run)
+
+    if args.upload_google_drive:
+        print("\n=== upload (vbogs-pipeline) ===", flush=True)
+        run_command(build_upload_command(args), dry_run=args.dry_run)
 
     print("\nPipeline completed.")
 

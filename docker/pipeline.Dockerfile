@@ -1,6 +1,29 @@
-FROM docker:27-cli
+FROM docker:27-cli AS docker-cli
 
-RUN apk add --no-cache bash git python3 py3-yaml
+FROM nvidia/cuda:12.8.0-base-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    ffmpeg \
+    git \
+    openssh-server \
+    python3 \
+    python3-yaml \
+    rclone \
+    rsync \
+    unzip \
+    zip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY scripts/start_transfer_sshd.sh /usr/local/bin/vbogs-transfer-sshd
+RUN chmod +x /usr/local/bin/vbogs-transfer-sshd
 
 ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
 ARG VBOGS_GIT_REF=main

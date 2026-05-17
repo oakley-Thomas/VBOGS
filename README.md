@@ -79,9 +79,19 @@ python scripts/run_drive_pipeline.py \
   --gpu 0 \
   --jax-device 0 \
   --use-service-labels
+
+# Example
+python scripts/run_drive_pipeline.py \
+  --drive 2013_05_28_drive_0000_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --use-service-labels \
+  --stop-after render \
+  --write-ply
+
 ```
 **NOTE:** For the full list of pipeline flags, see
-[docs/RUN_DRIVE_PIPELINE_ARGS.md](docs/RUN_DRIVE_PIPELINE_ARGS.md).
+[docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md](docs/documentation/RUN_DRIVE_PIPELINE_ARGS.md)
 
 **NOTE:** For local development, `docker-compose.override.yml` bind-mounts the repo's
 `outputs/` directory into the Torch and JAX containers. Final render artifacts
@@ -114,9 +124,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --max-observed-anchors 50 \
   --render-max-views 2 \
   --use-service-labels
 ```
-
 
