@@ -27,8 +27,9 @@ VBOGS/
 ├── PLAN.md                # milestone checklist
 ├── AGENTS.md              # this file
 ├── README.md
-├── docker/                # container images for torch / jax workflows
-├── docker-compose.yml     # local + Portainer stack definition
+├── docker/                # container images and compose files for torch / jax workflows
+│   └── compose/           # Docker Compose stack definitions
+├── configs/               # pipeline and deployment config profiles
 ├── scripts/               # repo-owned pipeline / deployment entry points
 ├── vbogs/                 # shared library helpers
 ├── Octree-AnyGS/          # submodule — DO NOT EDIT

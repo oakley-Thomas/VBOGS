@@ -2,8 +2,8 @@
 
 `scripts/run_drive_pipeline.py` orchestrates the implemented VBOGS stages across
 the Docker Compose stack. Torch stages run in `vbogs-torch`; JAX stages run in
-`vbogs-jax`. Values in `pipeline_config.yaml` become defaults, and explicit CLI
-arguments override the config.
+`vbogs-jax`. Values in `configs/pipeline/default.yaml` become defaults, and
+explicit CLI arguments override the config.
 
 Common full-pipeline command from inside `vbogs-pipeline`:
 
@@ -27,29 +27,28 @@ Use the profile config that matches where the stack is running:
 
 | File | Intended use | Output location |
 | --- | --- | --- |
-| `pipeline_config.dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` in this checkout, via the dev compose bind mount |
-| `pipeline_config.portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
-| `pipeline_config.yaml` | Backward-compatible default | Depends on the active compose mounts |
+| `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` in this checkout, via the dev compose bind mount |
+| `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
+| `configs/pipeline/default.yaml` | Backward-compatible default | Depends on the active compose mounts |
 
-For local development, plain `docker compose up` auto-loads
-`docker-compose.override.yml`, which bind-mounts `${VBOGS_LOCAL_OUTPUTS:-./outputs}`
-to `/workspace/VBOGS/outputs`. The same setup is available explicitly with:
+For local development, use the base compose file plus the dev overlay, which
+bind-mounts `${VBOGS_LOCAL_OUTPUTS:-./outputs}` to `/workspace/VBOGS/outputs`:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build
+docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 ```
 
 From inside `vbogs-pipeline`, run the local-dev profile with:
 
 ```bash
-python scripts/run_drive_pipeline.py --config pipeline_config.dev.yaml --use-service-labels
+python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-service-labels
 ```
 
 ## Pipeline Selection
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--config CONFIG` | `pipeline_config.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
+| `--config CONFIG` | `configs/pipeline/default.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
 | `--drive DRIVE` | Config: `pipeline.drive` | KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`. Required if not set in config. |
 | `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
 | `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | Parser: `inspect`; profile configs usually use `bundle` | Last stage to run. Use `bundle` for the full curated run output. |
@@ -67,7 +66,8 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--compose-command COMPOSE_COMMAND` | `docker compose` | Compose command used when running from the host. |
-| `--compose-file COMPOSE_FILE` | `docker-compose.yml` | Compose file used when running from the host. |
+| `--compose-file COMPOSE_FILE` | `docker/compose/compose.yml` | Compose file used when running from the host. |
+| `--compose-project-directory COMPOSE_PROJECT_DIRECTORY` | `.` | Project directory used by Docker Compose to resolve relative paths in relocated compose files. |
 | `--project-name PROJECT_NAME` | Empty | Optional Compose/Portainer stack project name passed as `-p`. |
 | `--torch-container TORCH_CONTAINER` | Empty | Concrete container name/id for Torch stages. When set, the runner uses `docker exec` instead of `docker compose exec` for Torch. |
 | `--jax-container JAX_CONTAINER` | Empty | Concrete container name/id for JAX stages. When set, the runner uses `docker exec` instead of `docker compose exec` for JAX. |
@@ -79,7 +79,7 @@ The `vbogs-pipeline` service is also GPU-enabled, so after the stack is
 running you can check host GPU visibility from the pipeline container:
 
 ```bash
-docker compose exec vbogs-pipeline nvidia-smi
+docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml exec vbogs-pipeline nvidia-smi
 ```
 
 ## Google Drive Upload
@@ -145,7 +145,7 @@ Manual upload example from inside `vbogs-pipeline`:
 
 ```bash
 python scripts/upload_google_drive.py \
-  --config pipeline_config.portainer.yaml \
+  --config configs/pipeline/portainer.yaml \
   --folder-id <google-drive-folder-id> \
   --service-account-file /run/secrets/vbogs-google-drive-service-account.json
 ```

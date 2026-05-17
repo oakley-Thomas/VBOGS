@@ -90,7 +90,7 @@ def pipeline_cmd(config: str, drive: str | None) -> list[str]:
 
 
 def main() -> None:
-    config = os.environ.get("VBOGS_PIPELINE_CONFIG") or "pipeline_config.yaml"
+    config = os.environ.get("VBOGS_PIPELINE_CONFIG") or "configs/pipeline/default.yaml"
     drive = os.environ.get("VBOGS_DRIVE")
     run_printed(pipeline_cmd(config, drive))
 

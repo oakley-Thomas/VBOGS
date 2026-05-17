@@ -7,6 +7,7 @@ from scripts.run_drive_pipeline import (
     build_parser,
     build_upload_command,
     build_steps,
+    compose_base,
     load_config_defaults,
     selected_steps,
 )
@@ -170,7 +171,7 @@ def test_google_drive_upload_command_uses_curated_zip_defaults(monkeypatch):
     args = parser.parse_args(
         [
             "--config",
-            "pipeline_config.portainer.yaml",
+            "configs/pipeline/portainer.yaml",
             "--upload-google-drive",
             "--gdrive-folder-id",
             "folder123",
@@ -188,7 +189,7 @@ def test_google_drive_upload_command_uses_curated_zip_defaults(monkeypatch):
         sys.executable,
         "scripts/upload_google_drive.py",
         "--config",
-        "pipeline_config.portainer.yaml",
+        "configs/pipeline/portainer.yaml",
     ]
     assert "--drive" in cmd
     assert cmd[cmd.index("--drive") + 1] == "drive_sync"
@@ -222,7 +223,10 @@ def test_bucket_step_forwards_point_controls():
 
 
 def test_environment_pipeline_configs_are_loadable():
-    for config_name in ("pipeline_config.dev.yaml", "pipeline_config.portainer.yaml"):
+    for config_name in (
+        "configs/pipeline/dev.yaml",
+        "configs/pipeline/portainer.yaml",
+    ):
         defaults = load_config_defaults(REPO_ROOT / config_name)
         assert defaults["drive"] == "2013_05_28_drive_0007_sync"
         assert defaults["run_output_root"] == "outputs/v1_0"
@@ -230,13 +234,23 @@ def test_environment_pipeline_configs_are_loadable():
         assert defaults["render_resolution"] == 2
         assert defaults["bucket_point_chunk_size"] == 1000000
         assert "train_port" not in defaults
-    assert load_config_defaults(REPO_ROOT / "pipeline_config.dev.yaml")["bucket_max_points"] == 10000000
-    assert load_config_defaults(REPO_ROOT / "pipeline_config.portainer.yaml")["bucket_max_points"] == 0
+    assert (
+        load_config_defaults(REPO_ROOT / "configs/pipeline/dev.yaml")["bucket_max_points"]
+        == 10000000
+    )
+    assert (
+        load_config_defaults(REPO_ROOT / "configs/pipeline/portainer.yaml")[
+            "bucket_max_points"
+        ]
+        == 0
+    )
 
 
 def test_dev_compose_binds_local_outputs_and_uses_dev_config():
-    dev_compose = (REPO_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
-    override_compose = (REPO_ROOT / "docker-compose.override.yml").read_text(encoding="utf-8")
+    dev_compose = (REPO_ROOT / "docker/compose/dev.yml").read_text(encoding="utf-8")
+    override_compose = (REPO_ROOT / "docker/compose/override.yml").read_text(
+        encoding="utf-8"
+    )
     dev_pipeline = service_block(dev_compose, "vbogs-pipeline")
     override_pipeline = service_block(override_compose, "vbogs-pipeline")
 
@@ -244,8 +258,22 @@ def test_dev_compose_binds_local_outputs_and_uses_dev_config():
     assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_compose
     assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in dev_pipeline
     assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_pipeline
-    assert "pipeline_config.dev.yaml" in dev_compose
-    assert "pipeline_config.dev.yaml" in override_compose
+    assert "configs/pipeline/dev.yaml" in dev_compose
+    assert "configs/pipeline/dev.yaml" in override_compose
+
+
+def test_compose_base_uses_relocated_compose_file_and_project_directory():
+    parser = build_parser({})
+    args = parser.parse_args(["--drive", "drive_sync"])
+
+    assert compose_base(args)[:6] == [
+        "docker",
+        "compose",
+        "--project-directory",
+        ".",
+        "-f",
+        "docker/compose/compose.yml",
+    ]
 
 
 def test_pipeline_image_includes_zip_tools():
@@ -268,7 +296,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
         "/data/OCTREE-ANYGS",
     ]
 
-    for compose_name in ("docker-compose.yml", "docker-compose.portainer.yml"):
+    for compose_name in ("docker/compose/compose.yml", "docker/compose/portainer.yml"):
         pipeline = service_block(
             (REPO_ROOT / compose_name).read_text(encoding="utf-8"),
             "vbogs-pipeline",
@@ -278,11 +306,13 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
 
 
 def test_portainer_compose_uses_portainer_config():
-    portainer_compose = (REPO_ROOT / "docker-compose.portainer.yml").read_text(encoding="utf-8")
-    stack_env = (REPO_ROOT / "stack.env").read_text(encoding="utf-8")
+    portainer_compose = (REPO_ROOT / "docker/compose/portainer.yml").read_text(
+        encoding="utf-8"
+    )
+    stack_env = (REPO_ROOT / "configs/docker/stack.env").read_text(encoding="utf-8")
 
-    assert "pipeline_config.portainer.yaml" in portainer_compose
-    assert "VBOGS_PIPELINE_CONFIG=pipeline_config.portainer.yaml" in stack_env
+    assert "configs/pipeline/portainer.yaml" in portainer_compose
+    assert "VBOGS_PIPELINE_CONFIG=configs/pipeline/portainer.yaml" in stack_env
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_compose
     assert "VBOGS_GDRIVE_UPLOAD" in portainer_compose
     assert "target: /workspace/VBOGS/outputs" in portainer_compose
