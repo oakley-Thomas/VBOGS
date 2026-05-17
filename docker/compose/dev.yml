@@ -1,3 +1,8 @@
+# Explicit local-development overlay for docker/compose/compose.yml.
+#
+# Usage:
+#   docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
+
 services:
   vbogs-torch:
     volumes:
@@ -19,7 +24,7 @@ services:
 
   vbogs-pipeline:
     environment:
-      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.dev.yaml}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/dev.yaml}
     volumes:
       - type: bind
         source: .

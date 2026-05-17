@@ -11,6 +11,11 @@ export VBOGS_PIPELINE_IMAGE="${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 export VBOGS_TORCH_MAX_JOBS="${VBOGS_TORCH_MAX_JOBS:-1}"
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+COMPOSE_FILE="${VBOGS_COMPOSE_FILE:-${REPO_ROOT}/docker/compose/compose.yml}"
+COMPOSE_PROJECT_DIRECTORY="${VBOGS_COMPOSE_PROJECT_DIRECTORY:-${REPO_ROOT}}"
+
 DEFAULT_TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
 
 detect_torch_cuda_arch() {
@@ -41,5 +46,5 @@ for service in "${services[@]}"; do
   if [ "${service}" = "vbogs-torch" ]; then
     echo "Torch CUDA arch list: ${VBOGS_TORCH_CUDA_ARCH_LIST}; build jobs: ${VBOGS_TORCH_MAX_JOBS}"
   fi
-  docker compose build "${service}"
+  docker compose --project-directory "${COMPOSE_PROJECT_DIRECTORY}" -f "${COMPOSE_FILE}" build "${service}"
 done

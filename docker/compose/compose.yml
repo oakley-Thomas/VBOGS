@@ -1,6 +1,14 @@
 services:
   vbogs-torch:
-    image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
+    image: ${VBOGS_TORCH_IMAGE:-local/vbogs-torch}
+    build:
+      context: .
+      dockerfile: docker/torch.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+        VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
+        VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -36,10 +44,19 @@ services:
       - type: volume
         source: vbogs-torch-cache
         target: /root/.cache/torch
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     command: sleep infinity
 
   vbogs-jax:
-    image: ${VBOGS_JAX_IMAGE:-oakleyth/vbogs-jax:latest}
+    image: ${VBOGS_JAX_IMAGE:-local/vbogs-jax}
+    build:
+      context: .
+      dockerfile: docker/jax.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -73,10 +90,19 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     command: sleep infinity
 
   vbogs-pipeline:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    image: ${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
     working_dir: /workspace/VBOGS
     depends_on:
       - vbogs-torch
@@ -92,7 +118,7 @@ services:
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
       VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
       VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
-      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-pipeline_config.portainer.yaml}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/default.yaml}
       VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
       VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
       VBOGS_GDRIVE_DEST: ${VBOGS_GDRIVE_DEST:-}
@@ -138,7 +164,13 @@ services:
         fi
 
   vbogs-transfer:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    image: ${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+      args:
+        VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+        VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
     working_dir: /workspace/VBOGS
     environment:
       VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}

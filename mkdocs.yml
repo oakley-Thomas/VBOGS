@@ -1,0 +1,56 @@
+site_name: VBOGS Documentation
+site_description: Project documentation for VBOGS, a next-best-view uncertainty pipeline built from Octree-AnyGS and VBGS.
+repo_url: https://github.com/oakley-Thomas/VBOGS
+repo_name: oakley-Thomas/VBOGS
+docs_dir: docs
+use_directory_urls: true
+
+theme:
+  name: readthedocs
+  highlightjs: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quickstart: getting-started/index.md
+      - Data Setup: getting-started/data.md
+      - Environments: getting-started/environments.md
+  - Running VBOGS:
+      - Docker Pipeline: running/docker-pipeline.md
+      - Full Drive Runs: running/full-drive.md
+      - Validation and Inspection: running/validation.md
+      - Portainer, Uploads, and Transfers: running/portainer.md
+  - Algorithm:
+      - Overview: algorithm/index.md
+      - Stage Details: algorithm/stages.md
+      - Formula Summary: algorithm/uncertainty.md
+      - Narrative Walkthrough: documentation/ALGORITHM_OVERVIEW.md
+      - Status and Milestones: algorithm/status.md
+  - Reference:
+      - Command Reference: reference/commands.md
+      - Pipeline Arguments: documentation/RUN_DRIVE_PIPELINE_ARGS.md
+      - Configuration: reference/configuration.md
+      - Artifacts and Data Layout: reference/artifacts.md
+      - Troubleshooting: reference/troubleshooting.md
+      - Source Documents: reference/source-documents.md
+      - Document Map: reference/document-map.md
+  - Development:
+      - Conventions: development/conventions.md
+      - Testing: development/testing.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - fenced_code
+  - md_in_html
+  - sane_lists
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - assets/stylesheets/vbogs.css

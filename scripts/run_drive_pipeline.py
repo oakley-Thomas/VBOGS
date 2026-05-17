@@ -42,7 +42,9 @@ STAGES = (
 )
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
-DEFAULT_CONFIG = Path("pipeline_config.yaml")
+DEFAULT_CONFIG = Path("configs/pipeline/default.yaml")
+DEFAULT_COMPOSE_FILE = Path("docker/compose/compose.yml")
+DEFAULT_COMPOSE_PROJECT_DIRECTORY = Path(".")
 CONFIG_KEY_MAP = {
     "pipeline": {
         "drive": "drive",
@@ -150,6 +152,7 @@ CONFIG_KEY_MAP = {
     "orchestration": {
         "compose_command": "compose_command",
         "compose_file": "compose_file",
+        "compose_project_directory": "compose_project_directory",
         "project_name": "project_name",
         "torch_container": "torch_container",
         "jax_container": "jax_container",
@@ -220,7 +223,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=DEFAULT_CONFIG,
         help=(
             "YAML config file used for pipeline defaults. CLI flags override it. "
-            "Defaults to `pipeline_config.yaml`; pass an empty string to disable."
+            "Defaults to `configs/pipeline/default.yaml`; pass an empty string to disable."
         ),
     )
     parser.add_argument(
@@ -236,8 +239,18 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--compose-file",
         type=Path,
-        default=Path("docker-compose.yml"),
+        default=DEFAULT_COMPOSE_FILE,
         help="Compose file for the VBOGS stack.",
+    )
+    parser.add_argument(
+        "--compose-project-directory",
+        type=Path,
+        default=DEFAULT_COMPOSE_PROJECT_DIRECTORY,
+        help=(
+            "Project directory for Docker Compose path resolution. Defaults to "
+            "the current directory so relocated compose files still resolve "
+            "build contexts and bind mounts from the repo root."
+        ),
     )
     parser.add_argument(
         "--project-name",
@@ -934,6 +947,8 @@ def selected_steps(
 
 def compose_base(args: argparse.Namespace) -> list[str]:
     base = shlex.split(args.compose_command)
+    if args.compose_project_directory:
+        base.extend(["--project-directory", str(args.compose_project_directory)])
     if args.compose_file:
         base.extend(["-f", str(args.compose_file)])
     if args.project_name:
