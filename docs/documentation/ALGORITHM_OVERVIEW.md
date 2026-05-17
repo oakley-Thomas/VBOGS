@@ -8,7 +8,8 @@ should be most informative.
 
 This is the narrative companion to the authoritative algorithm specification in
 [../manuscript/Algorithm.tex](../manuscript/Algorithm.tex) and the milestone
-checklist in [../../PLAN.md](../../PLAN.md). The algorithm has five stages.
+status page in [../algorithm/status.md](../algorithm/status.md). The algorithm
+has five stages.
 
 ## 1. Train the Octree-AnyGS Scene
 
