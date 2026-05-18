@@ -88,9 +88,12 @@ The compose stack reads these frequently used variables:
 | `VBOGS_PIPELINE_ARGS` | Extra CLI args for autorun |
 | `VBOGS_TORCH_IMAGE` | Torch image name |
 | `VBOGS_JAX_IMAGE` | JAX image name |
+| `VBOGS_VBGS_RENDER_IMAGE` | Base VBGS render image name |
 | `VBOGS_PIPELINE_IMAGE` | Pipeline image name |
 | `VBOGS_TORCH_CUDA_ARCH_LIST` | CUDA arch list for Torch image build; `auto` detects GPU 0 |
 | `VBOGS_TORCH_MAX_JOBS` | Torch build parallelism |
+| `VBOGS_RENDER_CUDA_ARCH_LIST` | CUDA arch list for the base VBGS render image |
+| `VBOGS_RENDER_MAX_JOBS` | Base VBGS render image build parallelism |
 | `VBOGS_GDRIVE_UPLOAD` | Enable post-run Google Drive upload |
 | `VBOGS_TRANSFER_AUTHORIZED_KEYS` | Enable read-only SSH/SFTP transfer service |
 

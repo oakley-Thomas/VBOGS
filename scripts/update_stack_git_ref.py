@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_SERVICES = ("vbogs-torch", "vbogs-jax", "vbogs-pipeline")
+DEFAULT_SERVICES = ("vbogs-torch", "vbogs-jax", "vbogs-vbgs-render", "vbogs-pipeline")
 DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
 DEFAULT_REPO_DIR = "/workspace/VBOGS"
 

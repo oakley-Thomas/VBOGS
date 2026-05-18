@@ -24,6 +24,7 @@ Build one image:
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
+bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
 
@@ -170,6 +171,20 @@ inside the sibling `vbogs-jax` container and writes artifacts under
 `outputs/vbgs_baseline/<drive>/` by default. Use `--input-mode bucket` to force the
 same normalized points as VBOGS, or `--input-mode stereo` to train directly from
 `data/points_world/<drive>/points_world.npz`.
+
+Render the original global VBGS KITTI baseline from the dedicated render
+container:
+
+```bash
+docker compose exec vbogs-vbgs-render \
+  python scripts/render_vbgs_kitti_baseline.py \
+    --drive 2013_05_28_drive_0007_sync \
+    --max-views 5
+```
+
+This renders `outputs/vbgs_baseline/<drive>/model_final.json` through prepared
+KITTI cameras under `/data/COLMAP/<drive>` and writes predicted and side-by-side
+PNGs under `outputs/vbgs_baseline/<drive>/renders/`.
 
 Run the VBGS vs VBOGS uncertainty-quality comparison:
 

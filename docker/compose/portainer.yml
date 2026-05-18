@@ -75,6 +75,36 @@ services:
         target: /data/OCTREE-ANYGS
     command: sleep infinity
 
+  vbogs-vbgs-render:
+    image: ${VBOGS_VBGS_RENDER_IMAGE:-oakleyth/vbogs-vbgs-render:latest}
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
+    volumes:
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+        read_only: false
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+    command: sleep infinity
+
   vbogs-pipeline:
     image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
     working_dir: /workspace/VBOGS
