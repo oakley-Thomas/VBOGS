@@ -157,6 +157,20 @@ python scripts/compute_uncertainty.py \
   --drive 2013_05_28_drive_0007_sync
 ```
 
+Run the original global VBGS KITTI baseline from `vbogs-pipeline`:
+
+```bash
+python scripts/run_vbgs_kitti_baseline.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --use-service-labels
+```
+
+`vbogs-pipeline` only orchestrates this command. The actual JAX/VBGS fit runs
+inside the sibling `vbogs-jax` container and writes artifacts under
+`outputs/vbgs_baseline/<drive>/` by default. Use `--input-mode bucket` to force the
+same normalized points as VBOGS, or `--input-mode stereo` to train directly from
+`data/points_world/<drive>/points_world.npz`.
+
 Render uncertainty diagnostics:
 
 ```bash
