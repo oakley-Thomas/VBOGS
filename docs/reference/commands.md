@@ -171,6 +171,18 @@ inside the sibling `vbogs-jax` container and writes artifacts under
 same normalized points as VBOGS, or `--input-mode stereo` to train directly from
 `data/points_world/<drive>/points_world.npz`.
 
+Run the VBGS vs VBOGS uncertainty-quality comparison:
+
+```bash
+python scripts/run_vbgs_vbogs_comparison.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --use-service-labels
+```
+
+The comparison writes split point clouds, train/eval anchor buckets, VBOGS
+uncertainty, global VBGS K-sweep projections, metrics, maps, and view renders
+under `outputs/vbgs_comparison/<drive>/`.
+
 Render uncertainty diagnostics:
 
 ```bash

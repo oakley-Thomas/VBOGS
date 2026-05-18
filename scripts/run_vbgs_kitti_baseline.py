@@ -74,6 +74,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--reassign-fraction", type=float, default=0.05)
     parser.add_argument("--no-reassign", action="store_true")
+    parser.add_argument("--project-anchors", action="store_true")
+    parser.add_argument("--pts-by-anchor", type=Path, default=None)
+    parser.add_argument("--eval-bucket-root", type=Path, default=None)
     parser.add_argument("--vbgs-root", type=Path, default=Path("vbgs"))
     return parser.parse_args(argv)
 
@@ -201,9 +204,13 @@ def worker_command(args: argparse.Namespace) -> list[str]:
         *maybe_option("--norm-params", args.norm_params),
         *maybe_option("--points-world", args.points_world),
         *maybe_option("--output-root", args.output_root),
+        *maybe_option("--pts-by-anchor", args.pts_by_anchor),
+        *maybe_option("--eval-bucket-root", args.eval_bucket_root),
     ]
     if args.no_reassign:
         cmd.append("--no-reassign")
+    if args.project_anchors:
+        cmd.append("--project-anchors")
     return cmd
 
 

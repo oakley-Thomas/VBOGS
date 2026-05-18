@@ -199,6 +199,13 @@ def test_tiny_jax_baseline_smoke(tmp_path):
         rgb=rgb,
         frame_id=np.array([0, 0, 1, 1, 2, 2], dtype=np.int32),
     )
+    pts_by_anchor_path = tmp_path / "pts_by_anchor.npz"
+    np.savez_compressed(
+        pts_by_anchor_path,
+        anchor_offsets=np.array([0, 2, 4, 6], dtype=np.int64),
+        point_indices=np.array([0, 1, 2, 3, 4, 5], dtype=np.int64),
+        point_counts=np.array([2, 2, 2], dtype=np.int32),
+    )
 
     try:
         train_main(
@@ -216,6 +223,9 @@ def test_tiny_jax_baseline_smoke(tmp_path):
                 "--batch-size",
                 "4",
                 "--no-reassign",
+                "--project-anchors",
+                "--pts-by-anchor",
+                str(pts_by_anchor_path),
             ]
         )
     except (ImportError, RuntimeError) as exc:
@@ -223,9 +233,12 @@ def test_tiny_jax_baseline_smoke(tmp_path):
 
     assert (tmp_path / "out" / "model_final.json").exists()
     assert (tmp_path / "out" / "model_final.npz").exists()
+    assert (tmp_path / "out" / "U_baseline.npy").exists()
+    assert (tmp_path / "out" / "train_anchor_scores.npz").exists()
     metadata_path = tmp_path / "out" / "baseline_metadata.json"
     assert metadata_path.exists()
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["n_components"] == 3
     assert metadata["selected_point_count"] == 6
     assert np.isfinite(metadata["mean_elbo_per_point"])
+    assert metadata["anchor_projection"]["train"]["anchor_count"] == 3

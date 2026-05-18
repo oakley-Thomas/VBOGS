@@ -141,6 +141,32 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Disable the upstream Habitat-style reassignment heuristic.",
     )
     parser.add_argument(
+        "--project-anchors",
+        action="store_true",
+        help=(
+            "After training, compute per-point negative ELBO and aggregate it "
+            "onto packed Octree-AnyGS anchors."
+        ),
+    )
+    parser.add_argument(
+        "--pts-by-anchor",
+        type=Path,
+        default=None,
+        help=(
+            "Packed train anchor assignment artifact. Defaults to "
+            "`<bucket-root>/pts_by_anchor.npz` when available."
+        ),
+    )
+    parser.add_argument(
+        "--eval-bucket-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional eval bucket root containing `points_norm.npz` and "
+            "`pts_by_anchor.npz` for held-out anchor scoring."
+        ),
+    )
+    parser.add_argument(
         "--vbgs-root",
         type=Path,
         default=Path("vbgs"),
@@ -167,6 +193,10 @@ def default_points_norm_path(drive: str, bucket_root: Path | None) -> Path:
 
 def default_norm_params_path(drive: str, bucket_root: Path | None) -> Path:
     return resolve_bucket_root(drive, bucket_root) / "norm_params.json"
+
+
+def default_pts_by_anchor_path(drive: str, bucket_root: Path | None) -> Path:
+    return resolve_bucket_root(drive, bucket_root) / "pts_by_anchor.npz"
 
 
 def default_points_world_path(drive: str) -> Path:
@@ -362,6 +392,13 @@ def validate_training_args(args: argparse.Namespace, data: BaselineInput) -> Non
         )
     if data.points_norm.shape[0] == 0:
         raise ValueError("Cannot train a VBGS baseline with zero points")
+    if args.project_anchors:
+        pts_path = args.pts_by_anchor or default_pts_by_anchor_path(
+            args.drive,
+            args.bucket_root,
+        )
+        if not pts_path.exists():
+            raise FileNotFoundError(f"Train anchor assignment artifact not found: {pts_path}")
 
 
 def select_device(jax_module: Any, device_index: int) -> str:
@@ -395,6 +432,132 @@ def compute_mean_elbo(
         total += float(np.asarray(elbo_arr).sum())
         count += int(batch.shape[0])
     return total / max(count, 1)
+
+
+def compute_point_negative_elbo(
+    *,
+    model: Any,
+    points_norm: np.ndarray,
+    batch_size: int,
+    compute_elbo_delta: Any,
+    jnp_module: Any,
+) -> np.ndarray:
+    chunks: list[np.ndarray] = []
+    for start in range(0, points_norm.shape[0], batch_size):
+        batch = points_norm[start : start + batch_size]
+        batch_jax = jnp_module.expand_dims(jnp_module.asarray(batch), axis=-1)
+        elbo_arr, _ = compute_elbo_delta(model, batch_jax)
+        chunks.append(-np.asarray(elbo_arr, dtype=np.float32).reshape(-1))
+    if not chunks:
+        return np.zeros((0,), dtype=np.float32)
+    return np.concatenate(chunks, axis=0).astype(np.float32, copy=False)
+
+
+def aggregate_anchor_scores(
+    *,
+    point_scores: np.ndarray,
+    anchor_offsets: np.ndarray,
+    point_indices: np.ndarray,
+    fill_value: float | None = None,
+) -> dict[str, np.ndarray | float]:
+    """Aggregate per-point scores through packed per-anchor assignments."""
+
+    point_scores = np.asarray(point_scores, dtype=np.float32).reshape(-1)
+    anchor_offsets = np.asarray(anchor_offsets, dtype=np.int64).reshape(-1)
+    point_indices = np.asarray(point_indices, dtype=np.int64).reshape(-1)
+
+    if anchor_offsets.shape[0] == 0:
+        raise ValueError("anchor_offsets must be a non-empty 1D array")
+    if np.any(point_indices < 0) or np.any(point_indices >= point_scores.shape[0]):
+        raise ValueError("point_indices contains values outside the point score range")
+
+    anchor_count = int(anchor_offsets.shape[0] - 1)
+    assignment_counts = np.diff(anchor_offsets).astype(np.int64)
+    anchor_ids = np.repeat(np.arange(anchor_count, dtype=np.int64), assignment_counts)
+    assignment_scores = point_scores[point_indices]
+    score_sum = np.bincount(
+        anchor_ids,
+        weights=assignment_scores.astype(np.float64),
+        minlength=anchor_count,
+    )
+    safe_counts = np.maximum(assignment_counts, 1)
+    raw_mean = (score_sum / safe_counts).astype(np.float32)
+    raw_mean[assignment_counts == 0] = np.nan
+
+    finite = raw_mean[np.isfinite(raw_mean)]
+    if fill_value is None:
+        fill = float(np.max(finite)) if finite.size else 0.0
+    else:
+        fill = float(fill_value)
+    filled = np.where(np.isfinite(raw_mean), raw_mean, fill).astype(np.float32)
+    return {
+        "raw_mean": raw_mean,
+        "filled_mean": filled,
+        "assignment_count": assignment_counts,
+        "fill_value": fill,
+    }
+
+
+def load_points_norm(path: Path) -> np.ndarray:
+    with np.load(path) as data:
+        return np.asarray(data["points_norm"], dtype=np.float32)
+
+
+def project_anchor_scores(
+    *,
+    model: Any,
+    points_norm: np.ndarray,
+    pts_by_anchor_path: Path,
+    output_path: Path,
+    batch_size: int,
+    compute_elbo_delta: Any,
+    jnp_module: Any,
+    fill_value: float | None = None,
+) -> dict[str, Any]:
+    point_negative_elbo = compute_point_negative_elbo(
+        model=model,
+        points_norm=points_norm,
+        batch_size=batch_size,
+        compute_elbo_delta=compute_elbo_delta,
+        jnp_module=jnp_module,
+    )
+    with np.load(pts_by_anchor_path) as pts:
+        anchor_offsets = np.asarray(pts["anchor_offsets"], dtype=np.int64)
+        point_indices = np.asarray(pts["point_indices"], dtype=np.int64)
+        point_counts = np.asarray(pts["point_counts"], dtype=np.int64)
+
+    aggregated = aggregate_anchor_scores(
+        point_scores=point_negative_elbo,
+        anchor_offsets=anchor_offsets,
+        point_indices=point_indices,
+        fill_value=fill_value,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output_path,
+        point_negative_elbo=point_negative_elbo,
+        anchor_negative_elbo_mean=aggregated["raw_mean"],
+        anchor_negative_elbo_filled=aggregated["filled_mean"],
+        assignment_count=aggregated["assignment_count"],
+        point_count=point_counts,
+        fill_value=np.array(aggregated["fill_value"], dtype=np.float32),
+    )
+
+    raw_mean = np.asarray(aggregated["raw_mean"], dtype=np.float32)
+    finite_anchor = raw_mean[np.isfinite(raw_mean)]
+    return {
+        "path": str(output_path),
+        "pts_by_anchor_path": str(pts_by_anchor_path),
+        "point_count": int(points_norm.shape[0]),
+        "anchor_count": int(np.asarray(aggregated["filled_mean"]).shape[0]),
+        "filled_anchor_count": int(np.count_nonzero(~np.isfinite(raw_mean))),
+        "fill_value": float(aggregated["fill_value"]),
+        "mean_negative_elbo": float(np.mean(point_negative_elbo))
+        if point_negative_elbo.size
+        else None,
+        "anchor_mean_min": float(np.min(finite_anchor)) if finite_anchor.size else None,
+        "anchor_mean_max": float(np.max(finite_anchor)) if finite_anchor.size else None,
+    }
 
 
 def maybe_reassign_prior(
@@ -516,6 +679,46 @@ def train_baseline(args: argparse.Namespace, data: BaselineInput) -> dict[str, A
     )
     save_norm_params(norm_params_path, data.norm_params)
 
+    projection_metadata: dict[str, Any] = {}
+    u_baseline_path = output_root / "U_baseline.npy"
+    if args.project_anchors:
+        pts_by_anchor_path = (
+            args.pts_by_anchor
+            or default_pts_by_anchor_path(args.drive, args.bucket_root)
+        ).resolve()
+        train_scores_path = output_root / "train_anchor_scores.npz"
+        train_projection = project_anchor_scores(
+            model=model,
+            points_norm=data.points_norm,
+            pts_by_anchor_path=pts_by_anchor_path,
+            output_path=train_scores_path,
+            batch_size=args.batch_size,
+            compute_elbo_delta=compute_elbo_delta,
+            jnp_module=jnp,
+        )
+        with np.load(train_scores_path) as scores:
+            np.save(
+                u_baseline_path,
+                np.asarray(scores["anchor_negative_elbo_filled"], dtype=np.float32),
+            )
+
+        projection_metadata["train"] = train_projection
+        projection_metadata["u_baseline_path"] = str(u_baseline_path)
+
+        if args.eval_bucket_root is not None:
+            eval_bucket_root = args.eval_bucket_root.resolve()
+            eval_scores_path = output_root / "eval_anchor_scores.npz"
+            eval_projection = project_anchor_scores(
+                model=model,
+                points_norm=load_points_norm(eval_bucket_root / "points_norm.npz"),
+                pts_by_anchor_path=eval_bucket_root / "pts_by_anchor.npz",
+                output_path=eval_scores_path,
+                batch_size=args.batch_size,
+                compute_elbo_delta=compute_elbo_delta,
+                jnp_module=jnp,
+            )
+            projection_metadata["eval"] = eval_projection
+
     metadata = {
         "drive": args.drive,
         "input_mode": data.input_mode,
@@ -541,7 +744,9 @@ def train_baseline(args: argparse.Namespace, data: BaselineInput) -> dict[str, A
             "model_json": str(model_json_path),
             "model_npz": str(model_npz_path),
             "metadata": str(metadata_path),
+            "u_baseline": str(u_baseline_path) if args.project_anchors else None,
         },
+        "anchor_projection": projection_metadata,
     }
     save_json(metadata_path, metadata)
     return metadata
