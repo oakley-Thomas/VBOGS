@@ -59,7 +59,11 @@ rebuilding the images.
 
 Start the stack:
 ```bash
-docker compose up -d --no-build
+# dev machine config
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  up -d --no-build
 ```
 
 Download the KITTI-360 Dataset:

@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -21,10 +21,10 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 &
     python -m pip install --upgrade pip setuptools wheel
 
 RUN python -m pip install \
-    torch==2.4.1 \
-    torchvision==0.19.1 \
-    torchaudio==2.4.1 \
-    --index-url https://download.pytorch.org/whl/cu121
+    torch==2.7.1 \
+    torchvision==0.22.1 \
+    torchaudio==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 RUN python -m pip install \
     numpy \
@@ -37,7 +37,7 @@ RUN python -m pip install \
     tqdm \
     ninja
 
-ARG VBOGS_RENDER_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+ARG VBOGS_RENDER_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
 ARG VBOGS_RENDER_MAX_JOBS=1
 
 ENV TORCH_CUDA_ARCH_LIST="${VBOGS_RENDER_CUDA_ARCH_LIST}" \
@@ -58,6 +58,7 @@ RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.
     cd /workspace/gaussian-splatting && \
     git checkout 2eee0e26d2d5fd00ec462df47752223952f6bf4e && \
     git submodule update --init --recursive && \
+    sed -i '1i #include <cfloat>' submodules/simple-knn/simple_knn.cu && \
     cd submodules/simple-knn && \
     python setup.py install && \
     cd ../diff-gaussian-rasterization && \

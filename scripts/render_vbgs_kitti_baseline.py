@@ -66,6 +66,26 @@ class KittiCameraInfo:
     frame_id: int | None
 
 
+@dataclass(frozen=True)
+class ModelColorInfo:
+    scale: float
+    raw_min: list[float]
+    raw_max: list[float]
+    source_count: int
+    renderable_count: int
+
+
+@dataclass(frozen=True)
+class ModelScaleInfo:
+    min_scale: float
+    max_scale: float
+    raw_min: list[float]
+    raw_max: list[float]
+    sanitized_min: list[float]
+    sanitized_max: list[float]
+    clamped_component_count: int
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -121,6 +141,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=float,
         default=1.41,
         help="Scale modifier forwarded to the Graphdeco renderer.",
+    )
+    parser.add_argument(
+        "--min-scale",
+        type=float,
+        default=1.0e-4,
+        help="Minimum per-axis Gaussian scale before rendering.",
+    )
+    parser.add_argument(
+        "--max-scale",
+        type=float,
+        default=5.0,
+        help="Maximum per-axis Gaussian scale before rendering. Use 0 to disable the upper clamp.",
     )
     parser.add_argument(
         "--no-side-by-side",
@@ -363,6 +395,118 @@ def load_render_backend() -> Any:
     return backend
 
 
+def renderable_component_mask(covariances: np.ndarray) -> np.ndarray:
+    covariances = np.asarray(covariances, dtype=np.float32)
+    if covariances.ndim != 3 or covariances.shape[1] < 3 or covariances.shape[2] < 3:
+        raise ValueError(f"Expected covariance shape (N, >=3, >=3), got {covariances.shape}")
+
+    mask = np.zeros((covariances.shape[0],), dtype=bool)
+    for index, covariance in enumerate(covariances[:, :3, :3]):
+        try:
+            lower = np.linalg.cholesky(covariance)
+        except np.linalg.LinAlgError:
+            continue
+        scaling = np.linalg.norm(lower, axis=-1)
+        mask[index] = bool(np.isfinite(scaling).all() and scaling.sum() > -1.0)
+    return mask
+
+
+def load_normalized_model_colors(
+    model_path: Path,
+    *,
+    renderable_count: int | None = None,
+) -> tuple[np.ndarray, ModelColorInfo]:
+    with model_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    mu = np.asarray(payload["mu"], dtype=np.float32)
+    if mu.ndim != 2 or mu.shape[1] < 6:
+        raise ValueError(f"Expected model `mu` shape (N, >=6), got {mu.shape}")
+
+    raw_colors = mu[:, 3:6]
+    selected_raw_colors = raw_colors
+    if renderable_count is not None and renderable_count != raw_colors.shape[0]:
+        covariances = np.asarray(payload["si"], dtype=np.float32)
+        mask = renderable_component_mask(covariances)
+        if int(np.count_nonzero(mask)) != renderable_count:
+            raise ValueError(
+                f"Model has {renderable_count} renderable color features, but the "
+                f"covariance mask selected {int(np.count_nonzero(mask))} of "
+                f"{raw_colors.shape[0]} component colors"
+            )
+        selected_raw_colors = raw_colors[mask]
+
+    finite = raw_colors[np.isfinite(raw_colors)]
+    scale = 255.0 if finite.size and float(np.nanmax(finite)) > 1.0 else 1.0
+    colors = np.clip(selected_raw_colors / np.float32(scale), 0.0, 1.0).astype(np.float32)
+    info = ModelColorInfo(
+        scale=scale,
+        raw_min=np.nanmin(raw_colors, axis=0).astype(float).tolist(),
+        raw_max=np.nanmax(raw_colors, axis=0).astype(float).tolist(),
+        source_count=int(raw_colors.shape[0]),
+        renderable_count=int(colors.shape[0]),
+    )
+    return colors, info
+
+
+def replace_model_colors(backend: Any, model: Any, model_path: Path) -> ModelColorInfo:
+    import torch
+
+    feature_count = int(model._features_dc.shape[0])
+    colors, info = load_normalized_model_colors(model_path, renderable_count=feature_count)
+    if colors.shape[0] != feature_count:
+        raise ValueError(
+            f"Model has {feature_count} renderable color features, but {model_path} "
+            f"contains {colors.shape[0]} component colors"
+        )
+
+    rgb_to_sh = getattr(backend, "RGB2SH", None)
+    if rgb_to_sh is None:
+        from utils.sh_utils import RGB2SH as rgb_to_sh
+
+    model._features_dc = torch.tensor(
+        rgb_to_sh(colors),
+        dtype=model._features_dc.dtype,
+        device=model._features_dc.device,
+    ).unsqueeze(1)
+    return info
+
+
+def load_vbgs_model_for_render(backend: Any, model_path: Path, *, device: str) -> tuple[Any, ModelColorInfo]:
+    model = backend.vbgs_model_to_splat(model_path, device=device)
+    color_info = replace_model_colors(backend, model, model_path)
+    return model, color_info
+
+
+def sanitize_model_scales(model: Any, *, min_scale: float, max_scale: float) -> ModelScaleInfo:
+    import torch
+
+    if min_scale < 0.0:
+        raise ValueError("--min-scale must be non-negative")
+    if max_scale < 0.0:
+        raise ValueError("--max-scale must be non-negative")
+    if max_scale > 0.0 and max_scale < min_scale:
+        raise ValueError("--max-scale must be 0 or greater than/equal to --min-scale")
+
+    scales = model._scaling
+    raw = scales.detach().clone()
+    sanitized = torch.nan_to_num(raw, nan=min_scale, posinf=max_scale or min_scale, neginf=min_scale)
+    sanitized = sanitized.clamp_min(min_scale)
+    if max_scale > 0.0:
+        sanitized = sanitized.clamp_max(max_scale)
+    changed = (sanitized != raw).any(dim=1)
+    model._scaling = sanitized.to(dtype=scales.dtype, device=scales.device)
+
+    return ModelScaleInfo(
+        min_scale=float(min_scale),
+        max_scale=float(max_scale),
+        raw_min=raw.amin(dim=0).detach().cpu().numpy().astype(float).tolist(),
+        raw_max=raw.amax(dim=0).detach().cpu().numpy().astype(float).tolist(),
+        sanitized_min=model._scaling.amin(dim=0).detach().cpu().numpy().astype(float).tolist(),
+        sanitized_max=model._scaling.amax(dim=0).detach().cpu().numpy().astype(float).tolist(),
+        clamped_component_count=int(changed.sum().detach().cpu()),
+    )
+
+
 def configure_backend_args(backend: Any, *, device: str) -> Any:
     cargs = getattr(backend, "cargs", None)
     if cargs is None:
@@ -396,17 +540,25 @@ def render_camera_image(
     torch_device = torch.device(device)
     if torch_device.type == "cuda":
         torch.cuda.set_device(torch_device)
+        torch.cuda.empty_cache()
 
     render_camera = load_backend_camera(backend, camera, device=device)
     background_tensor = float(background) * torch.ones(3, device=device)
-    rendered = backend.render_cuda(
-        render_camera,
-        model,
-        backend.pipe,
-        background_tensor,
-        scale,
-    )["render"]
-    image = rendered.detach().cpu().permute(1, 2, 0).numpy()
+    with torch.no_grad():
+        rendered = backend.render_cuda(
+            render_camera,
+            model,
+            backend.pipe,
+            background_tensor,
+            scale,
+        )["render"]
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize(torch_device)
+        image = rendered.detach().cpu().permute(1, 2, 0).numpy()
+
+    del rendered, background_tensor, render_camera
+    if torch_device.type == "cuda":
+        torch.cuda.empty_cache()
     return np.clip(image, 0.0, 1.0)
 
 
@@ -453,7 +605,12 @@ def render_views(args: argparse.Namespace) -> dict[str, Any]:
         output_side_by_side.mkdir(parents=True, exist_ok=True)
 
     backend = load_render_backend()
-    model = backend.vbgs_model_to_splat(model_path, device=args.device)
+    model, color_info = load_vbgs_model_for_render(backend, model_path, device=args.device)
+    scale_info = sanitize_model_scales(
+        model,
+        min_scale=args.min_scale,
+        max_scale=args.max_scale,
+    )
 
     rows: list[dict[str, Any]] = []
     for index, camera in enumerate(selected_cameras):
@@ -500,6 +657,18 @@ def render_views(args: argparse.Namespace) -> dict[str, Any]:
         "device": args.device,
         "background": float(args.background),
         "scale": float(args.scale),
+        "min_scale": float(args.min_scale),
+        "max_scale": float(args.max_scale),
+        "model_color_scale": float(color_info.scale),
+        "model_color_raw_min": color_info.raw_min,
+        "model_color_raw_max": color_info.raw_max,
+        "model_color_source_count": int(color_info.source_count),
+        "model_color_renderable_count": int(color_info.renderable_count),
+        "model_scale_raw_min": scale_info.raw_min,
+        "model_scale_raw_max": scale_info.raw_max,
+        "model_scale_sanitized_min": scale_info.sanitized_min,
+        "model_scale_sanitized_max": scale_info.sanitized_max,
+        "model_scale_clamped_component_count": int(scale_info.clamped_component_count),
         "max_views": int(args.max_views),
         "every_n": int(args.every_n),
         "frame_ids": sorted(parse_frame_ids(args.frame_ids) or []),

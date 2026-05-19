@@ -1,0 +1,673 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\title{VBOGS Project Report}
+\author{VBOGS}
+\date{May 18, 2026}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Umax}{U_{\max}}
+
+\setlist[itemize]{leftmargin=*, itemsep=0.2em, topsep=0.3em}
+\setlist[enumerate]{leftmargin=*, itemsep=0.2em, topsep=0.3em}
+\renewcommand{\arraystretch}{1.18}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+VBOGS is a mid-implementation research system for uncertainty-aware
+autonomous-vehicle mapping. It combines Octree-AnyGS, a scalable
+level-of-detail Gaussian Splatting scene representation, with Variational
+Bayes Gaussian Splatting (VBGS), a Bayesian Gaussian mixture model that
+produces posterior uncertainty. The result is a scene model with one
+uncertainty value per Octree-AnyGS anchor. Those anchor uncertainties can be
+rendered from candidate camera poses to choose a next-best view (NBV): the
+view expected to observe the most uncertain visible scene content.
+
+The repository now has owned entry points for the core pipeline from data
+preparation through NBV scoring. The remaining work is primarily validation:
+checking per-anchor posteriors, running the full pipeline on a scene whose
+uncertainty behavior is understood, confirming rendered uncertainty overlays,
+and documenting failure modes before treating the outputs as scientific
+results.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Project Goal}
+
+The project asks a practical mapping question: after a vehicle has built a
+Gaussian Splatting scene from camera data, where should it look next to reduce
+uncertainty? Standard Gaussian Splatting methods can render high-quality
+images, but they do not directly expose calibrated uncertainty over local
+scene structure. VBOGS adds that uncertainty layer.
+
+The key output is a next-best-view camera pose. A candidate pose is good when
+it sees scene content whose local posterior uncertainty is high. This is
+different from simply choosing a view with many visible pixels: VBOGS scores
+uncertainty per unit of visible surface, so the selected view is biased toward
+poorly modeled surfaces rather than large already-confident areas.
+
+\section{System Summary}
+
+\subsection{What VBOGS Combines}
+
+\begin{longtable}{@{}p{0.24\linewidth}p{0.68\linewidth}@{}}
+\toprule
+\textbf{Component} & \textbf{Role in the project} \\
+\midrule
+\endhead
+Octree-AnyGS &
+The primary scene model. It stores a multi-level set of Gaussian anchors and
+renders the scene with level-of-detail selection. It runs in the PyTorch
+environment. \\
+VBGS &
+The uncertainty model. It fits Bayesian Gaussian mixtures to normalized
+position-color samples and returns posterior parameters. It runs in the JAX
+environment. \\
+KITTI-360 stereo data &
+The initial autonomous-driving data source. Perspective stereo frames provide
+RGB observations, ground-truth poses, calibration, and stereo pairs for point
+cloud extraction. \\
+Repo-owned wrappers &
+Scripts under \path{scripts/} and helpers under \path{vbogs/} connect the two
+upstream systems without modifying the upstream submodules. \\
+\bottomrule
+\end{longtable}
+
+\subsection{High-Level Data Flow}
+
+\begin{enumerate}
+  \item Prepare KITTI-360 frames into the COLMAP-style layout expected by
+        Octree-AnyGS.
+  \item Train Octree-AnyGS on posed RGB images to obtain anchors, levels,
+        opacity, geometry, and appearance parameters.
+  \item Estimate stereo depth, unproject pixels, and save a world-frame
+        point cloud with RGB values.
+  \item Bucket stereo points into Octree-AnyGS anchors using the same grid
+        discretization that created the anchors.
+  \item Normalize the point data and fit one VBGS posterior per sufficiently
+        observed anchor.
+  \item Reduce each posterior to one scalar uncertainty value.
+  \item Render scalar uncertainty from candidate camera poses and choose the
+        highest-scoring NBV candidate.
+\end{enumerate}
+
+\section{Core Concepts}
+
+\subsection{Anchors and Voxels}
+
+In this repository, an Octree-AnyGS anchor is treated as a voxel at a specific
+level of detail. There is no separate ``leaf voxel'' object. Octree-AnyGS stores
+anchors in a flat tensor, and each anchor has a level \(\ell\). Its cell size is
+
+\[
+  cell\_size(\ell)
+  =
+  \frac{\texttt{voxel\_size}}{\texttt{fork}^{\ell}}.
+\]
+
+When this report says ``voxel,'' it means ``anchor cell at that level.'' This
+distinction matters because anchors from multiple levels coexist. A far camera
+may render a coarse anchor while a nearby camera may render finer anchors in the
+same physical region.
+
+\subsection{Per-Anchor Uncertainty}
+
+For every anchor \(a\), VBOGS wants a scalar uncertainty \(U_a\). This value is
+derived from the VBGS posterior fitted to the stereo points that fall inside the
+anchor cell. Observed anchors receive a posterior-entropy score. Anchors with
+too few points receive \(\Umax\), a sentinel high-uncertainty value.
+
+The initial uncertainty definition is the expected mixture-weighted entropy of
+the per-component posteriors:
+
+\[
+  U_a
+  =
+  \sum_{k=1}^{K_a}
+  \bar{\pi}_{ak}
+  \left(
+    H_{\mathrm{NW}}(q^s_{ak})
+    +
+    H_{\Delta}(q^c_{ak})
+  \right),
+\]
+
+where \(\bar{\pi}_{ak}\) is the expected Dirichlet mixture weight,
+\(H_{\mathrm{NW}}\) is the spatial Normal-Wishart posterior entropy, and
+\(H_{\Delta}\) is the color/delta posterior entropy.
+
+\subsection{Coordinate Frames}
+
+The same stereo point data is used in two coordinate systems:
+
+\begin{itemize}
+  \item \texttt{points\_world}: world-frame positions and RGB. These are used
+        for anchor bucketing because Octree-AnyGS anchors live in world space.
+  \item \texttt{points\_norm}: globally normalized position and RGB. These are
+        used for VBGS fitting because the VBGS priors expect normalized inputs.
+\end{itemize}
+
+Mixing these frames is one of the main ways to produce plausible-looking but
+incorrect results. In particular, bucketing must not use normalized
+coordinates.
+
+\section{Architecture and Environments}
+
+VBOGS deliberately keeps the PyTorch and JAX sides separate. Octree-AnyGS and
+VBGS have incompatible CUDA dependency stacks, so the project uses two
+environments:
+
+\begin{longtable}{@{}p{0.24\linewidth}p{0.68\linewidth}@{}}
+\toprule
+\textbf{Environment} & \textbf{Responsibilities} \\
+\midrule
+\endhead
+\texttt{vbogs-torch} &
+Octree-AnyGS training and rendering, stereo point extraction, point-to-anchor
+bucketing, uncertainty rendering, NBV scoring, and most operator-facing
+pipeline orchestration. \\
+\texttt{vbogs-jax} &
+VBGS posterior fitting and posterior-to-uncertainty computations. \\
+\bottomrule
+\end{longtable}
+
+The framework boundary is the filesystem. PyTorch-side scripts write
+\texttt{.npz}, \texttt{.npy}, \texttt{.json}, and visualization artifacts. JAX-side
+scripts read those files, produce posterior files, and write uncertainty
+arrays back to disk. This avoids in-process tensor sharing and keeps each
+framework inside the environment it supports.
+
+The upstream directories \path{Octree-AnyGS/} and \path{vbgs/} are treated as
+read-only dependencies. VBOGS functionality lives in repo-owned scripts and
+library helpers.
+
+\section{Pipeline Stages}
+
+\subsection{Stage 1: Prepare Data and Train Octree-AnyGS}
+
+The source data is KITTI-360 perspective stereo. The preparation step adapts
+KITTI-360 into the COLMAP-style layout expected by Octree-AnyGS:
+
+\begin{itemize}
+  \item camera intrinsics and extrinsics;
+  \item posed left-camera RGB images;
+  \item sparse reconstruction sidecars required by the training code;
+  \item metadata that records the source drive and frame selection.
+\end{itemize}
+
+Octree-AnyGS is then trained normally from posed RGB frames. Stereo is not used
+as a training loss for this stage; it is used later to generate the point
+observations that feed the uncertainty head.
+
+The important output is an Octree-AnyGS run directory containing the anchor
+point cloud and model parameters. Those anchors define the grid that later
+receives uncertainty values.
+
+\subsection{Stage 2: Build a Stereo Point Cloud}
+
+For each stereo pair, VBOGS estimates disparity, converts disparity to depth,
+unprojects valid depth pixels into the left-camera frame, transforms those
+points into the world frame, attaches RGB from the left image, and concatenates
+all frames.
+
+The baseline matcher is OpenCV \texttt{StereoSGBM}. The interface is
+provider-agnostic, so future matchers such as RAFT-Stereo can be introduced
+without changing downstream file formats.
+
+The output contract is \path{points_world.npz}, with keys:
+
+\begin{longtable}{@{}p{0.24\linewidth}p{0.68\linewidth}@{}}
+\toprule
+\textbf{Key} & \textbf{Meaning} \\
+\midrule
+\endhead
+\texttt{xyz} & World-frame point positions. \\
+\texttt{rgb} & RGB values sampled from the left image. \\
+\texttt{frame\_id} & The source KITTI-360 frame id for each point. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Stage 3: Bucket Points into Anchors}
+
+The bucketing stage assigns world-frame points to Octree-AnyGS anchors. It must
+match the discretization used by Octree-AnyGS when anchors were created. For an
+anchor level \(\ell\),
+
+\[
+  grid\_coord(p,\ell)
+  =
+  \mathrm{round}
+  \left(
+    \frac{p - \texttt{init\_pos}}{cell\_size(\ell)}
+  \right).
+\]
+
+The implementation builds a lookup from \((level, grid\_coord)\) to
+\texttt{anchor\_id}, then assigns each point to every matching level. Assigning
+only to the finest matching level would make coarse anchors look artificially
+uncertain, even in areas with good observations.
+
+The stage also normalizes the point data for VBGS and writes:
+
+\begin{itemize}
+  \item \path{points_norm.npz}: normalized \(\texttt{xyz}+\texttt{rgb}\) rows;
+  \item \path{pts_by_anchor.npz}: packed per-anchor point indices;
+  \item \path{norm_params.json}: global normalization parameters;
+  \item \path{bucket_metadata.json}: counts and diagnostics.
+\end{itemize}
+
+\subsection{Stage 4: Fit VBGS Posteriors Per Anchor}
+
+For each anchor with at least \texttt{MIN\_POINTS\_PER\_ANCHOR} assigned
+points, VBOGS fits a VBGS mixture over normalized six-dimensional samples:
+
+\[
+  x_n =
+  \begin{bmatrix}
+    p_n \\
+    c_n
+  \end{bmatrix}
+  \in \R^6,
+  \qquad
+  p_n \in \R^3,
+  \qquad
+  c_n \in \R^3.
+\]
+
+The component count starts at \texttt{K\_INIT}. Larger models are accepted only
+when their mean per-point evidence lower bound (ELBO) improves by at least
+\texttt{ELBO\_IMPROVEMENT\_TOL}. The initial project values are:
+
+\begin{longtable}{@{}p{0.32\linewidth}p{0.60\linewidth}@{}}
+\toprule
+\textbf{Parameter} & \textbf{Initial value} \\
+\midrule
+\endhead
+\texttt{K\_INIT} & \texttt{pc.n\_offsets = 10}. \\
+\texttt{K\_MAX} & \texttt{4 * K\_INIT = 40}. \\
+\texttt{K\_GROWTH\_FACTOR} & \texttt{2}, so \(K \mapsto 2K\). \\
+\texttt{MIN\_POINTS\_PER\_ANCHOR} & \texttt{20}. \\
+\texttt{ELBO\_IMPROVEMENT\_TOL} & \texttt{0.01} nats per point. \\
+\bottomrule
+\end{longtable}
+
+The posterior output contains fields such as Dirichlet \(\alpha\), final
+component count, observed-anchor mask, Normal-Wishart spatial parameters, and
+delta/color posterior parameters.
+
+\subsection{Stage 5: Compute Scalar Uncertainty}
+
+The posterior-to-scalar stage computes one value \(U_a\) for every anchor:
+
+\begin{itemize}
+  \item observed anchors use the mixture-weighted posterior entropy definition;
+  \item unobserved anchors receive \(\Umax\);
+  \item metadata and histogram outputs are written for inspection.
+\end{itemize}
+
+The main output is \path{U.npy}, a one-dimensional float array with shape
+\([N_{\mathrm{anchors}}]\). The \(i\)-th entry corresponds to the \(i\)-th
+Octree-AnyGS anchor.
+
+\subsection{Stage 6: Render Uncertainty and Score NBV Candidates}
+
+Octree-AnyGS normally renders learned color through its Gaussian generation
+path. VBOGS reuses that same geometry and visibility path, but substitutes the
+per-anchor uncertainty value as the rendered scalar color. This is implemented
+as \texttt{render\_scalar}.
+
+For each candidate camera pose, scalar rendering returns:
+
+\begin{itemize}
+  \item an uncertainty image \(I_U\), whose pixels contain visible uncertainty;
+  \item an alpha image \(I_\alpha\), whose pixels indicate visible scene
+        support.
+\end{itemize}
+
+The NBV score is
+
+\[
+  score(cam)
+  =
+  \frac{\sum_{u,v} I_U(u,v)}
+       {\sum_{u,v} I_\alpha(u,v) + \epsilon}.
+\]
+
+The alpha-normalized score means ``prefer views of uncertain visible content,''
+not simply ``prefer views with the largest amount of visible geometry.'' The
+current candidate-source interface supports simple local/test/lattice sources
+and is designed to accept planner-produced reachable poses later.
+
+\subsection{Stage 7: Bundle, Inspect, and Validate}
+
+The pipeline can collect curated outputs under \path{outputs/v1_0/<drive>/} and
+package them into a zip file. Bundles include prepared-data metadata,
+diagnostic point clouds, uncertainty maps, rendered views, NBV diagnostics, and
+a run manifest. Bulky checkpoints and full posterior files remain in their
+native data locations and are referenced by path.
+
+This stage is not just packaging. Scientific validation requires human review
+of the posterior fits, heatmaps, and NBV choices.
+
+\section{Current Progress}
+
+\subsection{Milestone Status}
+
+\begin{longtable}{@{}p{0.16\linewidth}p{0.18\linewidth}p{0.58\linewidth}@{}}
+\toprule
+\textbf{Milestone} & \textbf{Status} & \textbf{What has been achieved} \\
+\midrule
+\endhead
+M1: Environment setup &
+Complete &
+Separate Torch and JAX environments are represented by repo-owned helper
+scripts and Docker services. Smoke-test commands exist for both upstream
+stacks. \\
+M2: Train Octree-AnyGS &
+Implemented &
+KITTI-360 preparation and Octree-AnyGS training wrappers exist. The local
+development workflow uses a conservative 16 GB profile; the server budget is
+46 GB. Training artifacts are saved under Octree-AnyGS run directories. \\
+M3: Stereo to world point cloud &
+Implemented &
+\path{scripts/stereo_to_pointcloud.py} produces \path{points_world.npz} and
+optional PLY diagnostics. The matcher interface currently supports the SGBM
+baseline and leaves room for future matchers. \\
+M4a: Point to anchor bucketing &
+Implemented &
+\path{scripts/bucket_points.py} buckets points across all Octree-AnyGS levels,
+writes normalized data, and records metadata. A bundled development scene
+reported 12,792,935 points, 267,830 anchors across 9 levels, and 104,577
+anchors with at least 20 assigned points. \\
+M4b: Per-anchor VBGS fit &
+Implemented; needs quality pass &
+\path{scripts/fit_anchors.py} supports grouped batched fitting with
+\texttt{jax.vmap}, deterministic shards, shard merge, and a one-anchor loop
+fallback. Smoke artifacts exist, but the full-scene fit still needs
+completion and posterior-quality inspection. \\
+M5: Posterior to scalar uncertainty &
+Implemented &
+\path{scripts/compute_uncertainty.py} computes the closed-form entropy
+components, writes \path{U.npy}, uncertainty components, metadata, and a
+histogram. \\
+M6: Scalar rendering and NBV loop &
+Implemented; needs full GPU validation &
+\path{vbogs/render.py} and \path{scripts/score_nbv.py} implement scalar
+rendering, candidate scoring, top-candidate diagnostics, and visualization
+support. Syntax and CLI checks exist; a full render validation pass on
+completed uncertainty outputs remains. \\
+M7: End-to-end validation &
+Remaining &
+The final validation pass is intentionally human-owned. It requires selecting
+a known scene, checking posterior fits, overlaying uncertainty on held-out
+views, confirming NBV intuition, and documenting failure modes. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Implemented Entry Points}
+
+The repository now has direct scripts for the main stages:
+
+\begin{itemize}
+  \item \path{scripts/prepare_kitti360_colmap.py}: KITTI-360 to COLMAP-style
+        data preparation.
+  \item \path{scripts/train_octree_anygs.py}: Octree-AnyGS training wrapper.
+  \item \path{scripts/stereo_to_pointcloud.py}: stereo disparity to
+        world-frame point cloud.
+  \item \path{scripts/bucket_points.py}: point-to-anchor bucketing and data
+        normalization.
+  \item \path{scripts/fit_anchors.py}: per-anchor VBGS posterior fitting.
+  \item \path{scripts/compute_uncertainty.py}: posterior entropy reduction.
+  \item \path{scripts/render_uncertainty_views.py}: diagnostic uncertainty
+        rendering.
+  \item \path{scripts/score_nbv.py}: NBV candidate scoring.
+  \item \path{scripts/run_drive_pipeline.py}: orchestrated drive-level
+        pipeline.
+  \item \path{scripts/bundle_run_outputs.py}: curated artifact bundling.
+\end{itemize}
+
+Supporting scripts also exist for global VBGS baselines, VBOGS-vs-VBGS
+comparison workflows, experiment packaging, visualization, and output upload.
+
+\subsection{Configuration and Deployment Progress}
+
+The pipeline reads \path{configs/pipeline/default.yaml} by default, with
+specialized development and Portainer profiles:
+
+\begin{itemize}
+  \item \path{configs/pipeline/dev.yaml}: local Docker Compose development
+        stack and smaller hardware settings.
+  \item \path{configs/pipeline/portainer.yaml}: server deployment profile with
+        external volumes and higher-quality training defaults.
+  \item \path{configs/docker/stack.env}: stack-level environment variables,
+        image names, autorun controls, upload flags, and transfer-service
+        settings.
+\end{itemize}
+
+This means the project has moved beyond isolated scripts: it now has an
+operator-facing path for repeated drive-level runs.
+
+\section{Artifact Map}
+
+\begin{longtable}{@{}p{0.20\linewidth}p{0.32\linewidth}p{0.40\linewidth}@{}}
+\toprule
+\textbf{Stage} & \textbf{Typical path} & \textbf{Important contents} \\
+\midrule
+\endhead
+Source data &
+\path{data/KITTI-360/} &
+Calibration, poses, and rectified stereo images. \\
+Prepared data &
+\path{/data/COLMAP/<drive>/} &
+Images, COLMAP-style camera files, sparse sidecars, metadata. \\
+Octree-AnyGS run &
+\path{/data/OCTREE-ANYGS/<drive>/<timestamp>/} &
+Generated config, input PLY, anchor checkpoint, model outputs. \\
+Stereo points &
+\path{data/points_world/<drive>/} &
+\path{points_world.npz}, optional PLY, metadata. \\
+Bucketing and normalization &
+\path{data/m4/<drive>/} &
+\path{points_norm.npz}, \path{pts_by_anchor.npz},
+\path{norm_params.json}, \path{bucket_metadata.json}. \\
+Anchor posterior &
+\path{data/m4/<drive>/} &
+\path{anchor_posterior.npz}, \path{fit_metadata.json}. \\
+Uncertainty scalar &
+\path{data/m4/<drive>/} &
+\path{U.npy}, entropy components, metadata, histogram. \\
+Curated outputs &
+\path{outputs/v1_0/<drive>/} &
+Point clouds, rendered diagnostics, NBV outputs, manifest, packaged zip. \\
+\bottomrule
+\end{longtable}
+
+\section{Design Decisions Already Made}
+
+\begin{longtable}{@{}p{0.32\linewidth}p{0.60\linewidth}@{}}
+\toprule
+\textbf{Decision} & \textbf{Current choice} \\
+\midrule
+\endhead
+Stereo data source &
+KITTI-360 perspective stereo. The original plan selected
+\path{2013_05_28_drive_0008_sync}; current configs and examples may target
+other KITTI-360 drives for experiments. \\
+Baseline stereo matcher &
+OpenCV \texttt{StereoSGBM}, with a provider interface for future matchers. \\
+Training budget &
+46 GB maximum for server training and inference steps, with conservative local
+development settings. \\
+NBV candidate source &
+A planner-compatible interface. Initial runs can use local/test/lattice
+candidates; later runs can pass planner-produced reachable poses. \\
+Uncertainty scalar &
+Mixture-weighted per-component posterior entropy. The initial implementation
+does not use total mixture entropy. \\
+Score semantics &
+Alpha-normalized expected uncertainty per visible surface. \\
+Submodule policy &
+Do not edit \path{Octree-AnyGS/} or \path{vbgs/}; wrap or reuse them from
+repo-owned code. \\
+\bottomrule
+\end{longtable}
+
+\section{Validation and Testing Status}
+
+The repository contains focused tests for core helpers and pipeline scripts,
+including bucketing, uncertainty computation, rendering helpers, pipeline
+orchestration, bundling, upload support, baseline scripts, and comparison
+workflows. These tests are important for regression control, but they do not
+replace visual and statistical validation of uncertainty quality.
+
+The remaining validation work is:
+
+\begin{enumerate}
+  \item Inspect representative anchor posteriors after M4b. A tight,
+        well-observed anchor should have low entropy; a sparse, noisy, or
+        ambiguous anchor should have high entropy.
+  \item Confirm that scalar uncertainty histograms have plausible spread and
+        are not collapsed or uniform.
+  \item Render uncertainty heatmaps on held-out views and compare them to
+        scene intuition.
+  \item Score NBV candidates and check whether the winning pose points toward
+        known uncertain regions.
+  \item Record failure modes before treating the pipeline as validated.
+\end{enumerate}
+
+\section{Known Limitations and Risks}
+
+\subsection{Empty-Region Blindness}
+
+\texttt{render\_scalar} only renders through existing Octree-AnyGS anchors.
+Truly unseen empty space has no Gaussian and therefore contributes nothing to
+the NBV score. The current method chooses views of uncertain known surfaces; it
+does not yet solve full exploration of never-observed volume.
+
+\subsection{ELBO-Based Model Selection Is Pragmatic}
+
+The current component-growth rule compares mean per-point ELBO across
+component counts. This is useful and simple, but the KL term changes with
+model size, so ELBO across \(K\) is not a perfectly unbiased model-selection
+criterion. Held-out log likelihood or BIC would be cleaner future options.
+
+\subsection{Stereo Quality Controls Uncertainty Quality}
+
+Poor disparity estimates create noisy or missing points. Textureless regions,
+reflective surfaces, distant geometry, thin structures, and calibration errors
+can all distort anchor posteriors. Improving stereo confidence filtering or
+using a stronger stereo backend may directly improve uncertainty estimates.
+
+\subsection{Large Anchor Counts Are Expensive}
+
+Octree-AnyGS scenes can contain \(10^5\) to \(10^6\) anchors. The JAX batched
+path is implemented to control this cost, but full-scene fitting still needs
+careful memory and runtime monitoring.
+
+\subsection{Score Semantics May Need Planner Tuning}
+
+The current score selects uncertain content per visible surface. A planner that
+wants maximum aggregate information gain may prefer an unnormalized or
+travel-cost-adjusted objective. The current interface leaves room for those
+extensions.
+
+\section{Future Plan}
+
+\subsection{Immediate Next Steps}
+
+\begin{enumerate}
+  \item Complete a full-scene M4b posterior fit on the selected KITTI-360
+        drive using the batched JAX path.
+  \item Run the human posterior validation pass before relying on M5 outputs.
+  \item Compute \path{U.npy} and inspect histograms, metadata, and a sample of
+        high/low-uncertainty anchors.
+  \item Run full Torch/GPU scalar render validation with completed uncertainty
+        values.
+  \item Execute M7 on a scene whose uncertain regions are already understood.
+  \item Save qualitative overlays, NBV diagnostics, and written failure-mode
+        notes with the run bundle.
+\end{enumerate}
+
+\subsection{Algorithmic Improvements}
+
+\begin{itemize}
+  \item Replace or supplement ELBO-based \(K\) selection with held-out log
+        likelihood, BIC, or a calibrated validation split.
+  \item Add an optional empty-space uncertainty term, such as an occupancy
+        prior or unknown-ray penalty, if the project needs exploration of
+        never-seen volume.
+  \item Integrate a stronger stereo backend while preserving the existing
+        \path{points_world.npz} contract.
+  \item Calibrate uncertainty values against held-out geometry or image-space
+        reconstruction errors.
+  \item Add online updates that reuse VBGS sufficient statistics as new frames
+        arrive.
+  \item Add motion cost, reachability, field-of-view constraints, and planner
+        feasibility checks to NBV scoring.
+\end{itemize}
+
+\subsection{Engineering Improvements}
+
+\begin{itemize}
+  \item Standardize experiment suites across several KITTI-360 drives.
+  \item Preserve exact generated configs, Docker image digests, run manifests,
+        and data hashes for reproducibility.
+  \item Expand smoke tests for GPU rendering and batched JAX fitting where CI
+        hardware permits.
+  \item Build compact review artifacts for every full run: uncertainty
+        histograms, anchor-fit panels, held-out overlays, top-K NBV views, and
+        a short validation note.
+  \item Keep upstream submodules clean and continue placing VBOGS behavior in
+        \path{scripts/} and \path{vbogs/}.
+\end{itemize}
+
+\section{How New Readers Should Approach the Repository}
+
+New readers should start with the conceptual documents before running code:
+
+\begin{enumerate}
+  \item \path{docs/manuscript/Algorithm.tex}: authoritative algorithm
+        specification.
+  \item \path{PLAN.md}: milestone checklist and current implementation status.
+  \item \path{docs/documentation/ALGORITHM_OVERVIEW.md}: shorter narrative
+        overview.
+  \item \path{docs/reference/artifacts.md}: file contracts and output layout.
+  \item \path{docs/reference/commands.md}: common commands for running stages.
+\end{enumerate}
+
+The most important mental model is that VBOGS is not a replacement for
+Octree-AnyGS. Octree-AnyGS remains the renderer and scene representation.
+VBOGS adds a Bayesian uncertainty head aligned to Octree-AnyGS anchors, then
+uses the renderer to project that uncertainty into candidate views.
+
+\section{Conclusion}
+
+VBOGS has reached the point where the core end-to-end machinery exists in the
+repository: data preparation, Octree-AnyGS training wrappers, stereo point
+cloud generation, multi-level anchor bucketing, batched per-anchor VBGS
+fitting, scalar uncertainty computation, uncertainty rendering, NBV scoring,
+and curated artifact bundling. The remaining work is less about inventing the
+pipeline and more about proving that its outputs are trustworthy.
+
+The next milestone is therefore validation. Once representative posterior fits,
+uncertainty overlays, and NBV selections agree with scene intuition, the
+project can move from implementation-complete to experimentally credible. From
+there, the most important extensions are stronger model selection, better
+stereo, planner-aware candidate scoring, and a principled treatment of
+unobserved empty space.
+
+\end{document}

@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from PIL import Image
 
 import scripts.render_vbgs_kitti_baseline as render_vbgs
@@ -90,6 +91,87 @@ def test_select_cameras_applies_frame_ids_stride_and_max_views(tmp_path):
     assert [camera.frame_id for camera in selected] == [1]
 
 
+def test_load_normalized_model_colors_rescales_raw_kitti_rgb(tmp_path):
+    model_path = tmp_path / "model_final.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "mu": [
+                    [0, 0, 0, 128, 64, 255],
+                    [1, 2, 3, 0, 255, 32],
+                ],
+                "si": [
+                    np.eye(6).tolist(),
+                    np.eye(6).tolist(),
+                ],
+                "alpha": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    colors, info = render_vbgs.load_normalized_model_colors(model_path)
+
+    assert info.scale == 255.0
+    assert info.source_count == 2
+    assert info.renderable_count == 2
+    np.testing.assert_allclose(colors[0], [128 / 255, 64 / 255, 1.0])
+    np.testing.assert_allclose(colors[1], [0.0, 1.0, 32 / 255])
+
+
+def test_load_normalized_model_colors_applies_renderable_covariance_mask(tmp_path):
+    model_path = tmp_path / "model_final.json"
+    bad_covariance = np.eye(6, dtype=np.float32)
+    bad_covariance[0, 0] = -1.0
+    model_path.write_text(
+        json.dumps(
+            {
+                "mu": [
+                    [0, 0, 0, 255, 0, 0],
+                    [1, 2, 3, 0, 255, 0],
+                    [4, 5, 6, 0, 0, 255],
+                ],
+                "si": [
+                    np.eye(6).tolist(),
+                    bad_covariance.tolist(),
+                    np.eye(6).tolist(),
+                ],
+                "alpha": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    colors, info = render_vbgs.load_normalized_model_colors(model_path, renderable_count=2)
+
+    assert info.source_count == 3
+    assert info.renderable_count == 2
+    np.testing.assert_allclose(colors, [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+
+
+def test_sanitize_model_scales_clamps_pathological_values():
+    torch = pytest.importorskip("torch")
+
+    model = SimpleNamespace(
+        _scaling=torch.tensor(
+            [
+                [0.0, 10.0, float("nan")],
+                [1.0, 2.0, float("inf")],
+                [0.2, 0.3, 0.4],
+            ],
+            dtype=torch.float32,
+        )
+    )
+
+    info = render_vbgs.sanitize_model_scales(model, min_scale=0.1, max_scale=5.0)
+
+    assert info.min_scale == 0.1
+    assert info.max_scale == 5.0
+    assert info.clamped_component_count == 2
+    assert float(model._scaling.min()) >= 0.1
+    assert float(model._scaling.max()) <= 5.0
+
+
 def test_render_views_uses_fake_backend_without_cuda(tmp_path, monkeypatch):
     drive = "drive_sync"
     dataset = write_colmap_fixture(tmp_path, drive=drive)
@@ -99,18 +181,38 @@ def test_render_views_uses_fake_backend_without_cuda(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_model_loader(path, device):
+    def fake_model_loader(backend, path, *, device):
         calls.append(("model", str(path), device))
-        return {"path": str(path), "device": device}
+        return {"path": str(path), "device": device}, render_vbgs.ModelColorInfo(
+            scale=255.0,
+            raw_min=[0.0, 0.0, 0.0],
+            raw_max=[255.0, 255.0, 255.0],
+            source_count=3,
+            renderable_count=2,
+        )
 
-    fake_backend = SimpleNamespace(vbgs_model_to_splat=fake_model_loader)
+    fake_backend = SimpleNamespace()
 
     def fake_render_camera_image(backend, model, camera, *, device, background, scale):
         calls.append(("render", camera.frame_id, device, background, scale))
         value = 0.25 if camera.frame_id == 1 else 0.75
         return np.full((3, 4, 3), value, dtype=np.float32)
 
+    def fake_sanitize_model_scales(model, *, min_scale, max_scale):
+        calls.append(("scales", min_scale, max_scale))
+        return render_vbgs.ModelScaleInfo(
+            min_scale=min_scale,
+            max_scale=max_scale,
+            raw_min=[0.0, 0.0, 0.0],
+            raw_max=[10.0, 10.0, 10.0],
+            sanitized_min=[0.0001, 0.0001, 0.0001],
+            sanitized_max=[5.0, 5.0, 5.0],
+            clamped_component_count=1,
+        )
+
     monkeypatch.setattr(render_vbgs, "load_render_backend", lambda: fake_backend)
+    monkeypatch.setattr(render_vbgs, "load_vbgs_model_for_render", fake_model_loader)
+    monkeypatch.setattr(render_vbgs, "sanitize_model_scales", fake_sanitize_model_scales)
     monkeypatch.setattr(render_vbgs, "render_camera_image", fake_render_camera_image)
 
     args = render_vbgs.parse_args(
@@ -142,5 +244,11 @@ def test_render_views_uses_fake_backend_without_cuda(tmp_path, monkeypatch):
     assert (output_dir / "render_metadata.json").exists()
     saved = json.loads((output_dir / "render_metadata.json").read_text(encoding="utf-8"))
     assert saved["views"][0]["frame_id"] == 1
+    assert saved["model_color_scale"] == 255.0
+    assert saved["model_color_source_count"] == 3
+    assert saved["model_color_renderable_count"] == 2
+    assert saved["model_scale_clamped_component_count"] == 1
+    assert saved["model_scale_sanitized_max"] == [5.0, 5.0, 5.0]
     assert calls[0] == ("model", str(model_path.resolve()), "cuda:0")
-    assert calls[1] == ("render", 1, "cuda:0", 0.5, 2.0)
+    assert calls[1] == ("scales", 0.0001, 5.0)
+    assert calls[2] == ("render", 1, "cuda:0", 0.5, 2.0)
