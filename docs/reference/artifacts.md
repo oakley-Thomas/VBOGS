@@ -146,3 +146,29 @@ generated_configs/
 
 These are useful for reproducing training runs and checking exactly which
 Octree-AnyGS parameters were passed.
+
+## Online Runtime Bundle
+
+Stage: `online-state` / M8  
+Default path: `data/online/<drive>/`
+
+```text
+online_manifest.json
+anchor_grid_cache.npz
+vbgs_online_state.npz
+U_online.npy
+norm_params.json
+batches/
+updates/
+```
+
+`scripts/build_online_state.py` creates the bundle from a validated offline
+M4/M5 run. `anchor_grid_cache.npz` stores the fixed Octree-AnyGS anchor lookup
+used by the ROS2 loop. `vbgs_online_state.npz` expands posterior rows so every
+fixed anchor can be addressed online. `U_online.npy` is the GPU-resident scalar
+uncertainty source for the ROS2 node.
+
+The Torch/ROS2 process writes atomic `batches/<seq>.npz` files containing
+normalized points plus packed point-to-anchor assignments. The updater consumes
+those batches, refreshes touched anchors, writes `updates/<seq>.npz`, and
+atomically replaces `U_online.npy`.

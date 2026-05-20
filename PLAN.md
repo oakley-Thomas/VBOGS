@@ -26,11 +26,13 @@ These gate delegation. Each LLM task below needs its answer before it can run.
 
 ```
 M1 ── M2 ──┐
-           ├── M4a ── M4b ── M5 ── M6 ── M7
+           ├── M4a ── M4b ── M5 ── M6 ── M7 ── M8
     M3 ────┘
 ```
 
 M2 and M3 are independent — run in parallel. M4a onward is strictly linear.
+M8 depends on a validated M7 scene and does not retrain or densify
+Octree-AnyGS online.
 
 ---
 
@@ -160,6 +162,21 @@ Depends on: M6.
 - [ ] Overlay `U` as a heatmap on a held-out training view
 - [ ] Confirm NBV pick visually matches intuition
 - [ ] Document failure modes observed
+
+### M8 — Real-time ROS2 uncertainty/NBV loop [LLM + ops]
+
+Depends on: M7. Runs as a split Torch/ROS2 + JAX updater workflow with a fixed
+Octree-AnyGS scene and filesystem handoff.
+
+- [x] Config `configs/online/ros2_default.yaml` for ROS2 topics, online bundle paths, stereo settings, deadline, and candidate cap
+- [x] Script `scripts/build_online_state.py` to package `online_manifest.json`, `anchor_grid_cache.npz`, `vbgs_online_state.npz`, `U_online.npy`, `norm_params.json`, and handoff directories
+- [x] Reusable online helpers under `vbogs/online/` for cached multi-level bucketing, fixed normalization, score ranking, atomic state writes, and touched-anchor updates
+- [x] Script `scripts/online_jax_updater.py` to consume `batches/<seq>.npz`, update touched anchors with fixed-K posterior moments, refresh `U_online.npy`, and write `updates/<seq>.npz`
+- [x] Script `scripts/ros2_online_nbv_node.py` for ROS2 Humble-style stereo/pose/candidate subscriptions and best-pose/diagnostic publications
+- [x] Script `scripts/benchmark_online_loop.py` for KITTI replay-style latency measurement through normalization, bucketing, optional updater, and total loop timing
+- [ ] Run in a ROS2 Humble environment with live topics or bag replay
+- [ ] Replace the first fixed-K moment updater with exact restored VBGS sufficient-stat updates once the upstream stat pytrees are serialized safely
+- [ ] Validate p95 frame-to-NBV latency under `1.0 s` on the target GPU server with `max_candidates <= 32`
 
 ---
 

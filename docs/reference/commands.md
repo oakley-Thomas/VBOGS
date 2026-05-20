@@ -225,6 +225,40 @@ python scripts/bundle_run_outputs.py \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
 
+## Online ROS2 Loop
+
+Build the online state bundle after M7 validation:
+
+```bash
+python scripts/build_online_state.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --model-path /data/OCTREE-ANYGS/2013_05_28_drive_0008_sync/<run>
+```
+
+Run the updater process in the JAX environment:
+
+```bash
+python scripts/online_jax_updater.py \
+  --state-root data/online/2013_05_28_drive_0008_sync
+```
+
+Run the ROS2 node in a ROS2 Humble environment with the Torch/Octree stack:
+
+```bash
+python scripts/ros2_online_nbv_node.py \
+  --config configs/online/ros2_default.yaml
+```
+
+Replay existing `points_world.npz` artifacts through the online handoff and
+latency logger:
+
+```bash
+python scripts/benchmark_online_loop.py \
+  --state-root data/online/2013_05_28_drive_0008_sync \
+  --points-world data/points_world/2013_05_28_drive_0008_sync/points_world.npz \
+  --run-updater
+```
+
 ## Tests
 
 ```bash
@@ -238,4 +272,5 @@ pytest tests/test_run_drive_pipeline.py
 pytest tests/test_bucket_points.py
 pytest tests/test_compute_uncertainty.py
 pytest tests/test_render.py
+pytest tests/test_online.py
 ```
