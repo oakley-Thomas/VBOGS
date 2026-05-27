@@ -19,6 +19,7 @@ nav:
       - Docker Pipeline: running/docker-pipeline.md
       - Full Drive Runs: running/full-drive.md
       - Validation and Inspection: running/validation.md
+      - Realtime Viewer: running/realtime-viewer.md
       - Portainer, Uploads, and Transfers: running/portainer.md
   - Algorithm:
       - Overview: algorithm/index.md

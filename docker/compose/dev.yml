@@ -5,6 +5,8 @@
 
 services:
   vbogs-torch:
+    ports:
+      - "${VBOGS_VIEWER_PORT:-8070}:8070"
     volumes:
       - type: bind
         source: .

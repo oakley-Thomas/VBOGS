@@ -55,6 +55,18 @@ docker compose --project-directory . \
   exec vbogs-pipeline nvidia-smi
 ```
 
+Start the realtime Octree-AnyGS viewer from the Torch container:
+
+```bash
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-torch \
+  python scripts/view_octree_anygs.py \
+    --drive 2013_05_28_drive_0007_sync \
+    --resolution 4
+```
+
 ## Pipeline
 
 Dry run:
