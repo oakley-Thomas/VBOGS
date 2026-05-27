@@ -20,6 +20,7 @@ from vbogs.io import save_json
 from vbogs.online import (
     atomic_save_npy,
     atomic_save_npz,
+    backfill_initial_fields_from_points,
     build_anchor_grid_cache,
     expand_posterior_to_anchor_rows,
     load_npz_dict,
@@ -39,6 +40,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--posterior", type=Path, default=None)
     parser.add_argument("--u-path", type=Path, default=None)
     parser.add_argument("--model-path", type=Path, default=None)
+    parser.add_argument(
+        "--update-mode",
+        choices=("fixed-k-moment", "exact-fixed-k"),
+        default="fixed-k-moment",
+        help="Online posterior updater used by the JAX updater process.",
+    )
+    parser.add_argument(
+        "--initial-mean-seed",
+        type=int,
+        default=0,
+        help="Seed used when backfilling exact-fixed-k initial means for older M4b artifacts.",
+    )
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -118,6 +131,25 @@ def main() -> None:
     save_anchor_grid_cache(output_root / "anchor_grid_cache.npz", cache)
 
     online_state = expand_posterior_to_anchor_rows(posterior)
+    backfilled_initial_state = False
+    if args.update_mode == "exact-fixed-k":
+        initial_present = np.isfinite(online_state["initial_spatial_mean"]).any(axis=(1, 2, 3))
+        missing_initial = bool(np.any(np.asarray(online_state["fit_completed"], dtype=bool) & ~initial_present))
+        if missing_initial:
+            points_norm_path = bucket_root / "points_norm.npz"
+            if not points_norm_path.exists():
+                raise FileNotFoundError(
+                    f"Missing normalized points needed to backfill exact VBGS state: {points_norm_path}"
+                )
+            points_norm = np.asarray(load_npz_dict(points_norm_path)["points_norm"], dtype=np.float32)
+            online_state = backfill_initial_fields_from_points(
+                online_state,
+                points_norm=points_norm,
+                anchor_offsets=np.asarray(pts_by_anchor["anchor_offsets"], dtype=np.int64),
+                point_indices=np.asarray(pts_by_anchor["point_indices"], dtype=np.int64),
+                seed=args.initial_mean_seed,
+            )
+            backfilled_initial_state = True
     atomic_save_npz(output_root / "vbgs_online_state.npz", **online_state)
     atomic_save_npy(output_root / "U_online.npy", u_values)
     shutil.copy2(norm_params_path, output_root / "norm_params.json")
@@ -141,10 +173,11 @@ def main() -> None:
         "norm_params": "norm_params.json",
         "batch_dir": "batches",
         "update_dir": "updates",
-        "update_mode": "fixed_k_moment",
+        "update_mode": args.update_mode.replace("-", "_"),
         "fixed_k": True,
         "online_scene_retraining": False,
         "empty_space_prior": False,
+        "backfilled_initial_state": backfilled_initial_state,
         "validation_note": validation_note_text,
     }
     save_json(output_root / "online_manifest.json", manifest)

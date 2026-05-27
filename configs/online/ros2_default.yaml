@@ -11,6 +11,7 @@ online:
   device: cuda
   deadline_sec: 1.0
   max_candidates: 32
+  update_mode: exact_fixed_k
   force_all_levels: false
   publish_uncertainty_image: false
 

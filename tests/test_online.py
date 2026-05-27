@@ -7,7 +7,10 @@ import pytest
 from scripts.bucket_points import build_level_indices, count_point_assignments
 from scripts.ros2_online_nbv_node import image_msg_to_array, make_stereo_args
 from vbogs.online import (
+    ONLINE_STATE_VERSION,
+    apply_online_exact_fixed_k_update,
     apply_online_moment_update,
+    backfill_initial_fields_from_points,
     bucket_points_with_cache,
     build_anchor_grid_cache,
     expand_posterior_to_anchor_rows,
@@ -206,6 +209,121 @@ def test_online_update_can_initialize_previously_unobserved_anchor():
     assert bool(updated["is_observed"][2]) is True
     assert bool(updated["fit_completed"][2]) is True
     assert int(updated["final_k"][2]) == 1
+
+
+def test_online_state_v2_backfills_initial_fields_from_points():
+    state = expand_posterior_to_anchor_rows(make_posterior())
+    assert int(state["state_version"]) == ONLINE_STATE_VERSION
+    assert "initial_spatial_mean" in state
+    assert not np.isfinite(state["initial_spatial_mean"][0]).any()
+
+    points_norm = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.1, 0.0, 0.0, 0.1, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.1, 0.0, 0.0, 1.1, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    anchor_offsets = np.array([0, 2, 4, 4], dtype=np.int64)
+    point_indices = np.array([0, 1, 2, 3], dtype=np.int64)
+
+    updated = backfill_initial_fields_from_points(
+        state,
+        points_norm=points_norm,
+        anchor_offsets=anchor_offsets,
+        point_indices=point_indices,
+        seed=0,
+    )
+
+    assert np.isfinite(updated["initial_spatial_mean"][0, :1]).all()
+    assert np.isfinite(updated["initial_spatial_mean"][1, :2]).all()
+    assert not np.isfinite(updated["initial_spatial_mean"][2]).any()
+
+
+def test_exact_fixed_k_update_changes_only_touched_observed_anchor():
+    state = expand_posterior_to_anchor_rows(make_posterior())
+    state = backfill_initial_fields_from_points(
+        state,
+        points_norm=np.array(
+            [
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0, 0.1, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                [1.1, 0.0, 0.0, 1.1, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        anchor_offsets=np.array([0, 2, 4, 4], dtype=np.int64),
+        point_indices=np.array([0, 1, 2, 3], dtype=np.int64),
+    )
+    before_anchor0 = state["alpha"][0].copy()
+    before_anchor2 = state["alpha"][2].copy()
+    batch = {
+        "points_norm": np.array(
+            [
+                [0.2, 0.1, 0.0, 0.0, 0.0, 0.1],
+                [0.3, 0.0, 0.1, 0.1, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        "anchor_offsets": np.array([0, 0, 2, 2], dtype=np.int64),
+        "point_indices": np.array([0, 1], dtype=np.int64),
+        "touched_anchor_ids": np.array([1], dtype=np.int64),
+    }
+
+    updated, metadata = apply_online_exact_fixed_k_update(
+        state,
+        batch,
+        seq=9,
+        min_points_per_anchor=2,
+    )
+
+    assert metadata["update_mode"] == "exact_fixed_k"
+    assert metadata["updated_anchor_ids"] == [1]
+    assert int(updated["last_update_seq"]) == 9
+    np.testing.assert_allclose(updated["alpha"][0], before_anchor0)
+    np.testing.assert_allclose(updated["alpha"][2], before_anchor2, equal_nan=True)
+    assert not np.allclose(updated["alpha"][1], state["alpha"][1])
+
+
+def test_exact_fixed_k_update_defers_then_initializes_unobserved_anchor():
+    state = expand_posterior_to_anchor_rows(make_posterior())
+    batch_one = {
+        "points_norm": np.array([[1.0, 0.0, 0.0, 10.0, 0.0, 0.0]], dtype=np.float32),
+        "anchor_offsets": np.array([0, 0, 0, 1], dtype=np.int64),
+        "point_indices": np.array([0], dtype=np.int64),
+        "touched_anchor_ids": np.array([2], dtype=np.int64),
+    }
+    deferred, metadata = apply_online_exact_fixed_k_update(
+        state,
+        batch_one,
+        seq=10,
+        min_points_per_anchor=2,
+    )
+
+    assert metadata["deferred_anchor_ids"] == [2]
+    assert bool(deferred["fit_completed"][2]) is False
+    assert deferred["pending_points_norm"].shape[0] == 1
+
+    batch_two = {
+        "points_norm": np.array([[1.1, 0.0, 0.0, 10.1, 0.0, 0.0]], dtype=np.float32),
+        "anchor_offsets": np.array([0, 0, 0, 1], dtype=np.int64),
+        "point_indices": np.array([0], dtype=np.int64),
+        "touched_anchor_ids": np.array([2], dtype=np.int64),
+    }
+    initialized, metadata = apply_online_exact_fixed_k_update(
+        deferred,
+        batch_two,
+        seq=11,
+        min_points_per_anchor=2,
+    )
+
+    assert metadata["updated_anchor_ids"] == [2]
+    assert bool(initialized["fit_completed"][2]) is True
+    assert bool(initialized["is_observed"][2]) is True
+    assert initialized["pending_points_norm"].shape[0] == 0
 
 
 def test_score_uncertainty_alpha_and_ranking():

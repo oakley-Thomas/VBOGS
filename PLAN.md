@@ -175,7 +175,7 @@ Octree-AnyGS scene and filesystem handoff.
 - [x] Script `scripts/ros2_online_nbv_node.py` for ROS2 Humble-style stereo/pose/candidate subscriptions and best-pose/diagnostic publications
 - [x] Script `scripts/benchmark_online_loop.py` for KITTI replay-style latency measurement through normalization, bucketing, optional updater, and total loop timing
 - [ ] Run in a ROS2 Humble environment with live topics or bag replay
-- [ ] Replace the first fixed-K moment updater with exact restored VBGS sufficient-stat updates once the upstream stat pytrees are serialized safely
+- [x] Replace the first fixed-K moment updater with exact fixed-scaffold VBGS updates; keep the original moment updater as a fallback mode
 - [ ] Validate p95 frame-to-NBV latency under `1.0 s` on the target GPU server with `max_candidates <= 32`
 
 ---

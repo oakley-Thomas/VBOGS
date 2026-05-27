@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.compute_uncertainty import compute_uncertainty
 from vbogs.io import save_json
 from vbogs.online import (
+    apply_online_exact_fixed_k_update,
     apply_online_moment_update,
     atomic_save_npy,
     atomic_save_npz,
@@ -37,9 +38,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-batches", type=int, default=0)
     parser.add_argument(
         "--update-mode",
-        choices=("fixed-k-moment",),
+        choices=("fixed-k-moment", "exact-fixed-k"),
         default="fixed-k-moment",
-        help="Fixed-K online updater. Exact VBGS stat restoration can replace this contract later.",
+        help="Online fixed-K posterior updater.",
     )
     return parser.parse_args()
 
@@ -64,6 +65,7 @@ def process_batch(
     eps: float,
     u_max: float | None,
     min_points_per_anchor: int | None,
+    update_mode: str = "fixed-k-moment",
 ) -> dict:
     start = time.perf_counter()
     state_path = state_root / "vbgs_online_state.npz"
@@ -78,13 +80,23 @@ def process_batch(
         else int(np.asarray(state.get("min_points_per_anchor", np.array(20))))
     )
 
-    updated_state, update_metadata = apply_online_moment_update(
-        state,
-        batch,
-        seq=seq,
-        min_points_per_anchor=min_points,
-        eps=eps,
-    )
+    normalized_update_mode = update_mode.replace("_", "-")
+    if normalized_update_mode == "exact-fixed-k":
+        updated_state, update_metadata = apply_online_exact_fixed_k_update(
+            state,
+            batch,
+            seq=seq,
+            min_points_per_anchor=min_points,
+            eps=eps,
+        )
+    else:
+        updated_state, update_metadata = apply_online_moment_update(
+            state,
+            batch,
+            seq=seq,
+            min_points_per_anchor=min_points,
+            eps=eps,
+        )
     uncertainty_result = compute_uncertainty(updated_state, u_max=u_max, eps=eps)
     uncertainty = np.asarray(uncertainty_result["uncertainty"], dtype=np.float32)
 
@@ -134,6 +146,7 @@ def main() -> None:
                 eps=args.eps,
                 u_max=args.u_max,
                 min_points_per_anchor=args.min_points_per_anchor,
+                update_mode=args.update_mode,
             )
             processed += 1
             print(

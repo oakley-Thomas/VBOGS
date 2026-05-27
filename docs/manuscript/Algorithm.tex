@@ -502,10 +502,13 @@ Return best_pose
         anchor-point-count sparsity at range. Mask low-confidence disparities
         before unprojection using checks such as left-right consistency and
         texture thresholds.
-  \item \textbf{Continual variant.} The streaming update path uses
-        \path{fit_gmm_step}. It can carry \path{prior_stats},
-        \path{space_stats}, and \path{color_stats} across batches when
-        updating the uncertainty head online.
+  \item \textbf{Continual variant.} The streaming update path uses the same
+        fixed-\(K\) sufficient-statistic update contract as
+        \path{fit_gmm_step}. It carries per-anchor posterior state across
+        batches when updating the uncertainty head online. The first online
+        implementation keeps Octree-AnyGS anchors fixed, keeps each observed
+        anchor's selected \(K\) fixed, and updates only the per-anchor VBGS
+        posterior and scalar uncertainty used by \texttt{render\_scalar}.
   \item \textbf{Empty-region blindness.} \texttt{render\_scalar} only splats
         through existing anchors. Truly unobserved regions with no anchor at
         any LOD contribute zero to the NBV score, so this formulation directs

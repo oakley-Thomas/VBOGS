@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-points-per-frame", type=int, default=150000)
     parser.add_argument("--point-chunk-size", type=int, default=1_000_000)
     parser.add_argument("--run-updater", action="store_true")
+    parser.add_argument(
+        "--update-mode",
+        choices=("fixed-k-moment", "exact-fixed-k"),
+        default="fixed-k-moment",
+    )
     parser.add_argument("--eps", type=float, default=1.0e-6)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
@@ -124,6 +129,7 @@ def main() -> None:
                 eps=args.eps,
                 u_max=None,
                 min_points_per_anchor=None,
+                update_mode=args.update_mode,
             )
             jax_update_ms = float(update_metadata["elapsed_sec"]) * 1000.0
         else:
@@ -155,6 +161,7 @@ def main() -> None:
     summary = {
         "state_root": str(state_root),
         "points_world": str(args.points_world.resolve()),
+        "update_mode": args.update_mode,
         "frame_count": len(rows),
         "acceptance_target_ms": 1000.0,
         "meets_1hz_target": summarize([row["total_ms"] for row in rows])["p95"] <= 1000.0,
