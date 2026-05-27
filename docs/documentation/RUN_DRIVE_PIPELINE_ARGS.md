@@ -66,7 +66,7 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--compose-command COMPOSE_COMMAND` | `docker compose` | Compose command used when running from the host. |
-| `--compose-file COMPOSE_FILE` | `docker/compose/compose.yml` | Compose file used when running from the host. |
+| `--compose-file COMPOSE_FILE` | `docker/compose/compose.yml` | Compose file used when running from the host. Repeat it to layer overlays such as `docker/compose/dev.yml`. |
 | `--compose-project-directory COMPOSE_PROJECT_DIRECTORY` | `.` | Project directory used by Docker Compose to resolve relative paths in relocated compose files. |
 | `--project-name PROJECT_NAME` | Empty | Optional Compose/Portainer stack project name passed as `-p`. |
 | `--torch-container TORCH_CONTAINER` | Empty | Concrete container name/id for Torch stages. When set, the runner uses `docker exec` instead of `docker compose exec` for Torch. |

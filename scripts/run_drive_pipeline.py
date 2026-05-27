@@ -239,8 +239,14 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--compose-file",
         type=Path,
-        default=DEFAULT_COMPOSE_FILE,
-        help="Compose file for the VBOGS stack.",
+        action="append",
+        default=None,
+        help=(
+            "Compose file for the VBOGS stack. Repeat to layer overlays, for "
+            "example `--compose-file docker/compose/compose.yml "
+            "--compose-file docker/compose/dev.yml`. Defaults to "
+            "`docker/compose/compose.yml`."
+        ),
     )
     parser.add_argument(
         "--compose-project-directory",
@@ -867,6 +873,11 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "scripts/render_uncertainty_views.py",
         "--drive",
         args.drive,
+        *maybe_option("--model-path", args.model_path),
+        "--uncertainty",
+        f"{bucket_root}/U.npy",
+        "--iteration",
+        str(args.bucket_iteration),
         "--split",
         args.render_split,
         *maybe_option("--resolution", args.render_resolution),
@@ -884,6 +895,11 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "scripts/score_nbv.py",
         "--drive",
         args.drive,
+        *maybe_option("--model-path", args.model_path),
+        "--u-path",
+        f"{bucket_root}/U.npy",
+        "--iteration",
+        str(args.bucket_iteration),
         "--candidate-source",
         args.nbv_candidate_source,
         "--max-candidates",
@@ -945,12 +961,20 @@ def selected_steps(
     return [step for step in steps if step.name in selected_names]
 
 
+def normalize_compose_files(raw_value: object) -> list[Path]:
+    if raw_value is None or raw_value == "":
+        return [DEFAULT_COMPOSE_FILE]
+    if isinstance(raw_value, (str, Path)):
+        return [Path(raw_value)]
+    return [Path(value) for value in raw_value]
+
+
 def compose_base(args: argparse.Namespace) -> list[str]:
     base = shlex.split(args.compose_command)
     if args.compose_project_directory:
         base.extend(["--project-directory", str(args.compose_project_directory)])
-    if args.compose_file:
-        base.extend(["-f", str(args.compose_file)])
+    for compose_file in normalize_compose_files(args.compose_file):
+        base.extend(["-f", str(compose_file)])
     if args.project_name:
         base.extend(["-p", args.project_name])
     return base

@@ -88,6 +88,41 @@ def test_render_step_forwards_resolution_override():
     assert render_step.command[resolution_index + 1] == "1"
 
 
+def test_render_and_nbv_steps_forward_model_and_uncertainty_paths():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--model-path",
+            "/data/OCTREE-ANYGS/drive_sync/run",
+            "--bucket-iteration",
+            "120000",
+        ]
+    )
+    by_name = {step.name: step for step in build_steps(args)}
+
+    render_step = by_name["render"]
+    assert (
+        render_step.command[render_step.command.index("--model-path") + 1]
+        == "/data/OCTREE-ANYGS/drive_sync/run"
+    )
+    assert render_step.command[render_step.command.index("--uncertainty") + 1] == (
+        "data/m4/drive_sync/U.npy"
+    )
+    assert render_step.command[render_step.command.index("--iteration") + 1] == "120000"
+
+    nbv_step = by_name["nbv"]
+    assert (
+        nbv_step.command[nbv_step.command.index("--model-path") + 1]
+        == "/data/OCTREE-ANYGS/drive_sync/run"
+    )
+    assert nbv_step.command[nbv_step.command.index("--u-path") + 1] == (
+        "data/m4/drive_sync/U.npy"
+    )
+    assert nbv_step.command[nbv_step.command.index("--iteration") + 1] == "120000"
+
+
 def test_train_step_forwards_gaussian_type():
     parser = build_parser({})
     args = parser.parse_args(
@@ -273,6 +308,31 @@ def test_compose_base_uses_relocated_compose_file_and_project_directory():
         ".",
         "-f",
         "docker/compose/compose.yml",
+    ]
+
+
+def test_compose_base_supports_multiple_compose_files():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--compose-file",
+            "docker/compose/compose.yml",
+            "--compose-file",
+            "docker/compose/dev.yml",
+        ]
+    )
+
+    assert compose_base(args) == [
+        "docker",
+        "compose",
+        "--project-directory",
+        ".",
+        "-f",
+        "docker/compose/compose.yml",
+        "-f",
+        "docker/compose/dev.yml",
     ]
 
 

@@ -34,6 +34,7 @@ you need something other than the defaults:
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
   --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
   --compose-project-directory . \
   --drive 2013_05_28_drive_0007_sync
 ```
