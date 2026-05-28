@@ -2,19 +2,25 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_ROOT="${KITTI_360_DATA_ROOT:-"${SCRIPT_DIR}/KITTI-360"}"
+DEFAULT_DATA_ROOT="/workspace/VBOGS/data/KITTI-360"
+if [[ -n "${KITTI_360_DATA_ROOT:-}" ]]; then
+  DATA_ROOT="${KITTI_360_DATA_ROOT}"
+  DATA_ROOT_FROM_ENV=1
+else
+  DATA_ROOT="${DEFAULT_DATA_ROOT}"
+  DATA_ROOT_FROM_ENV=0
+fi
 DOWNLOADS_DIR="${KITTI_360_DOWNLOADS_DIR:-"${DATA_ROOT}/_downloads"}"
 DEFAULT_DRIVE="${VBOGS_DRIVE:-2013_05_28_drive_0008_sync}"
 IMAGE_BASE_URL="https://s3.eu-central-1.amazonaws.com/avg-projects/KITTI-360/data_2d_raw"
 
 usage() {
   cat <<'USAGE'
-Download and extract KITTI-360 archives into data/KITTI-360.
+Download and extract KITTI-360 archives into the container stack dataset volume.
 Archives are normalized into this layout:
-  data/KITTI-360/calibration/
-  data/KITTI-360/data_poses/
-  data/KITTI-360/images/
+  /workspace/VBOGS/data/KITTI-360/calibration/
+  /workspace/VBOGS/data/KITTI-360/data_poses/
+  /workspace/VBOGS/data/KITTI-360/images/
 
 Required environment variables:
   KITTI_CALIBRATION_LINK   URL for KITTI-360 calibration archive
@@ -24,7 +30,10 @@ KITTI_CALIBRATION_LINK and KITTI_POSES_LINK may be omitted when the matching
 canonical folders already exist.
 
 Optional:
-  KITTI_360_DATA_ROOT       Extraction root. Default: ./KITTI-360 beside this script
+  KITTI_360_DATA_ROOT       Extraction root. Default:
+                            /workspace/VBOGS/data/KITTI-360
+                            Expected to be the KITTI-360 Docker volume mount
+                            inside vbogs-pipeline.
   KITTI_360_DOWNLOADS_DIR   Archive cache. Default: <KITTI_360_DATA_ROOT>/_downloads
   VBOGS_DRIVE               Drive image archives to download when images are
                             not already present. Default: 2013_05_28_drive_0008_sync
@@ -59,6 +68,35 @@ get_env_first() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+path_is_mountpoint() {
+  local path="$1"
+
+  [[ -r /proc/self/mountinfo ]] || return 2
+  awk -v target="${path}" '$5 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/self/mountinfo
+}
+
+require_default_data_root_mount() {
+  local status
+
+  [[ "${DATA_ROOT_FROM_ENV}" == "0" ]] || return 0
+
+  if [[ ! -d "${DATA_ROOT}" ]]; then
+    die "expected KITTI-360 Docker volume mount at ${DATA_ROOT}; run this inside the vbogs-pipeline container or set KITTI_360_DATA_ROOT explicitly"
+  fi
+
+  if path_is_mountpoint "${DATA_ROOT}"; then
+    return 0
+  fi
+  status=$?
+
+  if [[ "${status}" == "2" ]]; then
+    echo "warning: could not verify whether ${DATA_ROOT} is a Docker volume mount; continuing" >&2
+    return 0
+  fi
+
+  die "expected ${DATA_ROOT} to be the KITTI-360 Docker volume mount; run this inside the vbogs-pipeline container or set KITTI_360_DATA_ROOT explicitly"
 }
 
 archive_name_from_url() {
@@ -343,6 +381,7 @@ if (( ${#missing[@]} > 0 )); then
   die "missing required environment variable(s): ${missing[*]}"
 fi
 
+require_default_data_root_mount
 mkdir -p "${DATA_ROOT}" "${DOWNLOADS_DIR}"
 
 echo "KITTI-360 data root : ${DATA_ROOT}"

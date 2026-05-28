@@ -8,8 +8,6 @@ needs tuning.
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
 - Docker Compose v2.
-- KITTI-360 perspective stereo images, poses, and calibration files available
-  under `data/KITTI-360/` or mounted into the same path in the containers.
 - The two submodules checked out: `Octree-AnyGS/` and `vbgs/`.
 
 ## Build
@@ -56,6 +54,54 @@ Inside the container, confirm GPU visibility:
 nvidia-smi
 ```
 
+## Download KITTI-360
+
+VBOGS expects the KITTI-360 perspective stereo images, camera poses, and
+calibration files in the container at `/workspace/VBOGS/data/KITTI-360`. In the
+compose stack, that path is backed by the `KITTI-360` external Docker volume.
+
+The quickstart smoke run below uses:
+
+```text
+2013_05_28_drive_0007_sync
+```
+
+First, get the official **KITTI-360 download links** for calibration and poses from
+the [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
+after accepting the dataset terms. These links may be account- or
+session-specific, so keep them out of committed files.
+
+Run the downloader from the interactive `vbogs-pipeline` container shell:
+
+```bash
+export VBOGS_DRIVE=2013_05_28_drive_0007_sync
+export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
+export KITTI_POSES_LINK='https://.../data_poses.zip'
+
+bash data/download_kitti_360.sh
+```
+
+The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the selected
+drive's left and right perspective image archives when `KITTI_IMAGES` is not
+set, extracts all archives, and normalizes them into the layout VBOGS expects:
+
+```text
+/workspace/VBOGS/data/KITTI-360/
+  calibration/
+    perspective.txt
+  data_poses/
+    2013_05_28_drive_0007_sync/
+      cam0_to_world.txt
+  images/
+    2013_05_28_drive_0007_sync/
+      image_00/data_rect/
+      image_01/data_rect/
+```
+
+To use a different drive, set `VBOGS_DRIVE` to that drive id and pass the same
+id to `scripts/run_drive_pipeline.py --drive`. See [Data Setup](data.md) for
+the full layout, Docker volume notes, and alternate download helper.
+
 ## Dry Run
 
 Before running expensive work, print the planned stage commands:
@@ -88,24 +134,4 @@ python scripts/run_drive_pipeline.py \
   --max-points-per-frame 50000 \
   --render-max-views 2 \
   --use-service-labels
-```
-
-## Build This Documentation Site
-
-Install MkDocs in whichever Python environment you use for docs:
-
-```bash
-python -m pip install -r docs/requirements.txt
-```
-
-Serve the site locally:
-
-```bash
-python -m mkdocs serve
-```
-
-Build the static site:
-
-```bash
-python -m mkdocs build
 ```
