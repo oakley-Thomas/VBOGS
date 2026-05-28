@@ -29,7 +29,7 @@ alternate historical layouts:
 
 | Input kind | Candidate paths |
 | --- | --- |
-| Raw images | `data/KITTI-360/images`, `data/KITTI-360/data_2d_raw`, `data/KITTI-360/data_2d_test`, `data/data_2d_raw`, `data/data_2d_test` |
+| Raw images | `data/KITTI-360/images`, `data/KITTI-360/data_2d_raw`, `data/KITTI-360/data_2d_test`, `data/KITTI-360/data_2d_test_slam`, `data/data_2d_raw`, `data/data_2d_test`, `data/data_2d_test_slam` |
 | Poses | `data/KITTI-360/data_poses`, `data/data_poses` |
 | Calibration | `data/KITTI-360/calibration`, `data/calibration/calibration`, `data/calibration` |
 
@@ -80,11 +80,14 @@ Copy the example manifest, fill in the source URLs, then run it.
 ```bash
 export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
 export KITTI_POSES_LINK='https://.../data_poses.zip'
+export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
 bash data/download_kitti_360.sh
 ```
 
 The shell helper normalizes archives into the preferred `data/KITTI-360/`
-layout.
+layout. It uses `KITTI_IMAGES_LINK` for image archives such as
+`data_2d_test_slam.zip`; `VBOGS_DRIVE` is only
+used later to select a drive for pipeline execution.
 
 ## Drive IDs
 

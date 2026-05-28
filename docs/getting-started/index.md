@@ -60,30 +60,29 @@ VBOGS expects the KITTI-360 perspective stereo images, camera poses, and
 calibration files in the container at `/workspace/VBOGS/data/KITTI-360`. In the
 compose stack, that path is backed by the `KITTI-360` external Docker volume.
 
-The quickstart smoke run below uses:
+From [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
+accept the dataset terms and get the official **KITTI-360 download links** for 
 
-```text
-2013_05_28_drive_0007_sync
-```
+1.) Calibrations
 
-First, get the official **KITTI-360 download links** for calibration and poses from
-the [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
-after accepting the dataset terms. These links may be account- or
-session-specific, so keep them out of committed files.
+2.) Vehicle Poses 
+
+3.) Left/Right perspective images ("Test SLAM" recommended)
+
 
 Run the downloader from the interactive `vbogs-pipeline` container shell:
 
 ```bash
-export VBOGS_DRIVE=2013_05_28_drive_0007_sync
 export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
 export KITTI_POSES_LINK='https://.../data_poses.zip'
+export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
 
 bash data/download_kitti_360.sh
 ```
 
-The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the selected
-drive's left and right perspective image archives when `KITTI_IMAGES` is not
-set, extracts all archives, and normalizes them into the layout VBOGS expects:
+The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the linked
+left and right perspective image archive, extracts all archives, and
+normalizes them into the layout VBOGS expects:
 
 ```text
 /workspace/VBOGS/data/KITTI-360/
@@ -98,31 +97,24 @@ set, extracts all archives, and normalizes them into the layout VBOGS expects:
       image_01/data_rect/
 ```
 
-To use a different drive, set `VBOGS_DRIVE` to that drive id and pass the same
-id to `scripts/run_drive_pipeline.py --drive`. See [Data Setup](data.md) for
-the full layout, Docker volume notes, and alternate download helper.
+## Test Runs
 
-## Dry Run
-
-Before running expensive work, print the planned stage commands:
+Print the planned stage commands:
 
 ```bash
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
-  --drive 2013_05_28_drive_0007_sync \
+  --drive 2013_05_28_drive_0004_sync \
   --use-service-labels \
   --dry-run
 ```
 
-## Small Smoke Run
-
-This keeps training, stereo, fitting, and rendering small enough for a quick
-end-to-end check:
+Quick end-to-end check:
 
 ```bash
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
-  --drive 2013_05_28_drive_0007_sync \
+  --drive 2013_05_28_drive_0004_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
@@ -135,3 +127,43 @@ python scripts/run_drive_pipeline.py \
   --render-max-views 2 \
   --use-service-labels
 ```
+
+## Realtime Visualization
+
+After the smoke run has produced an Octree-AnyGS scene and `U.npy`, enter the
+Torch container from the host:
+
+```bash
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-torch bash
+```
+
+Then start the browser viewer from inside `vbogs-torch`:
+
+```bash
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0004_sync \
+  --resolution 4
+```
+
+Open the viewer:
+
+```text
+http://localhost:8070
+```
+
+The dev compose overlay maps `${VBOGS_VIEWER_PORT:-8070}` on the host to port
+`8070` in `vbogs-torch`. Use `--rgb-only` when you only want to inspect the
+trained Octree-AnyGS scene before uncertainty artifacts exist:
+
+```bash
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0004_sync \
+  --resolution 4 \
+  --rgb-only
+```
+
+For more options, including explicit model and uncertainty paths, see
+[Realtime Viewer](../running/realtime-viewer.md).

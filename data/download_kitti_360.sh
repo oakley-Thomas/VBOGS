@@ -11,8 +11,6 @@ else
   DATA_ROOT_FROM_ENV=0
 fi
 DOWNLOADS_DIR="${KITTI_360_DOWNLOADS_DIR:-"${DATA_ROOT}/_downloads"}"
-DEFAULT_DRIVE="${VBOGS_DRIVE:-2013_05_28_drive_0008_sync}"
-IMAGE_BASE_URL="https://s3.eu-central-1.amazonaws.com/avg-projects/KITTI-360/data_2d_raw"
 
 usage() {
   cat <<'USAGE'
@@ -25,9 +23,11 @@ Archives are normalized into this layout:
 Required environment variables:
   KITTI_CALIBRATION_LINK   URL for KITTI-360 calibration archive
   KITTI_POSES_LINK         URL for KITTI-360 poses archive
+  KITTI_IMAGES_LINK        URL(s) for KITTI-360 left/right image archive(s),
+                           separated by spaces, commas, or newlines
 
-KITTI_CALIBRATION_LINK and KITTI_POSES_LINK may be omitted when the matching
-canonical folders already exist.
+KITTI_CALIBRATION_LINK, KITTI_POSES_LINK, and KITTI_IMAGES_LINK may be omitted
+when the matching canonical folders already exist.
 
 Optional:
   KITTI_360_DATA_ROOT       Extraction root. Default:
@@ -35,16 +35,13 @@ Optional:
                             Expected to be the KITTI-360 Docker volume mount
                             inside vbogs-pipeline.
   KITTI_360_DOWNLOADS_DIR   Archive cache. Default: <KITTI_360_DATA_ROOT>/_downloads
-  VBOGS_DRIVE               Drive image archives to download when images are
-                            not already present. Default: 2013_05_28_drive_0008_sync
-  KITTI_IMAGES              URL(s) for KITTI-360 image archive(s), separated by
-                            spaces, commas, or newlines. Usually not needed.
   FORCE_DOWNLOAD=1          Re-download archives even when cached
   KEEP_ARCHIVES=0           Delete cached archives after extraction
 
 Example:
   export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
   export KITTI_POSES_LINK='https://.../data_poses.zip'
+  export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
   ./download_kitti_360.sh
 USAGE
 }
@@ -203,73 +200,6 @@ copy_image_drives_from() {
   return "${found}"
 }
 
-run_image_download_script_from() {
-  local source="$1"
-  local script_path=""
-  local script_dir=""
-  local generated_root=""
-  local filtered_script=""
-  local replacement=""
-  local drive=""
-
-  [[ -d "${source}" ]] || return 1
-  script_path="$(find "${source}" -type f -name 'download_2d_perspective.sh' -print -quit)"
-  [[ -n "${script_path}" ]] || return 1
-
-  require_command bash
-  require_command wget
-  require_command unzip
-
-  script_dir="$(dirname "${script_path}")"
-  if [[ -n "${image_drive:-}" ]]; then
-    replacement="train_list=("
-    while IFS= read -r drive; do
-      [[ -n "${drive}" ]] || continue
-      replacement+=$'\n'
-      replacement+="            \"${drive}\""
-    done < <(printf '%s\n' "${image_drive}" | tr ',\n' '  ' | xargs -n 1 printf '%s\n')
-    replacement+=$'\n)'
-
-    filtered_script="${script_dir}/download_2d_perspective.filtered.sh"
-    awk -v replacement="${replacement}" '
-      /^train_list=\(/ {
-        print replacement
-        in_train_list = 1
-        next
-      }
-      in_train_list && /^\)/ {
-        in_train_list = 0
-        next
-      }
-      !in_train_list {
-        print
-      }
-    ' "${script_path}" > "${filtered_script}"
-    chmod +x "${filtered_script}"
-    script_path="${filtered_script}"
-    echo "Limiting nested perspective download to: ${image_drive}"
-  fi
-
-  echo "Running nested KITTI-360 perspective downloader: ${script_path}"
-  (
-    cd "${script_dir}"
-    bash "${script_path}"
-  )
-
-  generated_root="${script_dir}/KITTI-360"
-  if copy_image_drives_from "${generated_root}/images" "${DATA_ROOT}/images"; then
-    return 0
-  fi
-  if copy_image_drives_from "${generated_root}/data_2d_raw" "${DATA_ROOT}/images"; then
-    return 0
-  fi
-  if copy_image_drives_from "${generated_root}/data_2d_test" "${DATA_ROOT}/images"; then
-    return 0
-  fi
-
-  return 1
-}
-
 normalize_extraction() {
   local label="$1"
   local extraction_root="$2"
@@ -311,13 +241,13 @@ normalize_extraction() {
       if copy_image_drives_from "${extraction_root}/data_2d_test" "${target}"; then
         return 0
       fi
+      if copy_image_drives_from "${extraction_root}/data_2d_test_slam" "${target}"; then
+        return 0
+      fi
       if copy_image_drives_from "${extraction_root}" "${target}"; then
         return 0
       fi
-      if run_image_download_script_from "${extraction_root}"; then
-        return 0
-      fi
-      die "images archive did not contain images, data_2d_raw, data_2d_test, drive image folders, or download_2d_perspective.sh"
+      die "images archive did not contain images, data_2d_raw, data_2d_test, data_2d_test_slam, or drive image folders"
       ;;
     *)
       die "unknown archive label: ${label}"
@@ -329,11 +259,13 @@ split_urls() {
   tr ',\n' '  ' | xargs -n 1 printf '%s\n'
 }
 
-default_image_urls() {
-  local drive="$1"
+has_existing_images() {
+  local images_root="$1"
+  local found
 
-  printf '%s/%s_image_00.zip\n' "${IMAGE_BASE_URL}" "${drive}"
-  printf '%s/%s_image_01.zip\n' "${IMAGE_BASE_URL}" "${drive}"
+  [[ -d "${images_root}" ]] || return 1
+  found="$(find "${images_root}" -mindepth 2 -maxdepth 2 -type d \( -name 'image_00' -o -name 'image_01' \) -print -quit)"
+  [[ -n "${found}" ]]
 }
 
 process_url() {
@@ -368,12 +300,14 @@ fi
 
 calibration_url="$(get_env_first KITTI_CALIBRATION_LINK || true)"
 poses_url="$(get_env_first KITTI_POSES_LINK || true)"
-images_urls="$(get_env_first KITTI_IMAGES || true)"
-image_drive="${DEFAULT_DRIVE}"
+images_url="$(get_env_first KITTI_IMAGES_LINK || true)"
 
 missing=()
 [[ -n "${calibration_url}" || -d "${DATA_ROOT}/calibration" ]] || missing+=("KITTI_CALIBRATION_LINK")
 [[ -n "${poses_url}" || -d "${DATA_ROOT}/data_poses" ]] || missing+=("KITTI_POSES_LINK")
+if [[ -z "${images_url}" ]] && ! has_existing_images "${DATA_ROOT}/images"; then
+  missing+=("KITTI_IMAGES_LINK")
+fi
 
 if (( ${#missing[@]} > 0 )); then
   usage >&2
@@ -387,7 +321,6 @@ mkdir -p "${DATA_ROOT}" "${DOWNLOADS_DIR}"
 echo "KITTI-360 data root : ${DATA_ROOT}"
 echo "Archive cache       : ${DOWNLOADS_DIR}"
 echo "Canonical layout    : calibration/, data_poses/, images/"
-echo "Image drive         : ${image_drive}"
 
 if [[ -n "${calibration_url}" ]]; then
   process_url "calibration" "${calibration_url}"
@@ -401,20 +334,13 @@ else
   echo "Using existing poses: ${DATA_ROOT}/data_poses"
 fi
 
-if [[ -z "${images_urls}" ]]; then
-  if [[ -d "${DATA_ROOT}/images/${image_drive}" ]]; then
-    echo "Using existing images: ${DATA_ROOT}/images/${image_drive}"
-  else
-    echo "KITTI_IMAGES not set; using default perspective image archives for ${image_drive}"
-    images_urls="$(default_image_urls "${image_drive}")"
-  fi
-fi
-
-if [[ -n "${images_urls}" ]]; then
+if [[ -n "${images_url}" ]]; then
   while IFS= read -r image_url; do
     [[ -n "${image_url}" ]] || continue
     process_url "images" "${image_url}"
-  done < <(printf '%s\n' "${images_urls}" | split_urls)
+  done < <(printf '%s\n' "${images_url}" | split_urls)
+else
+  echo "Using existing images: ${DATA_ROOT}/images"
 fi
 
 echo
