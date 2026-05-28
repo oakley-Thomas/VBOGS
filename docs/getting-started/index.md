@@ -32,7 +32,7 @@ bash scripts/build_stack_serial.sh vbogs-pipeline
 ## Start Local Containers
 
 Use the base compose file plus the dev overlay. The dev overlay bind-mounts
-this checkout and maps local `outputs/` into the containers.
+this checkout; generated artifacts stay in Docker volumes.
 
 ```bash
 docker compose --project-directory . \

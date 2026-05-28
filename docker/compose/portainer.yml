@@ -1,3 +1,33 @@
+x-vbogs-mounts:
+  data: &vbogs-data-mount
+    type: volume
+    source: vbogs-data
+    target: /workspace/VBOGS/data
+  kitti360: &vbogs-kitti360-mount
+    type: volume
+    source: KITTI-360
+    target: /workspace/VBOGS/data/KITTI-360
+  outputs: &vbogs-outputs-mount
+    type: volume
+    source: vbogs-outputs
+    target: /workspace/VBOGS/outputs
+  generated-configs: &vbogs-generated-configs-mount
+    type: volume
+    source: vbogs-generated-configs
+    target: /workspace/VBOGS/generated_configs
+  colmap: &vbogs-colmap-mount
+    type: volume
+    source: COLMAP
+    target: /data/COLMAP
+  octree-anygs: &vbogs-octree-anygs-mount
+    type: volume
+    source: OCTREE-ANYGS
+    target: /data/OCTREE-ANYGS
+  torch-cache: &vbogs-torch-cache-mount
+    type: volume
+    source: vbogs-torch-cache
+    target: /root/.cache/torch
+
 services:
   vbogs-torch:
     image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
@@ -14,28 +44,13 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
     volumes:
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
-        read_only: false
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
-      - type: volume
-        source: vbogs-generated-configs
-        target: /workspace/VBOGS/generated_configs
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
-      - type: volume
-        source: OCTREE-ANYGS
-        target: /data/OCTREE-ANYGS
-      - type: volume
-        source: vbogs-torch-cache
-        target: /root/.cache/torch
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
+      - *vbogs-torch-cache-mount
     command: sleep infinity
 
   vbogs-jax:
@@ -54,25 +69,12 @@ services:
       JAX_PLATFORMS: cuda
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
-        read_only: false
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
-      - type: volume
-        source: vbogs-generated-configs
-        target: /workspace/VBOGS/generated_configs
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
-      - type: volume
-        source: OCTREE-ANYGS
-        target: /data/OCTREE-ANYGS
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
     command: sleep infinity
 
   vbogs-vbgs-render:
@@ -90,19 +92,10 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
     volumes:
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
-        read_only: false
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-outputs-mount
+      - *vbogs-colmap-mount
     command: sleep infinity
 
   vbogs-pipeline:
@@ -134,25 +127,12 @@ services:
       VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
       VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
     volumes:
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
-        read_only: false
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
-      - type: volume
-        source: vbogs-generated-configs
-        target: /workspace/VBOGS/generated_configs
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
-      - type: volume
-        source: OCTREE-ANYGS
-        target: /data/OCTREE-ANYGS
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -175,29 +155,17 @@ services:
     ports:
       - "${VBOGS_TRANSFER_HOST_PORT:-22022}:2222"
     volumes:
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
+      - <<: *vbogs-data-mount
         read_only: true
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
+      - <<: *vbogs-kitti360-mount
         read_only: true
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
+      - <<: *vbogs-outputs-mount
         read_only: true
-      - type: volume
-        source: vbogs-generated-configs
-        target: /workspace/VBOGS/generated_configs
+      - <<: *vbogs-generated-configs-mount
         read_only: true
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
+      - <<: *vbogs-colmap-mount
         read_only: true
-      - type: volume
-        source: OCTREE-ANYGS
-        target: /data/OCTREE-ANYGS
+      - <<: *vbogs-octree-anygs-mount
         read_only: true
     command:
       - sh
@@ -212,11 +180,9 @@ services:
 
 volumes:
   COLMAP:
-    external: true
   OCTREE-ANYGS:
-    external: true
   KITTI-360:
-    external: true
+    name: ${VBOGS_DATASETS_VOLUME:-KITTI-360}
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:

@@ -55,8 +55,8 @@ python scripts/run_drive_pipeline.py \
 
 | Profile | Intended use |
 | --- | --- |
-| `configs/pipeline/dev.yaml` | Local Docker Compose development stack; outputs are visible in local `outputs/` |
-| `configs/pipeline/portainer.yaml` | Portainer deployment with stack-managed volumes |
+| `configs/pipeline/dev.yaml` | Local Docker Compose development stack; repo checkout bind-mounted, artifacts in Docker volumes |
+| `configs/pipeline/portainer.yaml` | Portainer deployment with compose-managed Docker volumes |
 | `configs/pipeline/default.yaml` | Backward-compatible default profile |
 
 CLI flags override config values. For the full mapping, see

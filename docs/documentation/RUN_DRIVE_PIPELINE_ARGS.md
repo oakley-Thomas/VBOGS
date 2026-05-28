@@ -27,12 +27,13 @@ Use the profile config that matches where the stack is running:
 
 | File | Intended use | Output location |
 | --- | --- | --- |
-| `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` in this checkout, via the dev compose bind mount |
+| `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
 | `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
 | `configs/pipeline/default.yaml` | Backward-compatible default | Depends on the active compose mounts |
 
 For local development, use the base compose file plus the dev overlay, which
-bind-mounts `${VBOGS_LOCAL_OUTPUTS:-./outputs}` to `/workspace/VBOGS/outputs`:
+bind-mounts this checkout to `/workspace/VBOGS` while keeping generated
+artifacts in Docker volumes:
 
 ```bash
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
@@ -153,11 +154,11 @@ python scripts/upload_google_drive.py \
 ## SSH/SFTP Downloads from Portainer
 
 The pipeline image also includes an optional SSH/SFTP transfer mode for pulling
-artifacts from a Portainer deployment without using the volume browser. The
+artifacts from a Portainer deployment without direct host filesystem access. The
 Portainer compose file runs this as a separate `vbogs-transfer` service using
 the same lightweight pipeline image. It stays idle unless an SSH public key is
 provided, disables password login, does not mount the Docker socket, and mounts
-the VBOGS volumes read-only.
+the VBOGS data/output mounts read-only.
 
 Create a local key if you do not already have one:
 
@@ -362,7 +363,7 @@ Runs `scripts/bundle_run_outputs.py` in `vbogs-torch`. It copies curated,
 user-facing artifacts into `outputs/v1_0/<drive>` and writes
 `run_manifest.json`, then zips that output folder to
 `outputs/v1_0/<drive>.zip`. Bulky Octree-AnyGS checkpoints and full VBGS
-posterior artifacts remain in their native data volumes and are referenced by
+posterior artifacts remain in their native data paths and are referenced by
 path.
 
 Bundled outputs include:

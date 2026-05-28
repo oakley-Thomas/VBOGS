@@ -10,7 +10,7 @@ The framework boundary stays explicit:
   point-to-anchor bucketing.
 - `vbogs-jax` runs per-anchor VBGS fitting and fit inspection.
 
-Data moves only through the shared stack volumes mounted at the same paths in
+Data moves only through the shared stack mounts available at the same paths in
 both containers.
 """
 

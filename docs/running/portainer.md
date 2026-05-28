@@ -1,8 +1,9 @@
 # Portainer, Uploads, and Transfers
 
 Use `configs/pipeline/portainer.yaml` with `docker/compose/portainer.yml` for
-server deployment. The Portainer profile writes outputs to the stack-managed
-`vbogs-outputs` volume at `/workspace/VBOGS/outputs`.
+server deployment. The Portainer profile uses compose-managed Docker volumes
+for datasets, intermediate artifacts, and curated outputs. None of those
+volumes are marked `external`.
 
 ## Server Update Workflow
 
@@ -64,7 +65,7 @@ Keep service-account JSON in environment/secrets, not in committed configs.
 ## SSH/SFTP Artifact Transfer
 
 The Portainer compose file includes `vbogs-transfer`, a read-only SSH/SFTP
-service for pulling artifacts from server volumes.
+service for pulling artifacts from the server mounts.
 
 Create a local key:
 

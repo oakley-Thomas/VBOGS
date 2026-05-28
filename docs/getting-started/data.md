@@ -36,25 +36,32 @@ alternate historical layouts:
 You can override discovery with `--raw-root`, `--poses-root`, and
 `--calibration-dir`.
 
-## Docker Volumes
+## Docker Mounts
 
-The base compose stack mounts the source KITTI-360 data at:
+The compose stack mounts the source KITTI-360 data at:
 
 ```text
 /workspace/VBOGS/data/KITTI-360
 ```
 
-In Portainer deployments this path is expected to be backed by the external
-Docker volume named `KITTI-360`.
+This path is backed by the persistent Docker volume named by
+`VBOGS_DATASETS_VOLUME`, defaulting to `KITTI-360`. The stack also uses
+compose-managed Docker volumes for generated artifacts; they are persistent but
+not marked `external`.
 
-The main generated data volumes are:
+When running inside Docker, make sure the KITTI-360 layout above is present in
+that dataset volume.
 
-| Volume/path | Purpose |
+The main Docker volumes are:
+
+| Volume | Container path | Purpose |
 | --- | --- |
-| `COLMAP` mounted at `/data/COLMAP` | Prepared COLMAP-style inputs for Octree-AnyGS |
-| `OCTREE-ANYGS` mounted at `/data/OCTREE-ANYGS` | Trained Octree-AnyGS runs and checkpoints |
-| `vbogs-data` mounted at `/workspace/VBOGS/data` | VBOGS stage artifacts such as point clouds, buckets, fits, and `U.npy` |
-| `vbogs-outputs` mounted at `/workspace/VBOGS/outputs` | Curated render, NBV, bundle, and zip outputs |
+| `KITTI-360` or `VBOGS_DATASETS_VOLUME` | `/workspace/VBOGS/data/KITTI-360` | Source KITTI-360 images, poses, and calibration |
+| `vbogs-data` | `/workspace/VBOGS/data` | VBOGS stage artifacts such as point clouds, buckets, fits, and `U.npy` |
+| `COLMAP` | `/data/COLMAP` | Prepared COLMAP-style inputs for Octree-AnyGS |
+| `OCTREE-ANYGS` | `/data/OCTREE-ANYGS` | Trained Octree-AnyGS runs and checkpoints |
+| `vbogs-outputs` | `/workspace/VBOGS/outputs` | Curated render, NBV, bundle, and zip outputs |
+| `vbogs-generated-configs` | `/workspace/VBOGS/generated_configs` | Generated Octree-AnyGS config files |
 
 ## Download Helpers
 

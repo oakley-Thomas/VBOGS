@@ -10,8 +10,8 @@ CLI flags override config values.
 
 | File | Intended use | Typical outputs |
 | --- | --- | --- |
-| `configs/pipeline/dev.yaml` | Local Docker Compose development stack | local `outputs/v1_0/<drive>/` via bind mount |
-| `configs/pipeline/portainer.yaml` | Portainer deployment | `vbogs-outputs` volume at `/workspace/VBOGS/outputs` |
+| `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` volume |
+| `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` volume |
 | `configs/pipeline/default.yaml` | Backward-compatible default profile | depends on active compose mounts |
 
 ## Top-Level Sections
