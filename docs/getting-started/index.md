@@ -161,8 +161,7 @@ trained Octree-AnyGS scene before uncertainty artifacts exist:
 ```bash
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
-  --resolution 4 \
-  --rgb-only
+  --resolution 1
 ```
 
 For more options, including explicit model and uncertainty paths, see
