@@ -40,15 +40,18 @@ Octree-AnyGS online.
 
 Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) plus the files listed.
 
-### M1 — Environment setup [LLM]
+### M1 — Docker runtime setup [LLM]
 
-Two conda envs required (JAX/PyTorch CUDA conflict is real; don't try to unify).
+PyTorch and JAX still need separate CUDA runtime stacks, but those stacks are
+Docker services rather than locally managed conda environments. Do not try to
+merge them.
 
-- [x] Create `vbogs-torch` env (Octree-AnyGS deps; see `Octree-AnyGS/environment.yml`)
-- [x] Create `vbogs-jax` env (vbgs deps; see `vbgs/install_deps.sh`)
-- [x] Smoke test: `vbogs-torch` runs `Octree-AnyGS/render.py --help`
+- [x] Build `vbogs-torch` image (Octree-AnyGS deps; see `docker/torch.Dockerfile`)
+- [x] Build `vbogs-jax` image (vbgs deps; see `docker/jax.Dockerfile`)
+- [x] Build `vbogs-pipeline` image for orchestration and artifact handling
+- [x] Smoke test: `vbogs-torch` runs `scripts/check_torch_stack.py`
 - [x] Smoke test: `vbogs-jax` imports `vbgs.model.train.fit_gmm_step` without error
-- [x] Document activation commands in a `scripts/envs.sh`
+- [x] Document Docker Compose startup and service commands in `docs/getting-started/`
 
 ### M2 — Train Octree-AnyGS [LLM, mostly ops]
 
@@ -75,7 +78,7 @@ The original local-dev artifact was
 
 Depends on: M1, stereo data source, stereo matcher choice.
 
-- [x] Script `scripts/stereo_to_pointcloud.py` (runs in `vbogs-torch`)
+- [x] Script `scripts/stereo_to_pointcloud.py` (runs in the `vbogs-torch` service)
 - [x] Define a matcher abstraction / CLI flag (`--matcher`) so disparity can come from `sgbm`, `raft`, or another future provider while preserving the same `points_world.npz` output contract
 - [x] For each stereo pair: disparity → depth → unproject → world-frame
 - [x] Apply validity mask (left-right consistency, texture threshold)
@@ -84,7 +87,7 @@ Depends on: M1, stereo data source, stereo matcher choice.
 
 ### M4a — Point → anchor bucketing [LLM]
 
-Depends on: M2, M3. Runs in `vbogs-torch` (needs Octree-AnyGS checkpoint).
+Depends on: M2, M3. Runs in the `vbogs-torch` service (needs Octree-AnyGS checkpoint).
 
 Reference: [Octree-AnyGS/scene/basic_model.py:100-120](Octree-AnyGS/scene/basic_model.py#L100-L120) (`octree_sample` — grid discretization to match exactly).
 
@@ -103,7 +106,7 @@ least `20` assigned points.
 
 ### M4b — Per-anchor VBGS fit [LLM, heaviest task]
 
-Depends on: M4a, starting hyperparameters. Runs in `vbogs-jax`.
+Depends on: M4a, starting hyperparameters. Runs in the `vbogs-jax` service.
 
 Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`, `compute_elbo_delta`), [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) (`get_volume_delta_mixture`).
 
@@ -116,7 +119,7 @@ Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`,
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
 - [x] Implement grouped batched fitting with `jax.vmap`; keep the one-anchor loop as a debugging fallback
 
-Implementation is in place and smoke-tested in `vbogs-jax`. The default path is
+Implementation is in place and smoke-tested in the `vbogs-jax` service. The default path is
 now grouped/batched fitting, with point-count buckets controlling padding and
 memory use. The full-scene fit still needs a completion/quality pass before M7.
 Current smoke artifacts live under
@@ -127,7 +130,7 @@ Current smoke artifacts live under
 
 Depends on: M4b, entropy definition.
 
-- [x] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
+- [x] Script `scripts/compute_uncertainty.py` (runs in the `vbogs-jax` service or pure numpy)
 - [x] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
 - [x] Closed-form Dirichlet entropy from `alpha`
 - [x] Closed-form delta MVN entropy
@@ -137,7 +140,7 @@ Depends on: M4b, entropy definition.
 
 ### M6 — `render_scalar` + NBV loop [LLM]
 
-Depends on: M2, M5, candidate pose set. Runs in `vbogs-torch`.
+Depends on: M2, M5, candidate pose set. Runs in the `vbogs-torch` service.
 
 Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_renderer/render.py), [Octree-AnyGS/scene/implicit_model/base_model.py:460-534](Octree-AnyGS/scene/implicit_model/base_model.py#L460-L534) (`generate_gaussians`).
 
@@ -210,4 +213,4 @@ When handing a milestone to an LLM, the prompt should include:
 3. The relevant Octree-AnyGS / vbgs files listed in the milestone
 4. The filesystem contract (inputs read, outputs written, formats)
 5. "Test plan: call the entry point on the artifacts produced by M{N-1}; expected output shape is X"
-6. Which conda env the script runs in
+6. Which Docker service the script runs in

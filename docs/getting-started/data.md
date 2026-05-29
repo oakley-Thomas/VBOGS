@@ -3,9 +3,16 @@
 VBOGS currently targets KITTI-360 perspective stereo. The pipeline expects
 rectified stereo images, camera poses, and calibration text files.
 
-## Expected Layout
+## Download Helper
 
-The preferred repo-local layout is:
+```bash
+# Download KITTI-360 Dataset
+bash scripts/download_kitti_360.sh
+```
+
+## KITTI-360 Expected Layout
+
+The layout should be:
 
 ```text
 data/KITTI-360/
@@ -24,17 +31,7 @@ data/KITTI-360/
           *.png
 ```
 
-The helper `vbogs.data_layout.resolve_kitti360_path` also accepts a few
-alternate historical layouts:
 
-| Input kind | Candidate paths |
-| --- | --- |
-| Raw images | `data/KITTI-360/images`, `data/KITTI-360/data_2d_raw`, `data/KITTI-360/data_2d_test`, `data/KITTI-360/data_2d_test_slam`, `data/data_2d_raw`, `data/data_2d_test`, `data/data_2d_test_slam` |
-| Poses | `data/KITTI-360/data_poses`, `data/data_poses` |
-| Calibration | `data/KITTI-360/calibration`, `data/calibration/calibration`, `data/calibration` |
-
-You can override discovery with `--raw-root`, `--poses-root`, and
-`--calibration-dir`.
 
 ## Docker Mounts
 
@@ -44,50 +41,11 @@ The compose stack mounts the source KITTI-360 data at:
 /workspace/VBOGS/data/KITTI-360
 ```
 
-This path is backed by the persistent Docker volume named by
-`VBOGS_DATASETS_VOLUME`, defaulting to `KITTI-360`. The stack also uses
-compose-managed Docker volumes for generated artifacts; they are persistent but
-not marked `external`.
+This path is backed by the persistent Docker volume named: `VBOGS_DATASETS_VOLUME`
 
-When running inside Docker, make sure the KITTI-360 layout above is present in
-that dataset volume.
 
-The main Docker volumes are:
 
-| Volume | Container path | Purpose |
-| --- | --- |
-| `KITTI-360` or `VBOGS_DATASETS_VOLUME` | `/workspace/VBOGS/data/KITTI-360` | Source KITTI-360 images, poses, and calibration |
-| `vbogs-data` | `/workspace/VBOGS/data` | VBOGS stage artifacts such as point clouds, buckets, fits, and `U.npy` |
-| `COLMAP` | `/data/COLMAP` | Prepared COLMAP-style inputs for Octree-AnyGS |
-| `OCTREE-ANYGS` | `/data/OCTREE-ANYGS` | Trained Octree-AnyGS runs and checkpoints |
-| `vbogs-outputs` | `/workspace/VBOGS/outputs` | Curated render, NBV, bundle, and zip outputs |
-| `vbogs-generated-configs` | `/workspace/VBOGS/generated_configs` | Generated Octree-AnyGS config files |
 
-## Download Helpers
-
-There are two repo-owned helpers:
-
-```bash
-python scripts/download_kitti360.py \
-  --manifest data/KITTI-360/download_manifest.json \
-  --data-root data/KITTI-360 \
-  --skip-existing
-```
-
-This Python helper is manifest-driven and uses only the standard library.
-Copy the example manifest, fill in the source URLs, then run it.
-
-```bash
-export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
-export KITTI_POSES_LINK='https://.../data_poses.zip'
-export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
-bash data/download_kitti_360.sh
-```
-
-The shell helper normalizes archives into the preferred `data/KITTI-360/`
-layout. It uses `KITTI_IMAGES_LINK` for image archives such as
-`data_2d_test_slam.zip`; `VBOGS_DRIVE` is only
-used later to select a drive for pipeline execution.
 
 ## Drive IDs
 

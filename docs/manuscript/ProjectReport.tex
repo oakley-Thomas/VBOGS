@@ -72,11 +72,11 @@ poorly modeled surfaces rather than large already-confident areas.
 Octree-AnyGS &
 The primary scene model. It stores a multi-level set of Gaussian anchors and
 renders the scene with level-of-detail selection. It runs in the PyTorch
-environment. \\
+Docker service. \\
 VBGS &
 The uncertainty model. It fits Bayesian Gaussian mixtures to normalized
 position-color samples and returns posterior parameters. It runs in the JAX
-environment. \\
+Docker service. \\
 KITTI-360 stereo data &
 The initial autonomous-driving data source. Perspective stereo frames provide
 RGB observations, ground-truth poses, calibration, and stereo pairs for point
@@ -165,15 +165,15 @@ Mixing these frames is one of the main ways to produce plausible-looking but
 incorrect results. In particular, bucketing must not use normalized
 coordinates.
 
-\section{Architecture and Environments}
+\section{Architecture and Runtime Services}
 
 VBOGS deliberately keeps the PyTorch and JAX sides separate. Octree-AnyGS and
-VBGS have incompatible CUDA dependency stacks, so the project uses two
-environments:
+VBGS have incompatible CUDA dependency stacks, so the project uses separate
+Docker services:
 
 \begin{longtable}{@{}p{0.24\linewidth}p{0.68\linewidth}@{}}
 \toprule
-\textbf{Environment} & \textbf{Responsibilities} \\
+\textbf{Service} & \textbf{Responsibilities} \\
 \midrule
 \endhead
 \texttt{vbogs-torch} &
@@ -189,7 +189,7 @@ The framework boundary is the filesystem. PyTorch-side scripts write
 \texttt{.npz}, \texttt{.npy}, \texttt{.json}, and visualization artifacts. JAX-side
 scripts read those files, produce posterior files, and write uncertainty
 arrays back to disk. This avoids in-process tensor sharing and keeps each
-framework inside the environment it supports.
+framework inside the runtime stack it supports.
 
 The upstream directories \path{Octree-AnyGS/} and \path{vbgs/} are treated as
 read-only dependencies. VBOGS functionality lives in repo-owned scripts and
@@ -372,11 +372,10 @@ of the posterior fits, heatmaps, and NBV choices.
 \textbf{Milestone} & \textbf{Status} & \textbf{What has been achieved} \\
 \midrule
 \endhead
-M1: Environment setup &
+M1: Docker runtime setup &
 Complete &
-Separate Torch and JAX environments are represented by repo-owned helper
-scripts and Docker services. Smoke-test commands exist for both upstream
-stacks. \\
+Separate Torch and JAX runtimes are represented by repo-owned Docker services.
+Compose smoke-test commands exist for both upstream stacks. \\
 M2: Train Octree-AnyGS &
 Implemented &
 KITTI-360 preparation and Octree-AnyGS training wrappers exist. The local

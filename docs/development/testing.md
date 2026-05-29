@@ -22,19 +22,28 @@ pytest tests/test_bundle_run_outputs.py
 Torch stack:
 
 ```bash
-bash scripts/envs.sh check-torch-stack
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-torch python scripts/check_torch_stack.py
 ```
 
 JAX import check:
 
 ```bash
-bash scripts/envs.sh smoke-test-jax
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-jax python -c "from vbgs.model.train import fit_gmm_step; print(fit_gmm_step.__name__)"
 ```
 
 Pipeline dry run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-pipeline python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
   --use-service-labels \
   --dry-run

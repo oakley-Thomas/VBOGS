@@ -289,8 +289,7 @@ def resolve_executable(name: str) -> str:
         hint = (
             "\nInstall ffmpeg first, for example:\n"
             "  sudo apt update && sudo apt install ffmpeg\n"
-            "or, inside a conda environment:\n"
-            "  conda install -c conda-forge ffmpeg"
+            "or run this helper from the vbogs-pipeline container, which includes ffmpeg."
         )
     raise FileNotFoundError(f"Required executable not found on PATH: {name}{hint}")
 

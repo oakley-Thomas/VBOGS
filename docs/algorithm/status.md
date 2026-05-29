@@ -6,7 +6,7 @@ The implementation status mirrors `PLAN.md` as of the current repo state.
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| M1 environment setup | Implemented | Docker services and conda helper commands exist |
+| M1 Docker runtime setup | Implemented | Docker services and Compose smoke checks exist |
 | M2 train Octree-AnyGS | Implemented | Local dev and server profiles exist |
 | M3 stereo to point cloud | Implemented | SGBM baseline; provider interface keeps room for RAFT or future matchers |
 | M4a point to anchor bucketing | Implemented | Buckets points across all levels |

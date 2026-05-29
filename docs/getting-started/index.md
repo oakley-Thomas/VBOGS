@@ -77,8 +77,11 @@ export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
 export KITTI_POSES_LINK='https://.../data_poses.zip'
 export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
 
-bash data/download_kitti_360.sh
+bash scripts/download_kitti_360.sh
 ```
+
+Use the `scripts/` path inside Docker so the helper comes from this checkout;
+`/workspace/VBOGS/data` is a persistent volume.
 
 The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the linked
 left and right perspective image archive, extracts all archives, and

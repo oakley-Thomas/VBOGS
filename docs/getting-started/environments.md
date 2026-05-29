@@ -1,9 +1,9 @@
-# Environments
+# Runtime Services
 
-VBOGS keeps PyTorch and JAX in separate environments. Do not merge them. The
+VBOGS keeps PyTorch and JAX in separate Docker services. Do not merge them. The
 framework boundary is the filesystem.
 
-## Docker Environments
+## Services
 
 The normal path is Docker Compose:
 
@@ -28,35 +28,10 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
-## Conda Helpers
-
-For non-Docker work, `scripts/envs.sh` creates and activates the two conda
-environments:
-
-```bash
-bash scripts/envs.sh create-all
-source scripts/envs.sh activate-torch
-source scripts/envs.sh activate-jax
-```
-
-Smoke tests:
-
-```bash
-bash scripts/envs.sh smoke-test-torch
-bash scripts/envs.sh smoke-test-jax
-bash scripts/envs.sh smoke-test-all
-```
-
-Torch GPU checks:
-
-```bash
-bash scripts/envs.sh verify-torch-gpu
-bash scripts/envs.sh check-torch-stack
-```
 
 ## What Runs Where
 
-| Stage | Entry point | Environment |
+| Stage | Entry point | Docker service |
 | --- | --- | --- |
 | M2 train scene | `scripts/train_octree_anygs.py` | `vbogs-torch` |
 | M3 stereo point cloud | `scripts/stereo_to_pointcloud.py` | `vbogs-torch` |
