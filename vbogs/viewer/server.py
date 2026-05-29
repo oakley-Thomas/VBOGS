@@ -1,6 +1,7 @@
 """FastAPI app for the realtime Octree-AnyGS debug viewer."""
 
 import asyncio
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ class LatestRequestBuffer:
 
 
 def create_app(session: OctreeRenderSession):
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
 
@@ -46,6 +47,31 @@ def create_app(session: OctreeRenderSession):
     @app.get("/api/cameras")
     async def cameras():
         return JSONResponse(session.camera_payload())
+
+    @app.post("/api/render")
+    async def render_api(request: Request):
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            return JSONResponse({"error": f"Invalid JSON render request: {exc}"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Expected a JSON object render request"}, status_code=400)
+        try:
+            frame = await asyncio.to_thread(session.render_request, payload)
+        except Exception as exc:
+            return JSONResponse(
+                {
+                    "request_id": payload.get("request_id"),
+                    "error": str(exc),
+                },
+                status_code=400,
+            )
+        return JSONResponse(
+            {
+                "metadata": frame.metadata,
+                "jpeg_base64": base64.b64encode(frame.jpeg).decode("ascii"),
+            }
+        )
 
     @app.websocket("/ws/render")
     async def render_socket(websocket: WebSocket):

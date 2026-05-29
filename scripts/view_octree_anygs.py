@@ -44,6 +44,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jpeg-quality", type=int, default=85)
     parser.add_argument("--camera-source", choices=("train", "test"), default="test")
     parser.add_argument("--camera-index", type=int, default=0)
+    pose_group = parser.add_mutually_exclusive_group()
+    pose_group.add_argument(
+        "--initial-pose",
+        nargs="+",
+        default=None,
+        help=(
+            "Initial viewer pose as `x y z yaw pitch roll` in degrees, "
+            "or 12/16 row-major matrix values."
+        ),
+    )
+    pose_group.add_argument(
+        "--initial-pose-file",
+        type=Path,
+        default=None,
+        help="Text, JSON, .npy, or .npz file containing the initial viewer pose.",
+    )
+    parser.add_argument(
+        "--initial-pose-convention",
+        choices=("c2w", "w2c"),
+        default="c2w",
+        help="Convention for --initial-pose matrix input or generic matrix files.",
+    )
     parser.add_argument("--colormap", default="turbo")
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
@@ -71,7 +93,15 @@ def main(argv: list[str] | None = None) -> None:
         ) from exc
 
     from vbogs.viewer.rendering import OctreeRenderSession
+    from vbogs.viewer.pose import load_pose_file, parse_pose_to_c2w, pose_to_c2w
     from vbogs.viewer.server import create_app
+
+    initial_c2w = None
+    if args.initial_pose is not None:
+        initial_c2w = parse_pose_to_c2w(args.initial_pose, convention=args.initial_pose_convention)
+    elif args.initial_pose_file is not None:
+        pose_matrix, convention = load_pose_file(args.initial_pose_file, args.initial_pose_convention)
+        initial_c2w = pose_to_c2w(pose_matrix, convention)
 
     session = OctreeRenderSession(
         drive=args.drive,
@@ -89,6 +119,7 @@ def main(argv: list[str] | None = None) -> None:
         rgb_only=args.rgb_only,
         jpeg_quality=args.jpeg_quality,
         max_fps=args.max_fps,
+        initial_c2w=initial_c2w,
     )
     app = create_app(session)
     print(f"Serving VBOGS viewer at http://{args.host}:{args.port}")

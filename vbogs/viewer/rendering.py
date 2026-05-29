@@ -15,7 +15,8 @@ import yaml
 from PIL import Image
 
 from vbogs.render import render_scalar
-from vbogs.viewer.camera import ViewerCamera, camera_to_c2w, coerce_c2w
+from vbogs.viewer.camera import ViewerCamera, camera_to_c2w
+from vbogs.viewer.pose import pose_to_c2w, request_payload_to_c2w
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DRIVE = "2013_05_28_drive_0008_sync"
@@ -199,6 +200,10 @@ def tensor_to_jpeg(image_tensor: Any, *, quality: int) -> bytes:
     return buffer.getvalue()
 
 
+def resolve_request_c2w(payload: dict[str, Any], *, default_c2w: np.ndarray) -> np.ndarray:
+    return request_payload_to_c2w(payload, default_c2w=default_c2w)
+
+
 class OctreeRenderSession:
     """Load and render one Octree-AnyGS scene for browser clients."""
 
@@ -220,6 +225,7 @@ class OctreeRenderSession:
         rgb_only: bool = False,
         jpeg_quality: int = 85,
         max_fps: float = 20.0,
+        initial_c2w: np.ndarray | None = None,
     ) -> None:
         if camera_source not in ("train", "test"):
             raise ValueError("--camera-source must be `train` or `test`")
@@ -236,6 +242,7 @@ class OctreeRenderSession:
         self.rgb_only = bool(rgb_only)
         self.jpeg_quality = int(jpeg_quality)
         self.max_fps = float(max_fps)
+        self.initial_c2w = None if initial_c2w is None else pose_to_c2w(initial_c2w, "c2w")
         self.render_lock = threading.Lock()
 
         self.scene, self.gaussians, self.pipe = self._load_scene()
@@ -312,6 +319,7 @@ class OctreeRenderSession:
             "vmax": self.vmax,
             "max_fps": self.max_fps,
             "jpeg_quality": self.jpeg_quality,
+            "initial_c2w": None if self.initial_c2w is None else self.initial_c2w.astype(float).tolist(),
         }
 
     def camera_payload(self) -> dict[str, Any]:
@@ -348,7 +356,7 @@ class OctreeRenderSession:
         quality = max(1, min(95, quality))
 
         entry = self._entry_by_id(payload.get("camera_id"))
-        c2w = coerce_c2w(payload.get("c2w", entry.c2w))
+        c2w = resolve_request_c2w(payload, default_c2w=entry.c2w)
         viewer_cam = ViewerCamera.from_source(
             entry.camera,
             c2w=c2w,
@@ -361,6 +369,8 @@ class OctreeRenderSession:
             frame = self._render_frame(viewer_cam, mode=mode, quality=quality)
         frame.metadata["request_id"] = request_id
         frame.metadata["camera_id"] = entry.camera_id
+        frame.metadata["pose_convention_output"] = "c2w"
+        frame.metadata["c2w"] = c2w.astype(float).tolist()
         return frame
 
     def _render_frame(self, camera: ViewerCamera, *, mode: str, quality: int) -> RenderedFrame:

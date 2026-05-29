@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import re
 import sys
@@ -27,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.io import save_json
 from vbogs.render import render_scalar
+from vbogs.viewer import pose as pose_utils
 
 DEFAULT_DRIVE = "2013_05_28_drive_0008_sync"
 DEFAULT_OCTREE_OUTPUT_ROOTS = (Path("/data/OCTREE-ANYGS"), REPO_ROOT / "data" / "OCTREE-ANYGS")
@@ -178,12 +178,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def split_numeric_tokens(values: Iterable[str]) -> list[float]:
-    tokens: list[float] = []
-    for value in values:
-        for token in re.split(r"[\s,;]+", str(value).strip()):
-            if token:
-                tokens.append(float(token))
-    return tokens
+    return pose_utils.split_numeric_tokens(values)
 
 
 def safe_output_stem(value: str) -> str:
@@ -193,75 +188,19 @@ def safe_output_stem(value: str) -> str:
 
 
 def matrix_from_values(values: Iterable[str]) -> np.ndarray:
-    numbers = split_numeric_tokens(values)
-    if len(numbers) == 16:
-        return np.asarray(numbers, dtype=np.float64).reshape(4, 4)
-    if len(numbers) == 12:
-        matrix = np.eye(4, dtype=np.float64)
-        matrix[:3, :] = np.asarray(numbers, dtype=np.float64).reshape(3, 4)
-        return matrix
-    raise ValueError(f"Expected 16 values for a 4x4 matrix, or 12 values for a 3x4 matrix; got {len(numbers)}")
+    return pose_utils.matrix_from_values(values)
 
 
 def load_pose_file(path: Path, fallback_convention: str) -> tuple[np.ndarray, str]:
-    path = path.resolve()
-    suffix = path.suffix.lower()
-    if suffix == ".npy":
-        return coerce_pose_matrix(np.load(path)), fallback_convention
-    if suffix == ".npz":
-        payload = np.load(path)
-        for key in ("c2w", "camera_to_world"):
-            if key in payload:
-                return coerce_pose_matrix(payload[key]), "c2w"
-        for key in ("w2c", "world_to_camera", "world_view_transform"):
-            if key in payload:
-                return coerce_pose_matrix(payload[key]), "w2c"
-        if "matrix" in payload:
-            return coerce_pose_matrix(payload["matrix"]), fallback_convention
-        raise KeyError(f"{path} does not contain one of c2w, w2c, world_to_camera, or matrix")
-    if suffix == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            for key in ("c2w", "camera_to_world"):
-                if key in payload:
-                    return coerce_pose_matrix(payload[key]), "c2w"
-            for key in ("w2c", "world_to_camera", "world_view_transform"):
-                if key in payload:
-                    return coerce_pose_matrix(payload[key]), "w2c"
-            if "matrix" in payload:
-                convention = str(payload.get("convention", fallback_convention)).lower()
-                if convention not in ("c2w", "w2c"):
-                    raise ValueError(f"Unsupported pose convention in {path}: {convention}")
-                return coerce_pose_matrix(payload["matrix"]), convention
-        return coerce_pose_matrix(payload), fallback_convention
-    return matrix_from_values(path.read_text(encoding="utf-8").split()), fallback_convention
+    return pose_utils.load_pose_file(path, fallback_convention)
 
 
 def coerce_pose_matrix(value: Any) -> np.ndarray:
-    matrix = np.asarray(value, dtype=np.float64)
-    if matrix.shape == (4, 4):
-        return matrix
-    if matrix.shape == (3, 4):
-        padded = np.eye(4, dtype=np.float64)
-        padded[:3, :] = matrix
-        return padded
-    if matrix.size in (12, 16):
-        return matrix_from_values([str(item) for item in matrix.reshape(-1).tolist()])
-    raise ValueError(f"Expected pose matrix shape (4, 4), (3, 4), 16, or 12 values; got {matrix.shape}")
+    return pose_utils.coerce_pose_matrix(value)
 
 
 def pose_to_c2w(matrix: np.ndarray, convention: str) -> np.ndarray:
-    if matrix.shape != (4, 4):
-        raise ValueError(f"Expected a 4x4 pose matrix, got {matrix.shape}")
-    if convention == "c2w":
-        c2w = matrix
-    elif convention == "w2c":
-        c2w = np.linalg.inv(matrix)
-    else:
-        raise ValueError(f"Unsupported pose convention: {convention}")
-    if not np.all(np.isfinite(c2w)):
-        raise ValueError("Pose matrix contains non-finite values")
-    return c2w.astype(np.float32)
+    return pose_utils.pose_to_c2w(matrix, convention)
 
 
 def add_octree_to_path(octree_root: Path) -> Path:
@@ -478,12 +417,11 @@ def make_query_camera(scene: Any, args: argparse.Namespace) -> tuple[Any, np.nda
         return cam, camera_to_c2w(cam), name
 
     if args.pose is not None:
-        pose_matrix = matrix_from_values(args.pose)
-        convention = args.pose_convention
+        c2w = pose_utils.parse_pose_to_c2w(args.pose, convention=args.pose_convention)
     else:
         pose_matrix, convention = load_pose_file(args.pose_file, args.pose_convention)
+        c2w = pose_to_c2w(pose_matrix, convention)
 
-    c2w = pose_to_c2w(pose_matrix, convention)
     reference = resolve_reference_camera(scene, args)
     name = safe_output_stem(args.name or "custom_pose")
     return build_query_camera(source_cam=reference, c2w=c2w, image_name=name, args=args), c2w, name

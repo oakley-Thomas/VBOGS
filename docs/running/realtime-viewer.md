@@ -58,6 +58,70 @@ python scripts/view_octree_anygs.py \
   --resolution 4
 ```
 
+## Teleport To A Pose
+
+The browser toolbar includes six pose fields:
+
+- `x`, `y`, `z`
+- `yaw`, `pitch`, `roll`
+
+You can also paste one full `x y z yaw pitch roll` string into any pose field
+to populate all six fields at once.
+
+The CLI and API also accept:
+
+- 12 row-major values for a `3x4` camera-to-world matrix
+- 16 row-major values for a `4x4` camera-to-world matrix
+- JSON with `position` and `yaw_pitch_roll_deg`, `c2w`, `w2c`, or `matrix`
+
+Angles are degrees, and the Euler convention is:
+
+```text
+R = Rz(yaw) @ Ry(pitch) @ Rx(roll)
+```
+
+The selected viewer camera still supplies intrinsics and image size. Teleport
+only changes the camera extrinsics.
+
+Start the viewer at a custom pose:
+
+```bash
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --initial-pose 0 0 2 0 0 0
+```
+
+Use a pose file:
+
+```bash
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --initial-pose-file pose.json \
+  --initial-pose-convention c2w
+```
+
+Render one arbitrary pose through the API:
+
+```bash
+curl -X POST http://localhost:8070/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "camera_id": "test:0",
+    "layer": "side_by_side",
+    "pose": "0 0 2 0 0 0",
+    "quality": 85
+  }'
+```
+
+The API returns JSON with render metadata and a base64-encoded JPEG:
+
+```json
+{
+  "metadata": {"camera_id": "test:0", "mode": "side_by_side"},
+  "jpeg_base64": "..."
+}
+```
+
 ## Notes
 
 - RGB uses upstream Octree-AnyGS rendering.

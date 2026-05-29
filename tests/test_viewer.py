@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,9 +13,11 @@ from vbogs.viewer.rendering import (
     RenderedFrame,
     compose_layer,
     normalized_uncertainty,
+    resolve_request_c2w,
     tensor_to_jpeg,
     validate_uncertainty_array,
 )
+from vbogs.viewer.pose import load_pose_file, parse_pose_to_c2w
 from vbogs.viewer.server import LatestRequestBuffer, create_app
 
 
@@ -27,6 +30,87 @@ def test_viewer_cli_defaults_are_docker_friendly():
     assert args.camera_source == "test"
     assert args.camera_index == 0
     assert args.rgb_only is False
+
+
+def test_viewer_cli_accepts_initial_pose_flags():
+    args = parse_args(
+        [
+            "--initial-pose",
+            "1",
+            "2",
+            "3",
+            "0",
+            "0",
+            "0",
+            "--initial-pose-convention",
+            "c2w",
+        ]
+    )
+
+    assert args.initial_pose == ["1", "2", "3", "0", "0", "0"]
+    assert args.initial_pose_file is None
+    assert args.initial_pose_convention == "c2w"
+
+
+def test_pose_parser_accepts_xyz_yaw_pitch_roll_degrees():
+    c2w = parse_pose_to_c2w(["1", "2", "3", "90", "0", "0"])
+
+    np.testing.assert_allclose(c2w[:3, 3], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(
+        c2w[:3, :3],
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        atol=1.0e-6,
+    )
+
+
+def test_pose_parser_accepts_row_major_matrix_values():
+    c2w = parse_pose_to_c2w("1 0 0 4 0 1 0 5 0 0 1 6")
+
+    assert c2w.shape == (4, 4)
+    np.testing.assert_allclose(c2w[:3, 3], [4.0, 5.0, 6.0])
+
+
+def test_pose_parser_accepts_json_c2w_and_w2c():
+    c2w = parse_pose_to_c2w({"c2w": np.eye(4).tolist()})
+    w2c = np.eye(4, dtype=np.float32)
+    w2c[:3, 3] = [0.0, 0.0, -2.0]
+    inverted = parse_pose_to_c2w({"w2c": w2c.tolist()})
+
+    np.testing.assert_allclose(c2w, np.eye(4), atol=1.0e-6)
+    np.testing.assert_allclose(inverted[:3, 3], [0.0, 0.0, 2.0], atol=1.0e-6)
+
+
+def test_pose_file_accepts_json_position_ypr(tmp_path):
+    pose_path = tmp_path / "pose.json"
+    pose_path.write_text(
+        '{"position": [1, 2, 3], "yaw_pitch_roll_deg": [0, 0, 0]}',
+        encoding="utf-8",
+    )
+
+    matrix, convention = load_pose_file(pose_path, "c2w")
+
+    assert convention == "c2w"
+    np.testing.assert_allclose(matrix[:3, 3], [1.0, 2.0, 3.0])
+
+
+def test_pose_parser_rejects_non_finite_values():
+    with pytest.raises(ValueError, match="non-finite"):
+        parse_pose_to_c2w("1 2 nan 0 0 0")
+
+
+def test_pose_parser_rejects_invalid_value_count():
+    with pytest.raises(ValueError, match="Expected 6"):
+        parse_pose_to_c2w("1 2 3")
+
+
+def test_resolve_request_c2w_accepts_pose_payload_without_gpu():
+    default = np.eye(4, dtype=np.float32)
+
+    resolved = resolve_request_c2w({"pose": "1 2 3 0 0 0"}, default_c2w=default)
+    fallback = resolve_request_c2w({}, default_c2w=default)
+
+    np.testing.assert_allclose(resolved[:3, 3], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(fallback, default)
 
 
 def test_validate_uncertainty_array_rejects_length_mismatch():
@@ -179,9 +263,21 @@ def test_fastapi_routes_and_websocket_with_fake_session():
     assert client.get("/api/cameras").json()["default_camera_id"] == "test:0"
     assert client.get("/").status_code == 200
 
+    response = client.post(
+        "/api/render",
+        json={"request_id": "api1", "layer": "rgb", "pose": "1 2 3 0 0 0"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metadata"]["request_id"] == "api1"
+    assert base64.b64decode(body["jpeg_base64"]) == b"\xff\xd8fake"
+
     with client.websocket_connect("/ws/render") as websocket:
         websocket.send_json({"request_id": "r1", "layer": "rgb"})
         assert websocket.receive_json()["request_id"] == "r1"
         assert websocket.receive_bytes() == b"\xff\xd8fake"
 
-    assert session.requests == [{"request_id": "r1", "layer": "rgb"}]
+    assert session.requests == [
+        {"request_id": "api1", "layer": "rgb", "pose": "1 2 3 0 0 0"},
+        {"request_id": "r1", "layer": "rgb"},
+    ]
