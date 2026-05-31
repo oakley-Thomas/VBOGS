@@ -167,5 +167,6 @@ python scripts/view_octree_anygs.py \
   --resolution 1
 ```
 
-For more options, including explicit model and uncertainty paths, see
+For more options, including explicit model paths, pose teleport, REST API
+usage, rendered-anchor uncertainty queries, and capture scripts, see
 [Realtime Viewer](../running/realtime-viewer.md).

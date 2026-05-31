@@ -32,6 +32,13 @@ class RenderedFrame:
 
 
 @dataclass(frozen=True)
+class ResolvedViewerCamera:
+    entry: "CameraEntry"
+    c2w: np.ndarray
+    camera: ViewerCamera
+
+
+@dataclass(frozen=True)
 class CameraEntry:
     source: str
     index: int
@@ -204,6 +211,48 @@ def resolve_request_c2w(payload: dict[str, Any], *, default_c2w: np.ndarray) -> 
     return request_payload_to_c2w(payload, default_c2w=default_c2w)
 
 
+def gaussian_visibility_vector(visibility_filter: Any, gaussian_count: int) -> np.ndarray:
+    values = np.asarray(visibility_filter, dtype=bool)
+    if values.size == gaussian_count:
+        return values.reshape(-1)
+    values = np.squeeze(values)
+    if values.size == gaussian_count:
+        return values.reshape(-1)
+    if values.ndim > 1 and values.shape[0] == gaussian_count:
+        return np.any(values, axis=tuple(range(1, values.ndim))).reshape(-1)
+    if values.ndim > 1 and values.shape[-1] == gaussian_count:
+        return np.any(values, axis=tuple(range(values.ndim - 1))).reshape(-1)
+    return values.reshape(-1)
+
+
+def rendered_anchor_ids_from_gaussians(
+    visible_mask: Any,
+    selection_mask: Any,
+    visibility_filter: Any,
+    n_offsets: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map visible rasterized gaussians back to unique parent anchor ids."""
+
+    visible_mask = np.asarray(visible_mask, dtype=bool).reshape(-1)
+    selection_mask = np.asarray(selection_mask, dtype=bool).reshape(-1)
+    visible_anchor_ids = np.nonzero(visible_mask)[0].astype(np.int64)
+    expanded_anchor_ids = np.repeat(visible_anchor_ids, int(n_offsets))
+    if expanded_anchor_ids.shape[0] != selection_mask.shape[0]:
+        raise ValueError(
+            "selection_mask length does not match visible anchors expanded by n_offsets "
+            f"({selection_mask.shape[0]} != {expanded_anchor_ids.shape[0]})"
+        )
+    selected_anchor_ids = expanded_anchor_ids[selection_mask]
+    rendered_gaussians = gaussian_visibility_vector(visibility_filter, selected_anchor_ids.shape[0])
+    if selected_anchor_ids.shape[0] != rendered_gaussians.shape[0]:
+        raise ValueError(
+            "visibility_filter length does not match selected gaussian count "
+            f"({rendered_gaussians.shape[0]} != {selected_anchor_ids.shape[0]})"
+        )
+    rendered_anchor_ids, rendered_counts = np.unique(selected_anchor_ids[rendered_gaussians], return_counts=True)
+    return rendered_anchor_ids.astype(np.int64), rendered_counts.astype(np.int64)
+
+
 class OctreeRenderSession:
     """Load and render one Octree-AnyGS scene for browser clients."""
 
@@ -345,6 +394,18 @@ class OctreeRenderSession:
             raise IndexError(f"Camera id {wanted!r} is out of range")
         return entries[index]
 
+    def _viewer_camera_from_payload(self, payload: dict[str, Any]) -> ResolvedViewerCamera:
+        entry = self._entry_by_id(payload.get("camera_id"))
+        c2w = resolve_request_c2w(payload, default_c2w=entry.c2w)
+        viewer_cam = ViewerCamera.from_source(
+            entry.camera,
+            c2w=c2w,
+            uid=entry.index,
+            image_name=str(getattr(entry.camera, "image_name", entry.camera_id)),
+            device="cuda",
+        )
+        return ResolvedViewerCamera(entry=entry, c2w=c2w, camera=viewer_cam)
+
     def render_request(self, payload: dict[str, Any]) -> RenderedFrame:
         request_id = payload.get("request_id")
         mode = str(payload.get("layer", payload.get("mode", "side_by_side")))
@@ -355,23 +416,101 @@ class OctreeRenderSession:
         quality = int(payload.get("quality", self.jpeg_quality))
         quality = max(1, min(95, quality))
 
-        entry = self._entry_by_id(payload.get("camera_id"))
-        c2w = resolve_request_c2w(payload, default_c2w=entry.c2w)
-        viewer_cam = ViewerCamera.from_source(
-            entry.camera,
-            c2w=c2w,
-            uid=entry.index,
-            image_name=str(getattr(entry.camera, "image_name", entry.camera_id)),
-            device="cuda",
-        )
+        resolved = self._viewer_camera_from_payload(payload)
 
         with self.render_lock:
-            frame = self._render_frame(viewer_cam, mode=mode, quality=quality)
+            frame = self._render_frame(resolved.camera, mode=mode, quality=quality)
         frame.metadata["request_id"] = request_id
-        frame.metadata["camera_id"] = entry.camera_id
+        frame.metadata["camera_id"] = resolved.entry.camera_id
         frame.metadata["pose_convention_output"] = "c2w"
-        frame.metadata["c2w"] = c2w.astype(float).tolist()
+        frame.metadata["c2w"] = resolved.c2w.astype(float).tolist()
         return frame
+
+    def rendered_anchors_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.rgb_only or self.uncertainty is None:
+            raise ValueError("This viewer was started with --rgb-only; rendered anchor uncertainty is unavailable")
+
+        import torch
+
+        request_id = payload.get("request_id")
+        resolved = self._viewer_camera_from_payload(payload)
+        with self.render_lock:
+            with torch.no_grad():
+                scalar_result = render_scalar(
+                    resolved.camera,
+                    self.gaussians,
+                    self.pipe,
+                    self.uncertainty,
+                    self.loaded_iteration,
+                    force_all_levels=self.force_all_levels,
+                )
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        visible_mask = scalar_result["visible_mask"].detach().cpu().numpy().astype(bool)
+        selection_mask = scalar_result["selection_mask"].detach().cpu().numpy().astype(bool)
+        visibility_filter = scalar_result["visibility_filter"].detach().cpu().numpy().astype(bool)
+        anchor_ids, gaussian_counts = rendered_anchor_ids_from_gaussians(
+            visible_mask,
+            selection_mask,
+            visibility_filter,
+            int(self.gaussians.n_offsets),
+        )
+        total_rendered_anchor_count = int(anchor_ids.shape[0])
+
+        uncertainty_np = self.uncertainty.detach().cpu().numpy().astype(np.float32)
+        all_rendered_uncertainty_values = (
+            uncertainty_np[anchor_ids] if anchor_ids.size else np.empty((0,), dtype=np.float32)
+        )
+        anchor_xyz = self.gaussians.get_anchor.detach().cpu().numpy().astype(np.float32)
+        anchor_level = None
+        if hasattr(self.gaussians, "get_level"):
+            anchor_level = self.gaussians.get_level.detach().cpu().numpy().reshape(-1)
+        elif hasattr(self.gaussians, "_level"):
+            anchor_level = self.gaussians._level.detach().cpu().numpy().reshape(-1)
+
+        max_anchors = payload.get("max_anchors")
+        truncated = False
+        if max_anchors is not None:
+            max_anchors = max(0, int(max_anchors))
+            truncated = anchor_ids.shape[0] > max_anchors
+            anchor_ids = anchor_ids[:max_anchors]
+            gaussian_counts = gaussian_counts[:max_anchors]
+
+        anchors = []
+        for anchor_id, rendered_gaussian_count in zip(anchor_ids.tolist(), gaussian_counts.tolist()):
+            row = {
+                "anchor_id": int(anchor_id),
+                "xyz": [float(x) for x in anchor_xyz[int(anchor_id)].tolist()],
+                "uncertainty": float(uncertainty_np[int(anchor_id)]),
+                "rendered_gaussian_count": int(rendered_gaussian_count),
+            }
+            if anchor_level is not None and int(anchor_id) < anchor_level.shape[0]:
+                row["level"] = int(anchor_level[int(anchor_id)])
+            anchors.append(row)
+
+        unc_image_sum = float(scalar_result["unc_image"].sum().detach().cpu())
+        alpha_sum = float(scalar_result["alpha_image"].sum().detach().cpu())
+        return {
+            "request_id": request_id,
+            "camera_id": resolved.entry.camera_id,
+            "pose_convention_output": "c2w",
+            "c2w": resolved.c2w.astype(float).tolist(),
+            "anchor_count_rendered": total_rendered_anchor_count,
+            "anchor_count_returned": int(anchor_ids.shape[0]),
+            "anchor_count_total_rendered_before_limit": total_rendered_anchor_count,
+            "truncated": truncated,
+            "total_anchor_uncertainty": (
+                float(all_rendered_uncertainty_values.sum()) if all_rendered_uncertainty_values.size else 0.0
+            ),
+            "mean_anchor_uncertainty": (
+                float(all_rendered_uncertainty_values.mean()) if all_rendered_uncertainty_values.size else None
+            ),
+            "uncertainty_image_sum": unc_image_sum,
+            "alpha_sum": alpha_sum,
+            "alpha_normalized_uncertainty": unc_image_sum / max(alpha_sum, 1.0e-8),
+            "anchors": anchors,
+        }
 
     def _render_frame(self, camera: ViewerCamera, *, mode: str, quality: int) -> RenderedFrame:
         import torch

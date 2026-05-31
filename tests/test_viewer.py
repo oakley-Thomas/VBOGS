@@ -13,6 +13,7 @@ from vbogs.viewer.rendering import (
     RenderedFrame,
     compose_layer,
     normalized_uncertainty,
+    rendered_anchor_ids_from_gaussians,
     resolve_request_c2w,
     tensor_to_jpeg,
     validate_uncertainty_array,
@@ -111,6 +112,22 @@ def test_resolve_request_c2w_accepts_pose_payload_without_gpu():
 
     np.testing.assert_allclose(resolved[:3, 3], [1.0, 2.0, 3.0])
     np.testing.assert_allclose(fallback, default)
+
+
+def test_rendered_anchor_ids_from_gaussians_maps_unique_parent_anchors():
+    visible_mask = np.array([False, True, True, False])
+    selection_mask = np.array([True, False, True, True, False, True])
+    visibility_filter = np.array([False, True, True, False])
+
+    anchor_ids, counts = rendered_anchor_ids_from_gaussians(
+        visible_mask,
+        selection_mask,
+        visibility_filter,
+        n_offsets=3,
+    )
+
+    assert anchor_ids.tolist() == [1, 2]
+    assert counts.tolist() == [1, 1]
 
 
 def test_validate_uncertainty_array_rejects_length_mismatch():
@@ -256,6 +273,28 @@ def test_fastapi_routes_and_websocket_with_fake_session():
                 jpeg=b"\xff\xd8fake",
             )
 
+        def rendered_anchors_request(self, payload):
+            self.requests.append(payload)
+            return {
+                "request_id": payload.get("request_id"),
+                "camera_id": payload.get("camera_id", "test:0"),
+                "anchor_count_rendered": 1,
+                "anchor_count_total_rendered_before_limit": 1,
+                "truncated": False,
+                "total_anchor_uncertainty": 3.0,
+                "uncertainty_image_sum": 7.0,
+                "alpha_sum": 2.0,
+                "alpha_normalized_uncertainty": 3.5,
+                "anchors": [
+                    {
+                        "anchor_id": 4,
+                        "xyz": [1.0, 2.0, 3.0],
+                        "uncertainty": 3.0,
+                        "rendered_gaussian_count": 2,
+                    }
+                ],
+            }
+
     session = FakeSession()
     client = TestClient(create_app(session))
 
@@ -272,6 +311,17 @@ def test_fastapi_routes_and_websocket_with_fake_session():
     assert body["metadata"]["request_id"] == "api1"
     assert base64.b64decode(body["jpeg_base64"]) == b"\xff\xd8fake"
 
+    anchors_response = client.post(
+        "/api/rendered-anchors",
+        json={"request_id": "anchors1", "camera_id": "test:0", "pose": "1 2 3 0 0 0"},
+    )
+    assert anchors_response.status_code == 200
+    anchors_body = anchors_response.json()
+    assert anchors_body["request_id"] == "anchors1"
+    assert anchors_body["total_anchor_uncertainty"] == 3.0
+    assert anchors_body["uncertainty_image_sum"] == 7.0
+    assert anchors_body["anchors"][0]["anchor_id"] == 4
+
     with client.websocket_connect("/ws/render") as websocket:
         websocket.send_json({"request_id": "r1", "layer": "rgb"})
         assert websocket.receive_json()["request_id"] == "r1"
@@ -279,5 +329,6 @@ def test_fastapi_routes_and_websocket_with_fake_session():
 
     assert session.requests == [
         {"request_id": "api1", "layer": "rgb", "pose": "1 2 3 0 0 0"},
+        {"request_id": "anchors1", "camera_id": "test:0", "pose": "1 2 3 0 0 0"},
         {"request_id": "r1", "layer": "rgb"},
     ]

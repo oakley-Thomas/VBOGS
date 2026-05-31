@@ -73,6 +73,26 @@ def create_app(session: OctreeRenderSession):
             }
         )
 
+    @app.post("/api/rendered-anchors")
+    async def rendered_anchors_api(request: Request):
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            return JSONResponse({"error": f"Invalid JSON rendered-anchor request: {exc}"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Expected a JSON object rendered-anchor request"}, status_code=400)
+        try:
+            result = await asyncio.to_thread(session.rendered_anchors_request, payload)
+        except Exception as exc:
+            return JSONResponse(
+                {
+                    "request_id": payload.get("request_id"),
+                    "error": str(exc),
+                },
+                status_code=400,
+            )
+        return JSONResponse(result)
+
     @app.websocket("/ws/render")
     async def render_socket(websocket: WebSocket):
         await websocket.accept()
