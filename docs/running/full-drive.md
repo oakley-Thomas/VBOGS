@@ -51,7 +51,7 @@ The bundle includes:
 - `uncertainty/U.npy`, uncertainty metadata, and histogram when present;
 - `run_manifest.json`.
 
-Large checkpoint and posterior artifacts remain in their native data volumes
+Large checkpoint and posterior artifacts remain in their native data paths
 and are referenced by path in the manifest.
 
 ## Important Runtime Knobs

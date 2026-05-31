@@ -1,13 +1,26 @@
 # VBOGS
 Combining Octree-GS's scene scalability with Variational Bayes GS uncertainty for better autonomous vehicle mapping
 
-## Environment Notes
-The Docker workflow uses one compose stack with three services:
+## Build The Documentation Site
 
-- `vbogs-torch` for Octree-AnyGS, stereo, and bucketing
-- `vbogs-jax` for VBGS anchor fitting, fit inspection, and uncertainty scalar
-  computation
-- `vbogs-pipeline` for running the stages in order inside the stack
+Install MkDocs in whichever Python environment you use for docs:
+
+```bash
+python -m pip install -r docs/requirements.txt
+```
+
+Serve the site locally:
+
+```bash
+python -m mkdocs serve
+```
+
+Build the static site:
+
+```bash
+python -m mkdocs build
+```
+
 
 ### Build commands
 ```bash
@@ -59,7 +72,11 @@ rebuilding the images.
 
 Start the stack:
 ```bash
-docker compose up -d --no-build
+# dev machine config
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  up -d --no-build
 ```
 
 Download the KITTI-360 Dataset:

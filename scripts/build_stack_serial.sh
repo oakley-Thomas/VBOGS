@@ -7,9 +7,11 @@ set -euo pipefail
 
 export VBOGS_TORCH_IMAGE="${VBOGS_TORCH_IMAGE:-local/vbogs-torch}"
 export VBOGS_JAX_IMAGE="${VBOGS_JAX_IMAGE:-local/vbogs-jax}"
+export VBOGS_VBGS_RENDER_IMAGE="${VBOGS_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}"
 export VBOGS_PIPELINE_IMAGE="${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 export VBOGS_TORCH_MAX_JOBS="${VBOGS_TORCH_MAX_JOBS:-1}"
+export VBOGS_RENDER_MAX_JOBS="${VBOGS_RENDER_MAX_JOBS:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -38,13 +40,15 @@ fi
 
 services=("$@")
 if [ "${#services[@]}" -eq 0 ]; then
-  services=(vbogs-torch vbogs-jax vbogs-pipeline)
+  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
 fi
 
 for service in "${services[@]}"; do
   echo "Building ${service} with COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT}"
   if [ "${service}" = "vbogs-torch" ]; then
     echo "Torch CUDA arch list: ${VBOGS_TORCH_CUDA_ARCH_LIST}; build jobs: ${VBOGS_TORCH_MAX_JOBS}"
+  elif [ "${service}" = "vbogs-vbgs-render" ]; then
+    echo "VBGS render CUDA arch list: ${VBOGS_RENDER_CUDA_ARCH_LIST:-default}; build jobs: ${VBOGS_RENDER_MAX_JOBS}"
   fi
   docker compose --project-directory "${COMPOSE_PROJECT_DIRECTORY}" -f "${COMPOSE_FILE}" build "${service}"
 done

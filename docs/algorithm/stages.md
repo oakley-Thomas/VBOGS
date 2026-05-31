@@ -7,7 +7,7 @@ outputs.
 
 Repo milestone: M2  
 Entry point: `scripts/train_octree_anygs.py`  
-Environment: `vbogs-torch`
+Docker service: `vbogs-torch`
 
 Octree-AnyGS trains on posed RGB frames prepared in a COLMAP-style layout. The
 result is the geometry, opacity, appearance, and anchor LOD state used by later
@@ -27,7 +27,7 @@ Main outputs:
 
 Repo milestone: M3  
 Entry point: `scripts/stereo_to_pointcloud.py`  
-Environment: `vbogs-torch`
+Docker service: `vbogs-torch`
 
 For each rectified stereo pair, VBOGS estimates disparity, converts disparity
 to depth, unprojects points into the left camera frame, transforms them to
@@ -52,7 +52,7 @@ The NPZ contains `xyz`, `rgb`, and `frame_id`.
 
 Repo milestones: M4a and M4b  
 Entry points: `scripts/bucket_points.py`, `scripts/fit_anchors.py`  
-Environments: `vbogs-torch`, then `vbogs-jax`
+Docker services: `vbogs-torch`, then `vbogs-jax`
 
 M4a buckets world-frame points into every Octree-AnyGS level whose anchor cell
 contains the point. It also writes normalized points for VBGS.
@@ -77,7 +77,7 @@ Main M4b outputs:
 
 Repo milestone: M5  
 Entry point: `scripts/compute_uncertainty.py`  
-Environment: `vbogs-jax` or pure NumPy-compatible Python
+Docker service: `vbogs-jax` or pure NumPy-compatible Python
 
 VBOGS computes mixture-weighted per-component posterior entropy for observed
 anchors. Unobserved anchors receive `U_MAX`, which defaults to the maximum
@@ -95,7 +95,7 @@ Main outputs:
 Repo milestone: M6  
 Entry points: `scripts/render_uncertainty_views.py`, `scripts/score_nbv.py`,
 `scripts/visualize_m6.py`  
-Environment: `vbogs-torch`
+Docker service: `vbogs-torch`
 
 The renderer reuses Octree-AnyGS geometry and LOD selection, substitutes the
 per-anchor scalar `U` for color, then rasterizes uncertainty and alpha images.
@@ -118,4 +118,4 @@ M1 -> M2 -> M4a -> M4b -> M5 -> M6 -> M7
       M3 ----^
 ```
 
-M2 and M3 can run independently after environment setup. M4a onward is linear.
+M2 and M3 can run independently after Docker runtime setup. M4a onward is linear.

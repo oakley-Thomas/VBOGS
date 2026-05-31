@@ -3,9 +3,16 @@
 VBOGS currently targets KITTI-360 perspective stereo. The pipeline expects
 rectified stereo images, camera poses, and calibration text files.
 
-## Expected Layout
+## Download Helper
 
-The preferred repo-local layout is:
+```bash
+# Download KITTI-360 Dataset
+bash scripts/download_kitti_360.sh
+```
+
+## KITTI-360 Expected Layout
+
+The layout should be:
 
 ```text
 data/KITTI-360/
@@ -24,60 +31,21 @@ data/KITTI-360/
           *.png
 ```
 
-The helper `vbogs.data_layout.resolve_kitti360_path` also accepts a few
-alternate historical layouts:
 
-| Input kind | Candidate paths |
-| --- | --- |
-| Raw images | `data/KITTI-360/images`, `data/KITTI-360/data_2d_raw`, `data/KITTI-360/data_2d_test`, `data/data_2d_raw`, `data/data_2d_test` |
-| Poses | `data/KITTI-360/data_poses`, `data/data_poses` |
-| Calibration | `data/KITTI-360/calibration`, `data/calibration/calibration`, `data/calibration` |
 
-You can override discovery with `--raw-root`, `--poses-root`, and
-`--calibration-dir`.
+## Docker Mounts
 
-## Docker Volumes
-
-The base compose stack mounts the source KITTI-360 data at:
+The compose stack mounts the source KITTI-360 data at:
 
 ```text
 /workspace/VBOGS/data/KITTI-360
 ```
 
-In Portainer deployments this path is expected to be backed by the external
-Docker volume named `KITTI-360`.
+This path is backed by the persistent Docker volume named: `VBOGS_DATASETS_VOLUME`
 
-The main generated data volumes are:
 
-| Volume/path | Purpose |
-| --- | --- |
-| `COLMAP` mounted at `/data/COLMAP` | Prepared COLMAP-style inputs for Octree-AnyGS |
-| `OCTREE-ANYGS` mounted at `/data/OCTREE-ANYGS` | Trained Octree-AnyGS runs and checkpoints |
-| `vbogs-data` mounted at `/workspace/VBOGS/data` | VBOGS stage artifacts such as point clouds, buckets, fits, and `U.npy` |
-| `vbogs-outputs` mounted at `/workspace/VBOGS/outputs` | Curated render, NBV, bundle, and zip outputs |
 
-## Download Helpers
 
-There are two repo-owned helpers:
-
-```bash
-python scripts/download_kitti360.py \
-  --manifest data/KITTI-360/download_manifest.json \
-  --data-root data/KITTI-360 \
-  --skip-existing
-```
-
-This Python helper is manifest-driven and uses only the standard library.
-Copy the example manifest, fill in the source URLs, then run it.
-
-```bash
-export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
-export KITTI_POSES_LINK='https://.../data_poses.zip'
-bash data/download_kitti_360.sh
-```
-
-The shell helper normalizes archives into the preferred `data/KITTI-360/`
-layout.
 
 ## Drive IDs
 

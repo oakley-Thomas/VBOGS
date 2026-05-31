@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VBOGS Viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: rgba(20, 24, 28, 0.86);
+        --line: rgba(255, 255, 255, 0.16);
+        --text: #f4f7f8;
+        --muted: #a8b2b8;
+        --accent: #4fc3a5;
+        --warn: #e9a23b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #101214;
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      #viewport {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        cursor: grab;
+        user-select: none;
+      }
+
+      #viewport.dragging {
+        cursor: grabbing;
+      }
+
+      #frame {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        image-rendering: auto;
+      }
+
+      #toolbar {
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        right: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 46px;
+        padding: 8px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        backdrop-filter: blur(10px);
+      }
+
+      #status {
+        margin-left: auto;
+        min-width: 160px;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: right;
+      }
+
+      select,
+      input,
+      button {
+        height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      select {
+        max-width: 260px;
+        padding: 0 28px 0 10px;
+      }
+
+      input {
+        width: 68px;
+        padding: 0 10px;
+      }
+
+      button {
+        min-width: 34px;
+        padding: 0 10px;
+      }
+
+      button.active {
+        border-color: rgba(79, 195, 165, 0.9);
+        background: rgba(79, 195, 165, 0.18);
+      }
+
+      #poseControls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .poseField {
+        text-align: right;
+      }
+
+      #readout {
+        position: fixed;
+        left: 14px;
+        bottom: 14px;
+        max-width: min(620px, calc(100vw - 28px));
+        padding: 8px 10px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      @media (max-width: 720px) {
+        #toolbar {
+          flex-wrap: wrap;
+          align-items: flex-start;
+        }
+
+        #status {
+          width: 100%;
+          margin-left: 0;
+          text-align: left;
+        }
+
+        select {
+          max-width: calc(100vw - 32px);
+        }
+
+        #poseControls {
+          width: 100%;
+        }
+
+        .poseField {
+          width: calc((100vw - 92px) / 3);
+          min-width: 64px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="viewport">
+      <img id="frame" alt="VBOGS rendered view" />
+    </main>
+    <section id="toolbar" aria-label="Viewer controls">
+      <select id="cameraSelect" aria-label="Camera"></select>
+      <button id="resetButton" type="button" title="Reset camera">Reset</button>
+      <button class="mode active" type="button" data-mode="side_by_side" title="Side-by-side">Split</button>
+      <button class="mode" type="button" data-mode="rgb" title="RGB">RGB</button>
+      <button class="mode" type="button" data-mode="uncertainty" title="Uncertainty">Unc</button>
+      <button class="mode" type="button" data-mode="alpha" title="Alpha">Alpha</button>
+      <div id="poseControls">
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera x position"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="x"
+          data-pose-field="x"
+        />
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera y position"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="y"
+          data-pose-field="y"
+        />
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera z position"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="z"
+          data-pose-field="z"
+        />
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera yaw degrees"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="yaw"
+          data-pose-field="yaw"
+        />
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera pitch degrees"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="pitch"
+          data-pose-field="pitch"
+        />
+        <input
+          class="poseField"
+          type="text"
+          inputmode="decimal"
+          aria-label="Camera roll degrees"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="roll"
+          data-pose-field="roll"
+        />
+        <button id="teleportButton" type="button" title="Teleport camera">Go</button>
+      </div>
+      <div id="status">connecting</div>
+    </section>
+    <aside id="readout">VBOGS</aside>
+
+    <script>
+      const frame = document.getElementById("frame");
+      const viewport = document.getElementById("viewport");
+      const cameraSelect = document.getElementById("cameraSelect");
+      const resetButton = document.getElementById("resetButton");
+      const poseFields = Array.from(document.querySelectorAll(".poseField"));
+      const teleportButton = document.getElementById("teleportButton");
+      const statusEl = document.getElementById("status");
+      const readout = document.getElementById("readout");
+      const modeButtons = Array.from(document.querySelectorAll("button.mode"));
+
+      const state = {
+        metadata: null,
+        cameras: new Map(),
+        cameraId: null,
+        c2w: null,
+        mode: "side_by_side",
+        ws: null,
+        requestId: 0,
+        pendingUrl: null,
+        lastSend: 0,
+        dirty: true,
+        dragging: false,
+        pointer: { x: 0, y: 0 },
+        keys: new Set(),
+      };
+
+      function cloneMatrix(matrix) {
+        return matrix.map((row) => row.slice());
+      }
+
+      function identity4() {
+        return [
+          [1, 0, 0, 0],
+          [0, 1, 0, 0],
+          [0, 0, 1, 0],
+          [0, 0, 0, 1],
+        ];
+      }
+
+      function numericTokens(value) {
+        const out = [];
+        function visit(item) {
+          if (Array.isArray(item)) {
+            for (const nested of item) visit(nested);
+            return;
+          }
+          if (typeof item === "number") {
+            out.push(item);
+            return;
+          }
+          if (typeof item === "string") {
+            for (const token of item.trim().split(/[\s,;]+/)) {
+              if (token.length > 0) out.push(Number(token));
+            }
+            return;
+          }
+          throw new Error("Unsupported pose value");
+        }
+        visit(value);
+        if (!out.every(Number.isFinite)) throw new Error("Pose contains non-finite values");
+        return out;
+      }
+
+      function yprToC2w(position, yawPitchRollDeg) {
+        const xyz = numericTokens(position);
+        const ypr = numericTokens(yawPitchRollDeg);
+        if (xyz.length !== 3 || ypr.length !== 3) throw new Error("Expected x y z yaw pitch roll");
+        const yaw = (ypr[0] * Math.PI) / 180;
+        const pitch = (ypr[1] * Math.PI) / 180;
+        const roll = (ypr[2] * Math.PI) / 180;
+        const rz = rotAxis([0, 0, 1], yaw);
+        const ry = rotAxis([0, 1, 0], pitch);
+        const rx = rotAxis([1, 0, 0], roll);
+        const matrix = identity4();
+        setRotation(matrix, mat3Mul(rz, mat3Mul(ry, rx)));
+        matrix[0][3] = xyz[0];
+        matrix[1][3] = xyz[1];
+        matrix[2][3] = xyz[2];
+        return matrix;
+      }
+
+      function c2wToYpr(matrix) {
+        const r00 = matrix[0][0];
+        const r10 = matrix[1][0];
+        const r20 = matrix[2][0];
+        const r21 = matrix[2][1];
+        const r22 = matrix[2][2];
+        const r01 = matrix[0][1];
+        const r11 = matrix[1][1];
+        const pitch = Math.asin(Math.max(-1, Math.min(1, -r20)));
+        let yaw;
+        let roll;
+        if (Math.abs(Math.cos(pitch)) > 1e-6) {
+          yaw = Math.atan2(r10, r00);
+          roll = Math.atan2(r21, r22);
+        } else {
+          yaw = Math.atan2(-r01, r11);
+          roll = 0;
+        }
+        return [yaw, pitch, roll].map((value) => (value * 180) / Math.PI);
+      }
+
+      function formatNumber(value) {
+        if (!Number.isFinite(value)) return "";
+        return Number(value.toFixed(6)).toString();
+      }
+
+      function syncPoseFields() {
+        if (!state.c2w) return;
+        const ypr = c2wToYpr(state.c2w);
+        const values = [state.c2w[0][3], state.c2w[1][3], state.c2w[2][3], ...ypr];
+        for (let index = 0; index < poseFields.length; index += 1) {
+          poseFields[index].value = formatNumber(values[index]);
+        }
+      }
+
+      function poseFieldFocused() {
+        return poseFields.includes(document.activeElement);
+      }
+
+      function syncPoseFieldsIfIdle() {
+        if (!poseFieldFocused()) syncPoseFields();
+      }
+
+      function poseFieldsToC2w() {
+        const values = poseFields.map((field) => Number(field.value));
+        if (!values.every(Number.isFinite)) throw new Error("Fill all pose fields with numbers");
+        return yprToC2w(values.slice(0, 3), values.slice(3, 6));
+      }
+
+      function mat3Mul(a, b) {
+        const out = Array.from({ length: 3 }, () => [0, 0, 0]);
+        for (let r = 0; r < 3; r += 1) {
+          for (let c = 0; c < 3; c += 1) {
+            out[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
+          }
+        }
+        return out;
+      }
+
+      function rotAxis(axis, angle) {
+        const [x, y, z] = axis;
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        const t = 1 - c;
+        return [
+          [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+          [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+          [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+        ];
+      }
+
+      function normalize(v) {
+        const n = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / n, v[1] / n, v[2] / n];
+      }
+
+      function col(matrix, index) {
+        return [matrix[0][index], matrix[1][index], matrix[2][index]];
+      }
+
+      function setRotation(c2w, r) {
+        for (let row = 0; row < 3; row += 1) {
+          for (let column = 0; column < 3; column += 1) {
+            c2w[row][column] = r[row][column];
+          }
+        }
+      }
+
+      function getRotation(c2w) {
+        return [
+          [c2w[0][0], c2w[0][1], c2w[0][2]],
+          [c2w[1][0], c2w[1][1], c2w[1][2]],
+          [c2w[2][0], c2w[2][1], c2w[2][2]],
+        ];
+      }
+
+      function translate(axis, amount) {
+        for (let i = 0; i < 3; i += 1) {
+          state.c2w[i][3] += axis[i] * amount;
+        }
+        state.dirty = true;
+        syncPoseFieldsIfIdle();
+      }
+
+      function rotateCamera(dx, dy) {
+        const current = getRotation(state.c2w);
+        const yaw = rotAxis([0, 0, 1], -dx * 0.004);
+        const right = normalize(col(current, 0));
+        const pitch = rotAxis(right, -dy * 0.003);
+        setRotation(state.c2w, mat3Mul(pitch, mat3Mul(yaw, current)));
+        state.dirty = true;
+        syncPoseFieldsIfIdle();
+      }
+
+      function movementStep() {
+        if (!state.c2w || state.keys.size === 0) return;
+        const r = getRotation(state.c2w);
+        const right = normalize(col(r, 0));
+        const forward = normalize(col(r, 2));
+        const up = [0, 0, 1];
+        const step = state.keys.has("shift") ? 1.0 : 0.35;
+        if (state.keys.has("w")) translate(forward, step);
+        if (state.keys.has("s")) translate(forward, -step);
+        if (state.keys.has("a")) translate(right, -step);
+        if (state.keys.has("d")) translate(right, step);
+        if (state.keys.has("q")) translate(up, -step);
+        if (state.keys.has("e")) translate(up, step);
+      }
+
+      async function loadMetadata() {
+        const [metadata, cameras] = await Promise.all([
+          fetch("/api/metadata").then((r) => r.json()),
+          fetch("/api/cameras").then((r) => r.json()),
+        ]);
+        state.metadata = metadata;
+        for (const source of ["train", "test"]) {
+          for (const camera of cameras.cameras[source] || []) {
+            state.cameras.set(camera.id, camera);
+            const option = document.createElement("option");
+            option.value = camera.id;
+            option.textContent = `${camera.id} ${camera.image_name}`;
+            cameraSelect.appendChild(option);
+          }
+        }
+        state.cameraId = cameras.default_camera_id;
+        cameraSelect.value = state.cameraId;
+        if (metadata.initial_c2w) {
+          state.c2w = cloneMatrix(metadata.initial_c2w);
+          state.dirty = true;
+          syncPoseFields();
+        } else {
+          resetCamera();
+        }
+        if (metadata.rgb_only) {
+          for (const button of modeButtons) {
+            if (button.dataset.mode !== "rgb") button.disabled = true;
+          }
+          setMode("rgb");
+        }
+        readout.textContent = `${metadata.drive} | ${metadata.anchor_count.toLocaleString()} anchors | ${metadata.model_path}`;
+      }
+
+      function resetCamera() {
+        const camera = state.cameras.get(state.cameraId);
+        if (!camera) return;
+        state.c2w = cloneMatrix(camera.c2w);
+        state.dirty = true;
+        syncPoseFields();
+      }
+
+      function setMode(mode) {
+        state.mode = mode;
+        for (const button of modeButtons) {
+          button.classList.toggle("active", button.dataset.mode === mode);
+        }
+        state.dirty = true;
+      }
+
+      function connect() {
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        state.ws = new WebSocket(`${protocol}://${window.location.host}/ws/render`);
+        state.ws.binaryType = "blob";
+        state.ws.onopen = () => {
+          statusEl.textContent = "connected";
+          state.dirty = true;
+        };
+        state.ws.onclose = () => {
+          statusEl.textContent = "disconnected";
+          window.setTimeout(connect, 1000);
+        };
+        state.ws.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            const msg = JSON.parse(event.data);
+            statusEl.textContent = msg.error ? msg.error : `${msg.mode} ${msg.elapsed_ms.toFixed(1)} ms`;
+          } else {
+            const url = URL.createObjectURL(event.data);
+            frame.src = url;
+            if (state.pendingUrl) URL.revokeObjectURL(state.pendingUrl);
+            state.pendingUrl = url;
+          }
+        };
+      }
+
+      function sendRender(now) {
+        if (!state.dirty || !state.ws || state.ws.readyState !== WebSocket.OPEN || !state.c2w) return;
+        const maxFps = Number(state.metadata?.max_fps || 20);
+        const interval = 1000 / Math.max(1, maxFps);
+        if (now - state.lastSend < interval) return;
+        state.lastSend = now;
+        state.dirty = false;
+        state.ws.send(
+          JSON.stringify({
+            request_id: ++state.requestId,
+            camera_id: state.cameraId,
+            c2w: state.c2w,
+            layer: state.mode,
+            quality: state.metadata?.jpeg_quality || 85,
+          }),
+        );
+      }
+
+      function tick(now) {
+        movementStep();
+        sendRender(now);
+        window.requestAnimationFrame(tick);
+      }
+
+      cameraSelect.addEventListener("change", () => {
+        state.cameraId = cameraSelect.value;
+        resetCamera();
+      });
+      resetButton.addEventListener("click", resetCamera);
+      teleportButton.addEventListener("click", () => {
+        try {
+          state.c2w = poseFieldsToC2w();
+          state.dirty = true;
+          syncPoseFields();
+          statusEl.textContent = "teleported";
+        } catch (error) {
+          statusEl.textContent = error.message;
+        }
+      });
+      for (const field of poseFields) {
+        field.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") teleportButton.click();
+        });
+        field.addEventListener("paste", (event) => {
+          const text = event.clipboardData?.getData("text") || "";
+          let values;
+          try {
+            values = numericTokens(text);
+          } catch {
+            return;
+          }
+          if (values.length !== 6) return;
+          event.preventDefault();
+          for (let index = 0; index < poseFields.length; index += 1) {
+            poseFields[index].value = values[index].toString();
+          }
+        });
+      }
+      for (const button of modeButtons) {
+        button.addEventListener("click", () => setMode(button.dataset.mode));
+      }
+
+      viewport.addEventListener("pointerdown", (event) => {
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add("dragging");
+        state.dragging = true;
+        state.pointer = { x: event.clientX, y: event.clientY };
+      });
+      viewport.addEventListener("pointermove", (event) => {
+        if (!state.dragging || !state.c2w) return;
+        rotateCamera(event.clientX - state.pointer.x, event.clientY - state.pointer.y);
+        state.pointer = { x: event.clientX, y: event.clientY };
+      });
+      viewport.addEventListener("pointerup", () => {
+        viewport.classList.remove("dragging");
+        state.dragging = false;
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (poseFields.includes(event.target)) return;
+        const key = event.key.toLowerCase();
+        if (["w", "a", "s", "d", "q", "e"].includes(key)) state.keys.add(key);
+        if (event.key === "Shift") state.keys.add("shift");
+      });
+      window.addEventListener("keyup", (event) => {
+        if (poseFields.includes(event.target)) return;
+        state.keys.delete(event.key.toLowerCase());
+        if (event.key === "Shift") state.keys.delete("shift");
+      });
+
+      loadMetadata().then(() => {
+        connect();
+        window.requestAnimationFrame(tick);
+      });
+    </script>
+  </body>
+</html>

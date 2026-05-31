@@ -26,11 +26,13 @@ These gate delegation. Each LLM task below needs its answer before it can run.
 
 ```
 M1 ── M2 ──┐
-           ├── M4a ── M4b ── M5 ── M6 ── M7
+           ├── M4a ── M4b ── M5 ── M6 ── M7 ── M8
     M3 ────┘
 ```
 
 M2 and M3 are independent — run in parallel. M4a onward is strictly linear.
+M8 depends on a validated M7 scene and does not retrain or densify
+Octree-AnyGS online.
 
 ---
 
@@ -38,15 +40,18 @@ M2 and M3 are independent — run in parallel. M4a onward is strictly linear.
 
 Each milestone is self-contained once its dependencies and decisions above are resolved. "LLM" = delegable with the spec in [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex) plus the files listed.
 
-### M1 — Environment setup [LLM]
+### M1 — Docker runtime setup [LLM]
 
-Two conda envs required (JAX/PyTorch CUDA conflict is real; don't try to unify).
+PyTorch and JAX still need separate CUDA runtime stacks, but those stacks are
+Docker services rather than locally managed conda environments. Do not try to
+merge them.
 
-- [x] Create `vbogs-torch` env (Octree-AnyGS deps; see `Octree-AnyGS/environment.yml`)
-- [x] Create `vbogs-jax` env (vbgs deps; see `vbgs/install_deps.sh`)
-- [x] Smoke test: `vbogs-torch` runs `Octree-AnyGS/render.py --help`
+- [x] Build `vbogs-torch` image (Octree-AnyGS deps; see `docker/torch.Dockerfile`)
+- [x] Build `vbogs-jax` image (vbgs deps; see `docker/jax.Dockerfile`)
+- [x] Build `vbogs-pipeline` image for orchestration and artifact handling
+- [x] Smoke test: `vbogs-torch` runs `scripts/check_torch_stack.py`
 - [x] Smoke test: `vbogs-jax` imports `vbgs.model.train.fit_gmm_step` without error
-- [x] Document activation commands in a `scripts/envs.sh`
+- [x] Document Docker Compose startup and service commands in `docs/getting-started/`
 
 ### M2 — Train Octree-AnyGS [LLM, mostly ops]
 
@@ -73,7 +78,7 @@ The original local-dev artifact was
 
 Depends on: M1, stereo data source, stereo matcher choice.
 
-- [x] Script `scripts/stereo_to_pointcloud.py` (runs in `vbogs-torch`)
+- [x] Script `scripts/stereo_to_pointcloud.py` (runs in the `vbogs-torch` service)
 - [x] Define a matcher abstraction / CLI flag (`--matcher`) so disparity can come from `sgbm`, `raft`, or another future provider while preserving the same `points_world.npz` output contract
 - [x] For each stereo pair: disparity → depth → unproject → world-frame
 - [x] Apply validity mask (left-right consistency, texture threshold)
@@ -82,7 +87,7 @@ Depends on: M1, stereo data source, stereo matcher choice.
 
 ### M4a — Point → anchor bucketing [LLM]
 
-Depends on: M2, M3. Runs in `vbogs-torch` (needs Octree-AnyGS checkpoint).
+Depends on: M2, M3. Runs in the `vbogs-torch` service (needs Octree-AnyGS checkpoint).
 
 Reference: [Octree-AnyGS/scene/basic_model.py:100-120](Octree-AnyGS/scene/basic_model.py#L100-L120) (`octree_sample` — grid discretization to match exactly).
 
@@ -101,7 +106,7 @@ least `20` assigned points.
 
 ### M4b — Per-anchor VBGS fit [LLM, heaviest task]
 
-Depends on: M4a, starting hyperparameters. Runs in `vbogs-jax`.
+Depends on: M4a, starting hyperparameters. Runs in the `vbogs-jax` service.
 
 Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`, `compute_elbo_delta`), [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) (`get_volume_delta_mixture`).
 
@@ -114,7 +119,7 @@ Reference: [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) (`fit_gmm_step`,
 - [ ] Manual validation pass (see "Don't delegate" below) **before** running M5
 - [x] Implement grouped batched fitting with `jax.vmap`; keep the one-anchor loop as a debugging fallback
 
-Implementation is in place and smoke-tested in `vbogs-jax`. The default path is
+Implementation is in place and smoke-tested in the `vbogs-jax` service. The default path is
 now grouped/batched fitting, with point-count buckets controlling padding and
 memory use. The full-scene fit still needs a completion/quality pass before M7.
 Current smoke artifacts live under
@@ -125,7 +130,7 @@ Current smoke artifacts live under
 
 Depends on: M4b, entropy definition.
 
-- [x] Script `scripts/compute_uncertainty.py` (runs in `vbogs-jax` or pure numpy)
+- [x] Script `scripts/compute_uncertainty.py` (runs in the `vbogs-jax` service or pure numpy)
 - [x] Closed-form Normal-Wishart entropy from `(kappa, u, n)`
 - [x] Closed-form Dirichlet entropy from `alpha`
 - [x] Closed-form delta MVN entropy
@@ -135,7 +140,7 @@ Depends on: M4b, entropy definition.
 
 ### M6 — `render_scalar` + NBV loop [LLM]
 
-Depends on: M2, M5, candidate pose set. Runs in `vbogs-torch`.
+Depends on: M2, M5, candidate pose set. Runs in the `vbogs-torch` service.
 
 Reference: [Octree-AnyGS/gaussian_renderer/render.py](Octree-AnyGS/gaussian_renderer/render.py), [Octree-AnyGS/scene/implicit_model/base_model.py:460-534](Octree-AnyGS/scene/implicit_model/base_model.py#L460-L534) (`generate_gaussians`).
 
@@ -160,6 +165,21 @@ Depends on: M6.
 - [ ] Overlay `U` as a heatmap on a held-out training view
 - [ ] Confirm NBV pick visually matches intuition
 - [ ] Document failure modes observed
+
+### M8 — Real-time ROS2 uncertainty/NBV loop [LLM + ops]
+
+Depends on: M7. Runs as a split Torch/ROS2 + JAX updater workflow with a fixed
+Octree-AnyGS scene and filesystem handoff.
+
+- [x] Config `configs/online/ros2_default.yaml` for ROS2 topics, online bundle paths, stereo settings, deadline, and candidate cap
+- [x] Script `scripts/build_online_state.py` to package `online_manifest.json`, `anchor_grid_cache.npz`, `vbgs_online_state.npz`, `U_online.npy`, `norm_params.json`, and handoff directories
+- [x] Reusable online helpers under `vbogs/online/` for cached multi-level bucketing, fixed normalization, score ranking, atomic state writes, and touched-anchor updates
+- [x] Script `scripts/online_jax_updater.py` to consume `batches/<seq>.npz`, update touched anchors with fixed-K posterior moments, refresh `U_online.npy`, and write `updates/<seq>.npz`
+- [x] Script `scripts/ros2_online_nbv_node.py` for ROS2 Humble-style stereo/pose/candidate subscriptions and best-pose/diagnostic publications
+- [x] Script `scripts/benchmark_online_loop.py` for KITTI replay-style latency measurement through normalization, bucketing, optional updater, and total loop timing
+- [ ] Run in a ROS2 Humble environment with live topics or bag replay
+- [x] Replace the first fixed-K moment updater with exact fixed-scaffold VBGS updates; keep the original moment updater as a fallback mode
+- [ ] Validate p95 frame-to-NBV latency under `1.0 s` on the target GPU server with `max_candidates <= 32`
 
 ---
 
@@ -193,4 +213,4 @@ When handing a milestone to an LLM, the prompt should include:
 3. The relevant Octree-AnyGS / vbgs files listed in the milestone
 4. The filesystem contract (inputs read, outputs written, formats)
 5. "Test plan: call the entry point on the artifacts produced by M{N-1}; expected output shape is X"
-6. Which conda env the script runs in
+6. Which Docker service the script runs in

@@ -335,7 +335,7 @@ def bundle_run_outputs(
         "missing_optional_artifacts": missing_optional,
         "curated_bundle_note": (
             "Bulky Octree-AnyGS checkpoints and full VBGS posterior files remain "
-            "in their native data volumes; source paths are recorded above."
+            "in their native data paths; source paths are recorded above."
         ),
     }
     write_json(run_output_dir / "run_manifest.json", manifest)

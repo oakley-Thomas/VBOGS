@@ -6,13 +6,14 @@ The implementation status mirrors `PLAN.md` as of the current repo state.
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| M1 environment setup | Implemented | Docker services and conda helper commands exist |
+| M1 Docker runtime setup | Implemented | Docker services and Compose smoke checks exist |
 | M2 train Octree-AnyGS | Implemented | Local dev and server profiles exist |
 | M3 stereo to point cloud | Implemented | SGBM baseline; provider interface keeps room for RAFT or future matchers |
 | M4a point to anchor bucketing | Implemented | Buckets points across all levels |
 | M4b per-anchor VBGS fitting | Implemented | Batched JAX path plus loop fallback; full-scene quality pass still needed |
 | M5 posterior to scalar uncertainty | Implemented | Writes `U.npy`, components, metadata, histogram |
 | M6 scalar rendering and NBV scoring | Implemented | Diagnostic rendering and bundle stages available |
+| M8 ROS2 online loop | Initial implementation | Fixed Octree-AnyGS map, online state bundle, filesystem handoff, fixed-K touched-anchor updater, ROS2-facing node, replay benchmark |
 
 ## Remaining Human Validation
 
@@ -24,6 +25,18 @@ M7 is not just a script. It requires domain judgment:
 4. Overlay `U` as heatmaps on held-out views.
 5. Confirm the NBV pick matches intuition.
 6. Document observed failure modes.
+
+## Online Runtime Target
+
+The first online implementation targets ROS2 Humble on Ubuntu 22.04 with a
+1 Hz frame-to-NBV budget. It keeps the Octree-AnyGS scene fixed, updates only
+existing anchors, and uses `batches/<seq>.npz` plus `updates/<seq>.npz` as the
+Torch/JAX process boundary. Empty-space scoring, map densification, and online
+Octree-AnyGS retraining remain out of scope.
+
+The current updater keeps offline-selected `K` fixed and applies a
+responsibility-weighted moment update to touched anchors. Exact upstream VBGS
+`fit_gmm_step` sufficient-stat restoration is the next M8 refinement.
 
 ## Known Risks
 

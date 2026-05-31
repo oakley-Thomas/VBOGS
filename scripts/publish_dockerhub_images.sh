@@ -15,6 +15,7 @@ Options:
 Services:
   vbogs-torch
   vbogs-jax
+  vbogs-vbgs-render
   vbogs-pipeline
 
 Environment:
@@ -22,9 +23,11 @@ Environment:
   VBOGS_IMAGE_TAG              Destination tag when --tag is omitted. Default: latest
   VBOGS_LOCAL_TORCH_IMAGE      Source Torch image. Default: local/vbogs-torch
   VBOGS_LOCAL_JAX_IMAGE        Source JAX image. Default: local/vbogs-jax
+  VBOGS_LOCAL_VBGS_RENDER_IMAGE Source VBGS render image. Default: local/vbogs-vbgs-render
   VBOGS_LOCAL_PIPELINE_IMAGE   Source pipeline image. Default: local/vbogs-pipeline
   VBOGS_TORCH_PUSH_IMAGE       Destination Torch image.
   VBOGS_JAX_PUSH_IMAGE         Destination JAX image.
+  VBOGS_VBGS_RENDER_PUSH_IMAGE Destination VBGS render image.
   VBOGS_PIPELINE_PUSH_IMAGE    Destination pipeline image.
 
 Example:
@@ -87,14 +90,16 @@ fi
 
 torch_source="${VBOGS_LOCAL_TORCH_IMAGE:-local/vbogs-torch}"
 jax_source="${VBOGS_LOCAL_JAX_IMAGE:-local/vbogs-jax}"
+vbgs_render_source="${VBOGS_LOCAL_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}"
 pipeline_source="${VBOGS_LOCAL_PIPELINE_IMAGE:-local/vbogs-pipeline}"
 
 torch_target="${VBOGS_TORCH_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-torch:${image_tag}}"
 jax_target="${VBOGS_JAX_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-jax:${image_tag}}"
+vbgs_render_target="${VBOGS_VBGS_RENDER_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-vbgs-render:${image_tag}}"
 pipeline_target="${VBOGS_PIPELINE_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-pipeline:${image_tag}}"
 
 if [ "${#services[@]}" -eq 0 ]; then
-  services=(vbogs-torch vbogs-jax vbogs-pipeline)
+  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
 fi
 
 publish_image() {
@@ -130,6 +135,9 @@ for service in "${services[@]}"; do
       ;;
     vbogs-jax)
       publish_image "${service}" "${jax_source}" "${jax_target}"
+      ;;
+    vbogs-vbgs-render)
+      publish_image "${service}" "${vbgs_render_source}" "${vbgs_render_target}"
       ;;
     vbogs-pipeline)
       publish_image "${service}" "${pipeline_source}" "${pipeline_target}"

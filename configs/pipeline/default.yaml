@@ -30,7 +30,7 @@ train:
   resolution: 4
   iterations: 120000
   llffhold: 8
-  gaussian_type: neural
+  gaussian_type: implicit3D
   feat_dim: 16
   base_layer: 9
   visible_threshold: 0.02

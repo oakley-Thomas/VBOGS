@@ -1,7 +1,7 @@
 # Portainer pipeline configuration.
 #
 # Use this with `docker/compose/portainer.yml`. Outputs are written to the
-# stack-managed `vbogs-outputs` Docker volume at `/workspace/VBOGS/outputs`.
+# compose-managed `vbogs-outputs` Docker volume at `/workspace/VBOGS/outputs`.
 
 pipeline:
   drive: 2013_05_28_drive_0007_sync

@@ -6,7 +6,7 @@ for readers is the [site home](../index.md).
 | Document | Use it for |
 | --- | --- |
 | [Quickstart](../getting-started/index.md) | Build containers, start the dev stack, and run the first pipeline commands |
-| [Data Setup](../getting-started/data.md) | KITTI-360 paths, volumes, and download helpers |
+| [Data Setup](../getting-started/data.md) | KITTI-360 paths, Docker mounts, and download helpers |
 | [Docker Pipeline](../running/docker-pipeline.md) | How `scripts/run_drive_pipeline.py` orchestrates stage slices |
 | [Pipeline Arguments](../documentation/RUN_DRIVE_PIPELINE_ARGS.md) | Full `scripts/run_drive_pipeline.py` CLI/config reference |
 | [Algorithm Overview](../algorithm/index.md) | Operator-facing explanation of the five-stage algorithm |

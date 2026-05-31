@@ -24,6 +24,7 @@ Build one image:
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
+bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
 
@@ -52,6 +53,18 @@ docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
   exec vbogs-pipeline nvidia-smi
+```
+
+Start the realtime Octree-AnyGS viewer from the Torch container:
+
+```bash
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-torch \
+  python scripts/view_octree_anygs.py \
+    --drive 2013_05_28_drive_0007_sync \
+    --resolution 4
 ```
 
 ## Pipeline
@@ -157,6 +170,46 @@ python scripts/compute_uncertainty.py \
   --drive 2013_05_28_drive_0007_sync
 ```
 
+Run the original global VBGS KITTI baseline from `vbogs-pipeline`:
+
+```bash
+python scripts/run_vbgs_kitti_baseline.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --use-service-labels
+```
+
+`vbogs-pipeline` only orchestrates this command. The actual JAX/VBGS fit runs
+inside the sibling `vbogs-jax` container and writes artifacts under
+`outputs/vbgs_baseline/<drive>/` by default. Use `--input-mode bucket` to force the
+same normalized points as VBOGS, or `--input-mode stereo` to train directly from
+`data/points_world/<drive>/points_world.npz`.
+
+Render the original global VBGS KITTI baseline from the dedicated render
+container:
+
+```bash
+docker compose exec vbogs-vbgs-render \
+  python scripts/render_vbgs_kitti_baseline.py \
+    --drive 2013_05_28_drive_0007_sync \
+    --max-views 5
+```
+
+This renders `outputs/vbgs_baseline/<drive>/model_final.json` through prepared
+KITTI cameras under `/data/COLMAP/<drive>` and writes predicted and side-by-side
+PNGs under `outputs/vbgs_baseline/<drive>/renders/`.
+
+Run the VBGS vs VBOGS uncertainty-quality comparison:
+
+```bash
+python scripts/run_vbgs_vbogs_comparison.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --use-service-labels
+```
+
+The comparison writes split point clouds, train/eval anchor buckets, VBOGS
+uncertainty, global VBGS K-sweep projections, metrics, maps, and view renders
+under `outputs/vbgs_comparison/<drive>/`.
+
 Render uncertainty diagnostics:
 
 ```bash
@@ -184,6 +237,40 @@ python scripts/bundle_run_outputs.py \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
 
+## Online ROS2 Loop
+
+Build the online state bundle after M7 validation:
+
+```bash
+python scripts/build_online_state.py \
+  --drive 2013_05_28_drive_0008_sync \
+  --model-path /data/OCTREE-ANYGS/2013_05_28_drive_0008_sync/<run>
+```
+
+Run the updater process in the JAX environment:
+
+```bash
+python scripts/online_jax_updater.py \
+  --state-root data/online/2013_05_28_drive_0008_sync
+```
+
+Run the ROS2 node in a ROS2 Humble environment with the Torch/Octree stack:
+
+```bash
+python scripts/ros2_online_nbv_node.py \
+  --config configs/online/ros2_default.yaml
+```
+
+Replay existing `points_world.npz` artifacts through the online handoff and
+latency logger:
+
+```bash
+python scripts/benchmark_online_loop.py \
+  --state-root data/online/2013_05_28_drive_0008_sync \
+  --points-world data/points_world/2013_05_28_drive_0008_sync/points_world.npz \
+  --run-updater
+```
+
 ## Tests
 
 ```bash
@@ -197,4 +284,5 @@ pytest tests/test_run_drive_pipeline.py
 pytest tests/test_bucket_points.py
 pytest tests/test_compute_uncertainty.py
 pytest tests/test_render.py
+pytest tests/test_online.py
 ```

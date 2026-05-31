@@ -4,18 +4,51 @@ services:
       - type: bind
         source: .
         target: /workspace/VBOGS
-      - type: bind
-        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: vbogs-outputs
         target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+      - type: volume
+        source: vbogs-torch-cache
+        target: /root/.cache/torch
 
   vbogs-jax:
     volumes:
       - type: bind
         source: .
         target: /workspace/VBOGS
-      - type: bind
-        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: vbogs-outputs
         target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
 
   vbogs-pipeline:
     environment:
@@ -24,6 +57,21 @@ services:
       - type: bind
         source: .
         target: /workspace/VBOGS
-      - type: bind
-        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: vbogs-outputs
         target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS

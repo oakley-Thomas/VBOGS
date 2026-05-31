@@ -5,16 +5,14 @@ representation, with VBGS, a per-anchor Bayesian uncertainty head. The pipeline
 trains a scene, assigns stereo points to Octree-AnyGS anchors, fits posterior
 models per anchor, renders uncertainty, and scores next-best camera views.
 
-This MkDocs site is the source of truth for project operation and design. The
-top-level `README.md` is intentionally left alone for the project owner.
-
 ## Start Here
 
 | Need | Page |
 | --- | --- |
-| Build containers and run the shortest useful command | [Quickstart](getting-started/index.md) |
-| Put KITTI-360 data in the expected place | [Data Setup](getting-started/data.md) |
+| Build containers and run test commands | [Quickstart](getting-started/index.md) |
+| Download Kitti-360 Data | [Data Setup](getting-started/data.md) |
 | Run a complete drive through the pipeline | [Full Drive Runs](running/full-drive.md) |
+| Use the browser viewer or viewer APIs | [Realtime Viewer](running/realtime-viewer.md) |
 | Understand what each stage is doing | [Algorithm Overview](algorithm/index.md) |
 | Look up every `run_drive_pipeline.py` argument | [Pipeline Arguments](documentation/RUN_DRIVE_PIPELINE_ARGS.md) |
 | Find output files and artifact contracts | [Artifacts and Data Layout](reference/artifacts.md) |

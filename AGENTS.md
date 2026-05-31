@@ -11,7 +11,7 @@ It is **mid-implementation**: M1 through M6 now have repo-owned entry points and
 ## Read these first
 
 1. **[docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex)** — authoritative formatted algorithm specification. Five stages. Every design decision is captured here.
-2. **[PLAN.md](PLAN.md)** — milestone breakdown (M1–M7) with checkboxes, dependencies, and which env each task runs in.
+2. **[PLAN.md](PLAN.md)** — milestone breakdown (M1–M7) with checkboxes, dependencies, and which Docker service each task runs in.
 3. This file — repo conventions and pitfalls.
 
 If a user request conflicts with [docs/manuscript/Algorithm.tex](docs/manuscript/Algorithm.tex), flag it and ask — don't silently diverge.
@@ -49,14 +49,20 @@ VBOGS/
   - [vbgs/vbgs/model/train.py](vbgs/vbgs/model/train.py) — `fit_gmm_step` and `compute_elbo_delta`
   - [vbgs/scripts/model_volume.py](vbgs/scripts/model_volume.py) — `get_volume_delta_mixture` factory
 
-## Environment
+## Runtime
 
-**Two conda envs are required.** JAX and PyTorch's CUDA builds conflict. Don't try to unify them — the vbgs README is explicit about this. Data flows between envs as `.npz` / `.npy` files on disk.
+**Docker Compose is the supported runtime boundary.** JAX and PyTorch's CUDA
+builds conflict, so VBOGS keeps them in separate services rather than managing
+repo-owned local conda environments. Data flows between services as `.npz` /
+`.npy` files on disk.
 
 - `vbogs-torch` — Octree-AnyGS, stereo matching, `render_scalar`, bucketing
 - `vbogs-jax` — vbgs fits, posterior computations
+- `vbogs-pipeline` — orchestration, bundling, uploads, and transfer helpers
 
-Both envs live alongside one another; each script declares which one it needs (see PLAN.md's per-milestone annotations).
+Each script declares which service it runs in (see PLAN.md's per-milestone
+annotations). Do not add new local conda setup paths unless the user explicitly
+asks for a non-Docker workflow.
 
 ## Terminology
 

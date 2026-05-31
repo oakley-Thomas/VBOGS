@@ -250,6 +250,7 @@ def fit_anchor(
     *,
     seed: int,
     batch_size: int,
+    k_max: int,
     random_mean_init,
     fit_gmm_step,
     compute_elbo_delta,
@@ -275,6 +276,7 @@ def fit_anchor(
         beta=0,
         learning_rate=1,
     )
+    initial_packed = pack_model_params(prior_model, k_max)
     model = copy.deepcopy(prior_model)
 
     prior_stats = None
@@ -290,7 +292,7 @@ def fit_anchor(
         color_stats=color_stats,
     )
     elbo_per_point = compute_mean_elbo(model, points_norm, batch_size, compute_elbo_delta)
-    return model, float(elbo_per_point)
+    return model, float(elbo_per_point), initial_packed
 
 
 def make_batched_volume_delta_mixture(
@@ -602,7 +604,7 @@ def fit_batched_anchor_group(
     Mixture,
     DeltaMixture,
     ArrayDict,
-) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray]:
+) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
     data_padded, valid_mask, valid_counts = build_padded_anchor_batch(
         anchor_ids=anchor_ids,
         bucket_size=bucket_size,
@@ -636,7 +638,8 @@ def fit_batched_anchor_group(
     model = fit_gmm_step_masked(prior_model, model, data_padded, valid_mask)
     elbo = compute_masked_mean_elbo(model, data_padded, valid_mask)
     packed = pack_batched_model_params(model, k_max)
-    return packed, elbo, valid_counts
+    initial_packed = pack_batched_model_params(prior_model, k_max)
+    return packed, elbo, valid_counts, initial_packed
 
 
 def assign_batched_rows(
@@ -743,6 +746,15 @@ def main() -> None:
     delta_kappa = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
     delta_u = np.full((m_obs, args.k_max, 3, 3), np.nan, dtype=np.float32)
     delta_n = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
+    initial_alpha = np.full((m_obs, args.k_max), np.nan, dtype=np.float32)
+    initial_spatial_mean = np.full((m_obs, args.k_max, 3, 1), np.nan, dtype=np.float32)
+    initial_spatial_kappa = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
+    initial_spatial_u = np.full((m_obs, args.k_max, 3, 3), np.nan, dtype=np.float32)
+    initial_spatial_n = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
+    initial_delta_mean = np.full((m_obs, args.k_max, 3, 1), np.nan, dtype=np.float32)
+    initial_delta_kappa = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
+    initial_delta_u = np.full((m_obs, args.k_max, 3, 3), np.nan, dtype=np.float32)
+    initial_delta_n = np.full((m_obs, args.k_max, 1, 1), np.nan, dtype=np.float32)
     fit_batch_size = np.zeros((m_obs,), dtype=np.int32)
     k_growth_attempted = np.zeros((m_obs,), dtype=bool)
 
@@ -783,11 +795,12 @@ def main() -> None:
             fit_batch_size[obs_idx] = int(anchor_points.shape[0])
 
             cur_k = int(args.k_init)
-            best_model, best_elbo = fit_anchor(
+            best_model, best_elbo, best_initial = fit_anchor(
                 anchor_points,
                 cur_k,
                 seed=args.seed + int(anchor_id),
                 batch_size=args.batch_size,
+                k_max=args.k_max,
                 random_mean_init=random_mean_init,
                 fit_gmm_step=fit_gmm_step,
                 compute_elbo_delta=compute_elbo_delta,
@@ -803,11 +816,12 @@ def main() -> None:
                 next_k = min(args.k_max, cur_k * args.k_growth_factor)
                 if next_k == cur_k:
                     break
-                next_model, next_elbo = fit_anchor(
+                next_model, next_elbo, next_initial = fit_anchor(
                     anchor_points,
                     next_k,
                     seed=args.seed + int(anchor_id) + next_k,
                     batch_size=args.batch_size,
+                    k_max=args.k_max,
                     random_mean_init=random_mean_init,
                     fit_gmm_step=fit_gmm_step,
                     compute_elbo_delta=compute_elbo_delta,
@@ -819,6 +833,7 @@ def main() -> None:
                     break
                 best_model = next_model
                 best_elbo = next_elbo
+                best_initial = next_initial
                 cur_k = next_k
                 accepted_gain = gain
                 selected_gain[obs_idx] = accepted_gain
@@ -838,6 +853,15 @@ def main() -> None:
             delta_kappa[obs_idx] = packed["delta_kappa"]
             delta_u[obs_idx] = packed["delta_u"]
             delta_n[obs_idx] = packed["delta_n"]
+            initial_alpha[obs_idx] = best_initial["alpha"]
+            initial_spatial_mean[obs_idx] = best_initial["spatial_mean"]
+            initial_spatial_kappa[obs_idx] = best_initial["spatial_kappa"]
+            initial_spatial_u[obs_idx] = best_initial["spatial_u"]
+            initial_spatial_n[obs_idx] = best_initial["spatial_n"]
+            initial_delta_mean[obs_idx] = best_initial["delta_mean"]
+            initial_delta_kappa[obs_idx] = best_initial["delta_kappa"]
+            initial_delta_u[obs_idx] = best_initial["delta_u"]
+            initial_delta_n[obs_idx] = best_initial["delta_n"]
             fit_completed[obs_idx] = True
 
             if (obs_idx + 1) % max(args.log_every, 1) == 0 or (obs_idx + 1) == m_obs:
@@ -873,7 +897,7 @@ def main() -> None:
                 for start in range(0, bucket_rows.shape[0], bucket_group_size):
                     rows = bucket_rows[start : start + bucket_group_size]
                     group_anchor_ids = observed_anchor_ids[rows]
-                    packed, group_elbo, _valid_counts = fit_batched_anchor_group(
+                    packed, group_elbo, _valid_counts, initial_packed = fit_batched_anchor_group(
                         anchor_ids=group_anchor_ids,
                         bucket_size=int(bucket_size),
                         n_components=cur_k,
@@ -906,6 +930,15 @@ def main() -> None:
                             delta_u=delta_u,
                             delta_n=delta_n,
                         )
+                        initial_alpha[rows] = initial_packed["alpha"]
+                        initial_spatial_mean[rows] = initial_packed["spatial_mean"]
+                        initial_spatial_kappa[rows] = initial_packed["spatial_kappa"]
+                        initial_spatial_u[rows] = initial_packed["spatial_u"]
+                        initial_spatial_n[rows] = initial_packed["spatial_n"]
+                        initial_delta_mean[rows] = initial_packed["delta_mean"]
+                        initial_delta_kappa[rows] = initial_packed["delta_kappa"]
+                        initial_delta_u[rows] = initial_packed["delta_u"]
+                        initial_delta_n[rows] = initial_packed["delta_n"]
                         processed += rows.shape[0]
                         fit_completed[rows] = True
                     else:
@@ -917,6 +950,10 @@ def main() -> None:
                             accepted_packed = {
                                 key: value[accept_mask] if isinstance(value, np.ndarray) and value.shape[:1] == accept_mask.shape else value
                                 for key, value in packed.items()
+                            }
+                            accepted_initial = {
+                                key: value[accept_mask] if isinstance(value, np.ndarray) and value.shape[:1] == accept_mask.shape else value
+                                for key, value in initial_packed.items()
                             }
                             assign_batched_rows(
                                 accepted_rows,
@@ -934,6 +971,15 @@ def main() -> None:
                                 delta_u=delta_u,
                                 delta_n=delta_n,
                             )
+                            initial_alpha[accepted_rows] = accepted_initial["alpha"]
+                            initial_spatial_mean[accepted_rows] = accepted_initial["spatial_mean"]
+                            initial_spatial_kappa[accepted_rows] = accepted_initial["spatial_kappa"]
+                            initial_spatial_u[accepted_rows] = accepted_initial["spatial_u"]
+                            initial_spatial_n[accepted_rows] = accepted_initial["spatial_n"]
+                            initial_delta_mean[accepted_rows] = accepted_initial["delta_mean"]
+                            initial_delta_kappa[accepted_rows] = accepted_initial["delta_kappa"]
+                            initial_delta_u[accepted_rows] = accepted_initial["delta_u"]
+                            initial_delta_n[accepted_rows] = accepted_initial["delta_n"]
                             if cur_k == args.k_max:
                                 under_modeled[accepted_rows] = True
 
@@ -989,6 +1035,15 @@ def main() -> None:
         delta_kappa=delta_kappa,
         delta_u=delta_u,
         delta_n=delta_n,
+        initial_alpha=initial_alpha,
+        initial_spatial_mean=initial_spatial_mean,
+        initial_spatial_kappa=initial_spatial_kappa,
+        initial_spatial_u=initial_spatial_u,
+        initial_spatial_n=initial_spatial_n,
+        initial_delta_mean=initial_delta_mean,
+        initial_delta_kappa=initial_delta_kappa,
+        initial_delta_u=initial_delta_u,
+        initial_delta_n=initial_delta_n,
         k_init=np.array(args.k_init, dtype=np.int16),
         k_max=np.array(args.k_max, dtype=np.int16),
         min_points_per_anchor=np.array(args.min_points_per_anchor, dtype=np.int32),
@@ -1038,6 +1093,7 @@ def main() -> None:
         "fit_batch_size_p90": float(np.percentile(fit_batch_size, 90)) if m_obs else 0.0,
         "fit_batch_size_max": int(fit_batch_size.max()) if m_obs else 0,
         "deprecated_max_observed_anchors_arg": args.max_observed_anchors,
+        "saves_initial_vbgs_state": True,
     }
     save_json(metadata_path, metadata)
 
