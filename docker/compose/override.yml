@@ -11,6 +11,9 @@ services:
         source: KITTI-360
         target: /workspace/VBOGS/data/KITTI-360
       - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
       - type: volume
@@ -38,6 +41,9 @@ services:
         source: KITTI-360
         target: /workspace/VBOGS/data/KITTI-360
       - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
       - type: volume
@@ -64,7 +70,10 @@ services:
         source: KITTI-360
         target: /workspace/VBOGS/data/KITTI-360
       - type: volume
-        source: vbogs-outputs
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: bind
+        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
         target: /workspace/VBOGS/outputs
       - type: volume
         source: vbogs-generated-configs

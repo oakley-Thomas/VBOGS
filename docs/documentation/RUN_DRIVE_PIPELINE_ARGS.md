@@ -29,6 +29,7 @@ Use the profile config that matches where the stack is running:
 | --- | --- | --- |
 | `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
 | `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
+| `configs/pipeline/nvidia_ncore_dev.yaml` | NVIDIA PhysicalAI AV NCore development | `outputs/v1_0/<scene-id>/` |
 | `configs/pipeline/default.yaml` | Backward-compatible default | Depends on the active compose mounts |
 
 For local development, use the base compose file plus the dev overlay, which
@@ -50,7 +51,13 @@ python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-se
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--config CONFIG` | `configs/pipeline/default.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
-| `--drive DRIVE` | Config: `pipeline.drive` | KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`. Required if not set in config. |
+| `--dataset-name {kitti360,nvidia_ncore}` | Config: `dataset.name`; parser: `kitti360` | Dataset adapter used by `prepare` and point-cloud export. |
+| `--scene-id SCENE_ID` | Config: `dataset.scene_id` | Dataset scene/clip id. Defaults to `--drive` for backward compatibility. |
+| `--drive DRIVE` | Config: `pipeline.drive` | Backward-compatible scene id alias. For KITTI-360 this is the drive id. |
+| `--ncore-root NCORE_ROOT` | Config: `dataset.ncore_root` | Root containing converted NVIDIA NCore clips. |
+| `--camera-id CAMERA_ID` | Config: `dataset.camera_ids` | NVIDIA camera id. Repeat or pass comma-separated ids. |
+| `--point-source {stereo,lidar,camera_depth}` | Config: `dataset.point_source` or `points.point_source` | Point source. Defaults to `stereo` for KITTI-360 and `lidar` for NVIDIA NCore. |
+| `--camera-depth-pair LEFT,RIGHT` | Config: `dataset.camera_depth_pair` | NVIDIA camera pair used by `camera_depth`. |
 | `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
 | `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | Parser: `inspect`; profile configs usually use `bundle` | Last stage to run. Use `bundle` for the full curated run output. |
 | `--run-output-root RUN_OUTPUT_ROOT` | Config: `outputs.run_root` | Optional root for curated outputs. When set, stage outputs are derived under `<root>/<drive>/`. |
@@ -209,17 +216,31 @@ stages.
 | `--poses-root POSES_ROOT` | Auto-detect | Root containing KITTI-360 pose text files. |
 | `--calibration-dir CALIBRATION_DIR` | Auto-detect | Directory containing KITTI-360 calibration text files. |
 
+## NVIDIA NCore Inputs
+
+NVIDIA PhysicalAI AV clips must already be converted to NCore V4. The compose
+stack mounts them at `/workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--ncore-root NCORE_ROOT` | Auto-detect | Root containing converted NCore clips. |
+| `--camera-id CAMERA_ID` | `camera_front_wide_120fov` | Camera subset used for training and LiDAR coloring. |
+| `--ncore-lidar-id LIDAR_ID` | `lidar_top_360fov` | LiDAR sensor used for sparse seeding and LiDAR point export. |
+| `--camera-depth-pair LEFT,RIGHT` | `camera_front_wide_120fov,camera_front_tele_30fov` | Camera pair for camera-depth export. |
+
 ## `prepare`
 
-Runs `scripts/prepare_kitti360_colmap.py` in `vbogs-torch` and writes a
-COLMAP-style dataset under `/data/COLMAP/<drive>`.
+Runs the selected dataset adapter in `vbogs-torch` and writes a COLMAP-style
+dataset under `/data/COLMAP/<scene-id>`. KITTI uses
+`scripts/prepare_kitti360_colmap.py`; NVIDIA NCore uses
+`scripts/prepare_nvidia_ncore_colmap.py`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--frame-step FRAME_STEP` | Config: `1` | Keep every Nth frame from the drive. Higher values are faster and smaller. |
 | `--max-frames MAX_FRAMES` | Config: `1000` | Maximum number of frames to prepare. `0` means no cap. |
 | `--copy-mode {symlink,copy}` | `symlink` | How images are placed in the prepared dataset. `symlink` is faster and saves space when supported. |
-| `--seed-mode {stereo,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. |
+| `--seed-mode {stereo,lidar,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. `stereo` maps to LiDAR for NVIDIA NCore. |
 
 ## `train`
 
@@ -240,20 +261,22 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | `--train-port TRAIN_PORT` | Auto | Octree-AnyGS network GUI port. The wrapper defaults to `6009 + GPU index`, so GPU 1 uses `6010`. |
 | `--write-config-only` | `false` | Generate the Octree-AnyGS YAML config and skip training. |
 
-## `stereo`
+## `stereo` / Point-Cloud Export
 
-Runs `scripts/stereo_to_pointcloud.py` in `vbogs-torch` and writes world-frame
-stereo points under `data/points_world/<drive>/`.
+Runs `scripts/export_points_world.py` in `vbogs-torch` and writes world-frame
+points under `data/points_world/<scene-id>/`. The stage name remains `stereo`
+for backward compatibility with existing command slices.
 
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--matcher {sgbm,raft}` | `sgbm` | Stereo matcher backend. `raft` is reserved for a future provider unless installed/implemented. |
 | `--pixel-step PIXEL_STEP` | `1` | Pixel subsampling step for point export. Higher values reduce density and runtime. |
-| `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported stereo points. |
+| `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported world points. |
 | `--write-ply` | Config: `true` | Also write a PLY point cloud for quick visual inspection and the curated bundle. |
+| `--point-source {stereo,lidar,camera_depth}` | Dataset default | Selects KITTI stereo, NVIDIA LiDAR, or NVIDIA camera-depth export. |
 
-The stereo stage also receives `--max-frames` and any KITTI-360 input override
-arguments.
+The point-cloud stage also receives `--max-frames`, KITTI input overrides, and
+NVIDIA NCore sensor options as applicable.
 
 ## `bucket`
 
@@ -264,8 +287,8 @@ assignments under `data/m4/<drive>/`.
 | --- | --- | --- |
 | `--model-path MODEL_PATH` | Latest run under `/data/OCTREE-ANYGS/<drive>` | Explicit Octree-AnyGS model/run directory to bucket against. |
 | `--bucket-iteration BUCKET_ITERATION` | `-1` | Checkpoint iteration to load. `-1` means use the latest available checkpoint. |
-| `--bucket-point-chunk-size BUCKET_POINT_CHUNK_SIZE` | `1000000` | Number of stereo points processed per bucketing chunk. Lower values reduce peak memory. |
-| `--bucket-max-points BUCKET_MAX_POINTS` | `0` | Optional deterministic cap on stereo points used for M4 bucketing/fitting. `0` keeps all points. |
+| `--bucket-point-chunk-size BUCKET_POINT_CHUNK_SIZE` | `1000000` | Number of world points processed per bucketing chunk. Lower values reduce peak memory. |
+| `--bucket-max-points BUCKET_MAX_POINTS` | `0` | Optional deterministic cap on exported points used for M4 bucketing/fitting. `0` keeps all points. |
 
 ## `fit`
 

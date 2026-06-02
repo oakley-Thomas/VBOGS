@@ -34,7 +34,7 @@ docker compose --project-directory . \
 | Stage | Entry point | Docker service |
 | --- | --- | --- |
 | M2 train scene | `scripts/train_octree_anygs.py` | `vbogs-torch` |
-| M3 stereo point cloud | `scripts/stereo_to_pointcloud.py` | `vbogs-torch` |
+| M3 world point cloud | `scripts/export_points_world.py` | `vbogs-torch` |
 | M4a bucket points | `scripts/bucket_points.py` | `vbogs-torch` |
 | M4b fit anchors | `scripts/fit_anchors.py` | `vbogs-jax` |
 | M5 compute uncertainty | `scripts/compute_uncertainty.py` | `vbogs-jax` or NumPy-compatible Python |

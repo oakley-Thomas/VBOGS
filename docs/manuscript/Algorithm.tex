@@ -129,8 +129,9 @@ interchangeably.
 \section{Stage 1: Train the Scene}
 
 Stage 1 is unchanged from upstream Octree-AnyGS. The scene is trained from
-posed RGB stereo frames. Stereo is not used as a training signal for this
-stage; it is used later to build the 6D point cloud.
+posed RGB frames prepared in a COLMAP-style layout. Stereo is not used as a
+training signal for this stage; dataset-specific depth or LiDAR observations
+are used later to build the 6D point cloud.
 
 \begin{lstlisting}
 scene = Octree_AnyGS.train(input_data, gaussian_type=3DGS)
@@ -141,11 +142,15 @@ scene = Octree_AnyGS.train(input_data, gaussian_type=3DGS)
 # }
 \end{lstlisting}
 
-\section{Stage 2: Build a 6D Stereo Point Cloud}
+\section{Stage 2: Build a 6D World Point Cloud}
 
-For each rectified stereo pair, estimate disparity, convert disparity to depth,
-unproject into the left-camera frame, transform to world coordinates, attach
-RGB color, and concatenate all frames into one 6D point cloud:
+Stage 2 is a dataset adapter. For KITTI-360, each rectified stereo pair is
+matched, unprojected into the left-camera frame, transformed to world
+coordinates, and colored from the left image. For NVIDIA PhysicalAI AV NCore,
+the same contract can be produced from motion-compensated LiDAR points colored
+by camera projection, or from a configured camera-depth pair. In all cases the
+adapter concatenates world-frame position and RGB color into one 6D point
+cloud:
 
 \[
   x_n^{w}
@@ -163,12 +168,13 @@ RGB color, and concatenate all frames into one 6D point cloud:
 
 \begin{lstlisting}
 points_world = []                                # (N, 6) = xyz + rgb
-Foreach (cam_L, cam_R, img_L, img_R, K_L, K_R, baseline) in input_data:
-    disparity = StereoMatch(img_L, img_R)        # SGBM / RAFT-Stereo / etc.
-    depth_L   = (K_L.fx * baseline) / disparity  # mask invalid disparities
-    pts_cam   = Unproject(depth_L, K_L)          # (H*W, 3), left-cam frame
-    pts_world = cam_L.transform(pts_cam)         # world frame
-    rgb       = img_L.reshape(-1, 3)
+Foreach frame in input_data:
+    If point_source == stereo:
+        pts_world, rgb = StereoToWorld(frame)
+    Else If point_source == lidar:
+        pts_world, rgb = LidarToWorldAndProjectColor(frame)
+    Else If point_source == camera_depth:
+        pts_world, rgb = CameraDepthToWorld(frame)
     points_world.append(concat(pts_world, rgb, axis=-1))
 
 points_world = concat(points_world)              # (sum_i N_i, 6)

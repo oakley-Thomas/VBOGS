@@ -7,6 +7,10 @@ x-vbogs-mounts:
     type: volume
     source: KITTI-360
     target: /workspace/VBOGS/data/KITTI-360
+  nvidia-ncore: &vbogs-nvidia-ncore-mount
+    type: volume
+    source: NVIDIA-PhysicalAI-AV-NCore
+    target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
   outputs: &vbogs-outputs-mount
     type: volume
     source: vbogs-outputs
@@ -54,6 +58,7 @@ services:
     volumes:
       - *vbogs-data-mount
       - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
       - *vbogs-outputs-mount
       - *vbogs-generated-configs-mount
       - *vbogs-colmap-mount
@@ -86,12 +91,27 @@ services:
       JAX_PLATFORMS: cuda
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
-      - *vbogs-data-mount
-      - *vbogs-kitti360-mount
-      - *vbogs-outputs-mount
-      - *vbogs-generated-configs-mount
-      - *vbogs-colmap-mount
-      - *vbogs-octree-anygs-mount
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -122,6 +142,7 @@ services:
     volumes:
       - *vbogs-data-mount
       - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
       - *vbogs-outputs-mount
       - *vbogs-colmap-mount
     command: sleep infinity
@@ -161,12 +182,27 @@ services:
       VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
       VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
     volumes:
-      - *vbogs-data-mount
-      - *vbogs-kitti360-mount
-      - *vbogs-outputs-mount
-      - *vbogs-generated-configs-mount
-      - *vbogs-colmap-mount
-      - *vbogs-octree-anygs-mount
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -199,6 +235,8 @@ services:
         read_only: true
       - <<: *vbogs-kitti360-mount
         read_only: true
+      - <<: *vbogs-nvidia-ncore-mount
+        read_only: true
       - <<: *vbogs-outputs-mount
         read_only: true
       - <<: *vbogs-generated-configs-mount
@@ -223,6 +261,8 @@ volumes:
   OCTREE-ANYGS:
   KITTI-360:
     name: ${VBOGS_DATASETS_VOLUME:-KITTI-360}
+  NVIDIA-PhysicalAI-AV-NCore:
+    name: ${VBOGS_NVIDIA_NCORE_VOLUME:-NVIDIA-PhysicalAI-AV-NCore}
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:

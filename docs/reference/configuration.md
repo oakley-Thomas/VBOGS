@@ -12,19 +12,22 @@ CLI flags override config values.
 | --- | --- | --- |
 | `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` volume |
 | `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` volume |
+| `configs/pipeline/nvidia_ncore_dev.yaml` | Local NVIDIA PhysicalAI AV NCore development | `outputs/v1_0/<scene-id>/` inside the `vbogs-outputs` volume |
 | `configs/pipeline/default.yaml` | Backward-compatible default profile | depends on active compose mounts |
 
 ## Top-Level Sections
 
 | Section | Purpose |
 | --- | --- |
+| `dataset` | dataset adapter, scene id, NVIDIA NCore root, camera ids, point source |
 | `pipeline` | drive id, stage slice, dry-run behavior |
 | `outputs` | curated run output root |
 | `upload` | Google Drive/rclone upload behavior |
 | `inputs` | KITTI-360 source-data overrides |
 | `prepare` | COLMAP-style data preparation |
 | `train` | Octree-AnyGS training |
-| `stereo` | stereo point-cloud export |
+| `points` | preferred point-cloud export settings |
+| `stereo` | backward-compatible alias for KITTI stereo point-cloud settings |
 | `bucket` | point-to-anchor bucketing |
 | `fit` | VBGS fitting |
 | `inspect` | posterior inspection |

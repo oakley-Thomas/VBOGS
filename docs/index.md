@@ -2,7 +2,7 @@
 
 VBOGS combines Octree-AnyGS, a scalable Gaussian-splatting scene
 representation, with VBGS, a per-anchor Bayesian uncertainty head. The pipeline
-trains a scene, assigns stereo points to Octree-AnyGS anchors, fits posterior
+trains a scene, assigns exported world points to Octree-AnyGS anchors, fits posterior
 models per anchor, renders uncertainty, and scores next-best camera views.
 
 ## Start Here

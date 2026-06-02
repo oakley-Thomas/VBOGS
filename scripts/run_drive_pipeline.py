@@ -46,6 +46,15 @@ DEFAULT_CONFIG = Path("configs/pipeline/default.yaml")
 DEFAULT_COMPOSE_FILE = Path("docker/compose/compose.yml")
 DEFAULT_COMPOSE_PROJECT_DIRECTORY = Path(".")
 CONFIG_KEY_MAP = {
+    "dataset": {
+        "name": "dataset_name",
+        "scene_id": "scene_id",
+        "ncore_root": "ncore_root",
+        "camera_ids": "camera_ids",
+        "point_source": "point_source",
+        "camera_depth_pair": "camera_depth_pair",
+        "lidar_id": "ncore_lidar_id",
+    },
     "pipeline": {
         "drive": "drive",
         "start_at": "start_at",
@@ -77,6 +86,13 @@ CONFIG_KEY_MAP = {
         "write_config_only": "write_config_only",
     },
     "stereo": {
+        "matcher": "matcher",
+        "pixel_step": "pixel_step",
+        "max_points_per_frame": "max_points_per_frame",
+        "write_ply": "write_ply",
+    },
+    "points": {
+        "point_source": "point_source",
         "matcher": "matcher",
         "pixel_step": "pixel_step",
         "max_points_per_frame": "max_points_per_frame",
@@ -229,7 +245,54 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--drive",
         default=None,
-        help="KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`.",
+        help=(
+            "Backward-compatible scene id alias. For KITTI-360 this is the drive "
+            "id, for example `2013_05_28_drive_0008_sync`."
+        ),
+    )
+    dataset_group = parser.add_argument_group("dataset selection")
+    dataset_group.add_argument(
+        "--dataset-name",
+        choices=("kitti360", "nvidia_ncore"),
+        default="kitti360",
+        help="Dataset adapter used by the prepare and point-cloud stages.",
+    )
+    dataset_group.add_argument(
+        "--scene-id",
+        default=None,
+        help="Scene/clip id. Defaults to --drive for backward compatibility.",
+    )
+    dataset_group.add_argument(
+        "--ncore-root",
+        type=Path,
+        default=None,
+        help="Root containing converted NVIDIA PhysicalAI AV NCore clips.",
+    )
+    dataset_group.add_argument(
+        "--camera-id",
+        dest="camera_ids",
+        action="append",
+        default=None,
+        help=(
+            "NVIDIA NCore camera id to include. Repeat or pass comma-separated "
+            "ids. Defaults to camera_front_wide_120fov."
+        ),
+    )
+    dataset_group.add_argument(
+        "--point-source",
+        choices=("stereo", "lidar", "camera_depth"),
+        default=None,
+        help="Point source. Defaults to stereo for KITTI-360 and lidar for NVIDIA NCore.",
+    )
+    dataset_group.add_argument(
+        "--camera-depth-pair",
+        default=None,
+        help="Comma-separated left,right NCore camera ids for camera_depth export.",
+    )
+    dataset_group.add_argument(
+        "--ncore-lidar-id",
+        default="lidar_top_360fov",
+        help="NCore LiDAR id used by lidar point export and sparse seeding.",
     )
     parser.add_argument(
         "--compose-command",
@@ -396,7 +459,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     )
     prep_group.add_argument(
         "--seed-mode",
-        choices=("stereo", "random"),
+        choices=("stereo", "lidar", "random"),
         default="stereo",
     )
 
@@ -432,7 +495,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Generate the Octree-AnyGS config but skip training.",
     )
 
-    stereo_group = parser.add_argument_group("stereo point cloud")
+    stereo_group = parser.add_argument_group("point-cloud export")
     stereo_group.add_argument(
         "--matcher",
         choices=("sgbm", "raft"),
@@ -449,7 +512,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--bucket-point-chunk-size",
         type=int,
         default=1_000_000,
-        help="Number of stereo points processed per bucketing chunk.",
+        help="Number of world points processed per bucketing chunk.",
     )
     bucket_group.add_argument(
         "--bucket-max-points",
@@ -659,8 +722,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     parser = build_parser(config_defaults)
     args = parser.parse_args(argv)
-    if not args.drive:
-        parser.error("--drive is required unless `pipeline.drive` is set in the config")
+    if not (args.scene_id or args.drive):
+        parser.error(
+            "--scene-id is required unless --drive or `pipeline.drive` is set in the config"
+        )
     return args
 
 
@@ -683,10 +748,36 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
     return [flag, str(value)]
 
 
+def scene_id_arg(args: argparse.Namespace) -> str:
+    scene = args.scene_id or args.drive
+    if not scene:
+        raise ValueError("A scene id is required")
+    return str(scene)
+
+
+def effective_point_source(args: argparse.Namespace) -> str:
+    if args.point_source:
+        return str(args.point_source)
+    return "stereo" if args.dataset_name == "kitti360" else "lidar"
+
+
+def camera_id_args(camera_ids: object | None) -> list[str]:
+    if camera_ids is None or camera_ids == "":
+        return []
+    if isinstance(camera_ids, (str, Path)):
+        values = [str(camera_ids)]
+    else:
+        values = [str(value) for value in camera_ids]
+    result: list[str] = []
+    for value in values:
+        result.extend(["--camera-id", value])
+    return result
+
+
 def run_output_dir(args: argparse.Namespace) -> Path | None:
     if args.run_output_root is None:
         return None
-    return Path(args.run_output_root) / args.drive
+    return Path(args.run_output_root) / scene_id_arg(args)
 
 
 def derived_output_dir(
@@ -702,9 +793,10 @@ def derived_output_dir(
 
 
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
-    dataset_path = f"/data/COLMAP/{args.drive}"
+    scene = scene_id_arg(args)
+    dataset_path = f"/data/COLMAP/{scene}"
     selection_metadata = f"{dataset_path}/metadata.json"
-    bucket_root = f"data/m4/{args.drive}"
+    bucket_root = f"data/m4/{scene}"
     run_dir = run_output_dir(args)
     map_viz_output_dir = derived_output_dir(
         args.map_viz_output_dir,
@@ -715,21 +807,41 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     render_output_dir = derived_output_dir(args.render_output_dir, run_dir, "views")
     nbv_output_dir = derived_output_dir(args.nbv_output_dir, run_dir, "nbv")
 
-    prepare_cmd = (
-        "python",
-        "scripts/prepare_kitti360_colmap.py",
-        "--drive",
-        args.drive,
-        "--frame-step",
-        str(args.frame_step),
-        "--max-frames",
-        str(args.max_frames),
-        "--copy-mode",
-        args.copy_mode,
-        "--seed-mode",
-        args.seed_mode,
-        *maybe_path_args(args),
-    )
+    if args.dataset_name == "kitti360":
+        prepare_cmd = (
+            "python",
+            "scripts/prepare_kitti360_colmap.py",
+            "--drive",
+            scene,
+            "--frame-step",
+            str(args.frame_step),
+            "--max-frames",
+            str(args.max_frames),
+            "--copy-mode",
+            args.copy_mode,
+            "--seed-mode",
+            "stereo" if args.seed_mode == "lidar" else args.seed_mode,
+            *maybe_path_args(args),
+        )
+    else:
+        prepare_cmd = (
+            "python",
+            "scripts/prepare_nvidia_ncore_colmap.py",
+            "--scene-id",
+            scene,
+            "--frame-step",
+            str(args.frame_step),
+            "--max-frames",
+            str(args.max_frames),
+            "--copy-mode",
+            args.copy_mode,
+            "--seed-mode",
+            "lidar" if args.seed_mode == "stereo" else args.seed_mode,
+            "--lidar-id",
+            args.ncore_lidar_id,
+            *maybe_option("--ncore-root", args.ncore_root),
+            *camera_id_args(args.camera_ids),
+        )
 
     train_cmd = (
         "python",
@@ -737,7 +849,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--dataset-path",
         dataset_path,
         "--scene-name",
-        args.drive,
+        scene,
+        "--dataset-name",
+        args.dataset_name,
         "--gpu",
         str(args.gpu),
         "--resolution",
@@ -758,11 +872,15 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *(("--write-config-only",) if args.write_config_only else ()),
     )
 
-    stereo_cmd = (
+    point_cmd = (
         "python",
-        "scripts/stereo_to_pointcloud.py",
-        "--drive",
-        args.drive,
+        "scripts/export_points_world.py",
+        "--dataset-name",
+        args.dataset_name,
+        "--scene-id",
+        scene,
+        "--point-source",
+        effective_point_source(args),
         "--selection-metadata",
         selection_metadata,
         "--matcher",
@@ -775,13 +893,17 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.max_frames),
         *(("--write-ply",) if args.write_ply else ()),
         *maybe_path_args(args),
+        *maybe_option("--ncore-root", args.ncore_root),
+        *camera_id_args(args.camera_ids),
+        *maybe_option("--camera-depth-pair", args.camera_depth_pair),
+        *maybe_option("--lidar-id", args.ncore_lidar_id),
     )
 
     bucket_cmd = (
         "python",
         "scripts/bucket_points.py",
         "--drive",
-        args.drive,
+        scene,
         "--iteration",
         str(args.bucket_iteration),
         "--point-chunk-size",
@@ -795,7 +917,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/fit_anchors.py",
         "--drive",
-        args.drive,
+        scene,
         "--device",
         str(args.jax_device),
         "--fit-mode",
@@ -818,7 +940,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/inspect_anchor_fits.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -835,7 +957,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/compute_uncertainty.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -848,7 +970,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/export_uncertainty_map.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -872,7 +994,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/render_uncertainty_views.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--model-path", args.model_path),
         "--uncertainty",
         f"{bucket_root}/U.npy",
@@ -894,7 +1016,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/score_nbv.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--model-path", args.model_path),
         "--u-path",
         f"{bucket_root}/U.npy",
@@ -916,7 +1038,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/visualize_m6.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--m6-root", nbv_output_dir),
         *maybe_option("--output-dir", nbv_output_dir / "viz" if nbv_output_dir else None),
     )
@@ -925,7 +1047,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/bundle_run_outputs.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--run-output-dir", run_dir),
         *maybe_option("--map-viz-output-dir", map_viz_output_dir),
         *maybe_option("--render-output-dir", render_output_dir),
@@ -935,7 +1057,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     return [
         PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
-        PipelineStep("stereo", TORCH_SERVICE, stereo_cmd),
+        PipelineStep("stereo", TORCH_SERVICE, point_cmd),
         PipelineStep("bucket", TORCH_SERVICE, bucket_cmd),
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
         PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
@@ -1101,7 +1223,7 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
         "--config",
         str(args.config) if args.config is not None else "",
         "--drive",
-        args.drive,
+        scene_id_arg(args),
     ]
 
     if args.run_output_root is not None:
@@ -1129,7 +1251,8 @@ def main() -> None:
     args = parse_args()
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
-    print(f"Drive: {args.drive}")
+    print(f"Dataset: {args.dataset_name}")
+    print(f"Scene: {scene_id_arg(args)}")
     print("Stages: " + ", ".join(step.name for step in steps))
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")

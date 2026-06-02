@@ -49,11 +49,13 @@ RUN python -m pip install \
     matplotlib \
     kornia \
     pyyaml \
+    huggingface_hub \
+    nvidia-ncore \
     ninja \
     "fastapi==0.115.14" \
     "uvicorn[standard]==0.34.3"
 
-ARG VBOGS_TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
+ARG VBOGS_TORCH_CUDA_ARCH_LIST="12.0"
 ARG VBOGS_TORCH_MAX_JOBS=1
 
 ENV TORCH_CUDA_ARCH_LIST="${VBOGS_TORCH_CUDA_ARCH_LIST}" \
@@ -62,8 +64,7 @@ ENV TORCH_CUDA_ARCH_LIST="${VBOGS_TORCH_CUDA_ARCH_LIST}" \
     NINJAFLAGS="-j${VBOGS_TORCH_MAX_JOBS}"
 
 RUN python -m pip install rich && \
-    python -m pip install --no-build-isolation \
-    git+https://github.com/nerfstudio-project/gsplat.git
+    python -m pip install --no-build-isolation gsplat==1.5.3
 
 RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 

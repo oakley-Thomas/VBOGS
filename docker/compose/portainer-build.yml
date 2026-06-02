@@ -1,3 +1,6 @@
+# Portainer build profile. This keeps the Portainer volume layout, but builds
+# VBOGS service images on the Portainer host instead of pulling Docker Hub tags.
+
 x-vbogs-mounts:
   data: &vbogs-data-mount
     type: volume
@@ -32,9 +35,41 @@ x-vbogs-mounts:
     source: vbogs-torch-cache
     target: /root/.cache/torch
 
+x-vbogs-builds:
+  torch: &vbogs-torch-build
+    context: ../..
+    dockerfile: docker/torch.Dockerfile
+    args:
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+      VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
+      VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
+  jax: &vbogs-jax-build
+    context: ../..
+    dockerfile: docker/jax.Dockerfile
+    args:
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+  vbgs-render: &vbogs-vbgs-render-build
+    context: ../..
+    dockerfile: docker/vbgs-render.Dockerfile
+    args:
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+      VBOGS_RENDER_CUDA_ARCH_LIST: ${VBOGS_RENDER_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
+      VBOGS_RENDER_MAX_JOBS: ${VBOGS_RENDER_MAX_JOBS:-1}
+  pipeline: &vbogs-pipeline-build
+    context: ../..
+    dockerfile: docker/pipeline.Dockerfile
+    args:
+      VBOGS_GIT_URL: ${VBOGS_GIT_URL:-https://github.com/oakley-Thomas/VBOGS.git}
+      VBOGS_GIT_REF: ${VBOGS_GIT_REF:-main}
+
 services:
   vbogs-torch:
-    image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
+    image: ${VBOGS_TORCH_BUILD_IMAGE:-local/vbogs-torch}
+    pull_policy: build
+    build: *vbogs-torch-build
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -59,7 +94,9 @@ services:
     command: sleep infinity
 
   vbogs-jax:
-    image: ${VBOGS_JAX_IMAGE:-oakleyth/vbogs-jax:latest}
+    image: ${VBOGS_JAX_BUILD_IMAGE:-local/vbogs-jax}
+    pull_policy: build
+    build: *vbogs-jax-build
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -84,7 +121,9 @@ services:
     command: sleep infinity
 
   vbogs-vbgs-render:
-    image: ${VBOGS_VBGS_RENDER_IMAGE:-oakleyth/vbogs-vbgs-render:latest}
+    image: ${VBOGS_VBGS_RENDER_BUILD_IMAGE:-local/vbogs-vbgs-render}
+    pull_policy: build
+    build: *vbogs-vbgs-render-build
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -106,7 +145,9 @@ services:
     command: sleep infinity
 
   vbogs-pipeline:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    image: ${VBOGS_PIPELINE_BUILD_IMAGE:-local/vbogs-pipeline}
+    pull_policy: build
+    build: *vbogs-pipeline-build
     working_dir: /workspace/VBOGS
     depends_on:
       - vbogs-torch
@@ -170,7 +211,9 @@ services:
         fi
 
   vbogs-transfer:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
+    image: ${VBOGS_PIPELINE_BUILD_IMAGE:-local/vbogs-pipeline}
+    pull_policy: build
+    build: *vbogs-pipeline-build
     working_dir: /workspace/VBOGS
     environment:
       VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}

@@ -257,6 +257,37 @@ def test_bucket_step_forwards_point_controls():
     assert bucket_step.command[max_points_index + 1] == "5000000"
 
 
+def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip_001",
+            "--ncore-root",
+            "/data/ncore",
+            "--camera-id",
+            "camera_front_wide_120fov,camera_front_tele_30fov",
+            "--point-source",
+            "lidar",
+        ]
+    )
+    by_name = {step.name: step for step in build_steps(args)}
+
+    assert by_name["prepare"].command[:2] == ("python", "scripts/prepare_nvidia_ncore_colmap.py")
+    assert "--scene-id" in by_name["prepare"].command
+    assert by_name["prepare"].command[by_name["prepare"].command.index("--scene-id") + 1] == "clip_001"
+    assert "--ncore-root" in by_name["prepare"].command
+
+    point_step = by_name["stereo"]
+    assert point_step.command[:2] == ("python", "scripts/export_points_world.py")
+    assert point_step.command[point_step.command.index("--dataset-name") + 1] == "nvidia_ncore"
+    assert point_step.command[point_step.command.index("--scene-id") + 1] == "clip_001"
+    assert point_step.command[point_step.command.index("--point-source") + 1] == "lidar"
+    assert "data/m4/clip_001/U.npy" in by_name["render"].command
+
+
 def test_environment_pipeline_configs_are_loadable():
     for config_name in (
         "configs/pipeline/dev.yaml",
@@ -350,13 +381,18 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
     shared_targets = [
         "/workspace/VBOGS/data",
         "/workspace/VBOGS/data/KITTI-360",
+        "/workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore",
         "/workspace/VBOGS/outputs",
         "/workspace/VBOGS/generated_configs",
         "/data/COLMAP",
         "/data/OCTREE-ANYGS",
     ]
 
-    for compose_name in ("docker/compose/compose.yml", "docker/compose/portainer.yml"):
+    for compose_name in (
+        "docker/compose/compose.yml",
+        "docker/compose/portainer.yml",
+        "docker/compose/portainer-build.yml",
+    ):
         pipeline = service_block(
             (REPO_ROOT / compose_name).read_text(encoding="utf-8"),
             "vbogs-pipeline",
@@ -369,10 +405,30 @@ def test_portainer_compose_uses_portainer_config():
     portainer_compose = (REPO_ROOT / "docker/compose/portainer.yml").read_text(
         encoding="utf-8"
     )
+    portainer_build_compose = (
+        REPO_ROOT / "docker/compose/portainer-build.yml"
+    ).read_text(encoding="utf-8")
     stack_env = (REPO_ROOT / "configs/docker/stack.env").read_text(encoding="utf-8")
 
     assert "configs/pipeline/portainer.yaml" in portainer_compose
+    assert "configs/pipeline/portainer.yaml" in portainer_build_compose
     assert "VBOGS_PIPELINE_CONFIG=configs/pipeline/portainer.yaml" in stack_env
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_compose
+    assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_build_compose
     assert "VBOGS_GDRIVE_UPLOAD" in portainer_compose
+    assert "VBOGS_GDRIVE_UPLOAD" in portainer_build_compose
     assert "target: /workspace/VBOGS/outputs" in portainer_compose
+    assert "target: /workspace/VBOGS/outputs" in portainer_build_compose
+
+
+def test_portainer_build_compose_builds_local_images():
+    portainer_build_compose = (
+        REPO_ROOT / "docker/compose/portainer-build.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "pull_policy: build" in portainer_build_compose
+    assert "build: *vbogs-torch-build" in portainer_build_compose
+    assert "build: *vbogs-jax-build" in portainer_build_compose
+    assert "build: *vbogs-vbgs-render-build" in portainer_build_compose
+    assert "build: *vbogs-pipeline-build" in portainer_build_compose
+    assert "oakleyth/vbogs" not in portainer_build_compose

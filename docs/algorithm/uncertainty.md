@@ -6,7 +6,7 @@ This page summarizes what the implementation computes.
 
 ## Observations
 
-Each stereo point is a six-dimensional observation:
+Each exported world point is a six-dimensional observation:
 
 ```text
 x_world = [xyz_world, rgb]

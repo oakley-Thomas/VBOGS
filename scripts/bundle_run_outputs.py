@@ -178,6 +178,8 @@ def summarize_stereo(metadata_path: Path) -> dict[str, Any]:
         return {}
     metadata = read_json(metadata_path)
     return {
+        "dataset": metadata.get("dataset"),
+        "point_source": metadata.get("point_source") or "stereo",
         "num_frames": int(metadata.get("num_frames", 0) or 0),
         "num_points": int(metadata.get("num_points", 0) or 0),
         "matcher": metadata.get("matcher"),
@@ -309,6 +311,7 @@ def bundle_run_outputs(
         missing_optional=missing_optional,
     )
 
+    points_summary = summarize_stereo(points_dir / "points_world_metadata.json")
     manifest = {
         "drive": drive,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -319,7 +322,8 @@ def bundle_run_outputs(
             "base_dir": run_output_dir.name,
         },
         "frame_counts": summarize_prepared(prepared_metadata),
-        "stereo": summarize_stereo(points_dir / "points_world_metadata.json"),
+        "stereo": points_summary,
+        "points": points_summary,
         "source_paths": {
             "points_dir": str(points_dir),
             "bucket_root": str(bucket_root.resolve()),

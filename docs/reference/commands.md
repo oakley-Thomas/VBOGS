@@ -133,11 +133,23 @@ python scripts/train_octree_anygs.py \
   --iterations 30000
 ```
 
-Export stereo points:
+Prepare NVIDIA NCore into COLMAP layout:
 
 ```bash
-python scripts/stereo_to_pointcloud.py \
-  --drive 2013_05_28_drive_0007_sync \
+python scripts/prepare_nvidia_ncore_colmap.py \
+  --scene-id <clip-id> \
+  --camera-id camera_front_wide_120fov \
+  --frame-step 2 \
+  --max-frames 200
+```
+
+Export world points:
+
+```bash
+python scripts/export_points_world.py \
+  --dataset-name kitti360 \
+  --scene-id 2013_05_28_drive_0007_sync \
+  --point-source stereo \
   --matcher sgbm \
   --pixel-step 1 \
   --max-points-per-frame 100000 \

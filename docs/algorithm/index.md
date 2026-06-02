@@ -3,7 +3,7 @@
 VBOGS is a five-stage pipeline:
 
 1. Train an Octree-AnyGS scene from posed RGB frames.
-2. Build a world-frame stereo point cloud with RGB values.
+2. Build a world-frame point cloud with RGB values.
 3. Assign points to Octree-AnyGS anchors and fit a VBGS posterior per anchor.
 4. Reduce each posterior to one scalar uncertainty value.
 5. Render those anchor uncertainties through the scene and score next-best
