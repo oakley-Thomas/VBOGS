@@ -126,7 +126,9 @@ python scripts/run_drive_pipeline.py \
   --drive <drive> \
   --start-at bundle \
   --stop-after bundle \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 If a stage output lives outside the derived defaults, pass the relevant output

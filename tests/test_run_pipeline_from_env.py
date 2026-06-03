@@ -41,6 +41,7 @@ def test_pipeline_cmd_forwards_upload_without_echoing_raw_credentials(monkeypatc
         "configs/pipeline/portainer.yaml",
     ]
     assert "--upload-google-drive" in cmd
+    assert "--use-service-labels" not in cmd
     assert "--gdrive-folder-id" in cmd
     assert cmd[cmd.index("--gdrive-folder-id") + 1] == "folder123"
     assert "--gdrive-dest" in cmd

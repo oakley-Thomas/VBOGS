@@ -1,4 +1,8 @@
 x-vbogs-mounts:
+  repo: &vbogs-repo-mount
+    type: volume
+    source: vbogs-repo
+    target: /workspace/VBOGS
   data: &vbogs-data-mount
     type: volume
     source: vbogs-data
@@ -48,6 +52,7 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
     volumes:
+      - *vbogs-repo-mount
       - *vbogs-data-mount
       - *vbogs-kitti360-mount
       - *vbogs-nvidia-ncore-mount
@@ -74,6 +79,7 @@ services:
       JAX_PLATFORMS: cuda
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
+      - *vbogs-repo-mount
       - *vbogs-data-mount
       - *vbogs-kitti360-mount
       - *vbogs-nvidia-ncore-mount
@@ -96,13 +102,17 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
+    ports:
+      - "${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}:8070"
     volumes:
+      - *vbogs-repo-mount
       - *vbogs-data-mount
       - *vbogs-kitti360-mount
       - *vbogs-nvidia-ncore-mount
       - *vbogs-outputs-mount
       - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
     command: sleep infinity
 
   vbogs-pipeline:
@@ -120,8 +130,6 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
-      VBOGS_PIPELINE_AUTORUN: ${VBOGS_PIPELINE_AUTORUN:-0}
-      VBOGS_PIPELINE_ARGS: ${VBOGS_PIPELINE_ARGS:-}
       VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/portainer.yaml}
       VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
       VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
@@ -134,6 +142,7 @@ services:
       VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
       VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
     volumes:
+      - *vbogs-repo-mount
       - type: volume
         source: vbogs-data
         target: /workspace/VBOGS/data
@@ -155,52 +164,57 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
     command:
       - sh
       - -lc
       - |
-        if [ "${VBOGS_PIPELINE_AUTORUN:-0}" = "1" ]; then
-          python scripts/run_pipeline_from_env.py
-        else
-          echo "vbogs-pipeline idle. Set VBOGS_PIPELINE_AUTORUN=1 to run the drive pipeline."
-          sleep infinity
-        fi
+        echo "vbogs-pipeline idle. Use vbogs-bootstrap-repo to fetch VBOGS into the shared repo volume, then run scripts/run_drive_pipeline.py from the Docker host."
+        sleep infinity
 
-  vbogs-transfer:
-    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
-    working_dir: /workspace/VBOGS
+  vbogs-filebrowser:
+    image: ${VBOGS_FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2-s6}
     environment:
-      VBOGS_TRANSFER_AUTHORIZED_KEYS: ${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}
+      FB_ADDRESS: 0.0.0.0
+      FB_PORT: "80"
+      FB_ROOT: /srv
+      FB_DATABASE: /database/filebrowser.db
+      FB_BASEURL: ${VBOGS_FILEBROWSER_BASE_URL:-}
+      FB_DISABLE_EXEC: "true"
+      PUID: ${VBOGS_FILEBROWSER_PUID:-1000}
+      PGID: ${VBOGS_FILEBROWSER_PGID:-1000}
     ports:
-      - "${VBOGS_TRANSFER_HOST_PORT:-22022}:2222"
+      - "${VBOGS_FILEBROWSER_HOST_BIND:-0.0.0.0}:${VBOGS_FILEBROWSER_HOST_PORT:-8088}:80"
     volumes:
+      - type: volume
+        source: vbogs-filebrowser-database
+        target: /database
+      - type: volume
+        source: vbogs-filebrowser-config
+        target: /config
+      - <<: *vbogs-repo-mount
+        target: /srv/project
+        read_only: true
       - <<: *vbogs-data-mount
+        target: /srv/data
         read_only: true
       - <<: *vbogs-kitti360-mount
+        target: /srv/data/KITTI-360
         read_only: true
       - <<: *vbogs-nvidia-ncore-mount
+        target: /srv/data/NVIDIA-PhysicalAI-AV-NCore
         read_only: true
       - <<: *vbogs-outputs-mount
+        target: /srv/outputs
         read_only: true
       - <<: *vbogs-generated-configs-mount
+        target: /srv/generated_configs
         read_only: true
       - <<: *vbogs-colmap-mount
+        target: /srv/COLMAP
         read_only: true
       - <<: *vbogs-octree-anygs-mount
+        target: /srv/OCTREE-ANYGS
         read_only: true
-    command:
-      - sh
-      - -lc
-      - |
-        if [ -n "${VBOGS_TRANSFER_AUTHORIZED_KEYS:-}" ]; then
-          exec vbogs-transfer-sshd
-        else
-          echo "vbogs-transfer idle. Set VBOGS_TRANSFER_AUTHORIZED_KEYS to enable SSH/SFTP downloads."
-          sleep infinity
-        fi
 
 volumes:
   COLMAP:
@@ -209,7 +223,10 @@ volumes:
     name: ${VBOGS_DATASETS_VOLUME:-KITTI-360}
   NVIDIA-PhysicalAI-AV-NCore:
     name: ${VBOGS_NVIDIA_NCORE_VOLUME:-NVIDIA-PhysicalAI-AV-NCore}
+  vbogs-repo:
   vbogs-data:
   vbogs-outputs:
   vbogs-generated-configs:
+  vbogs-filebrowser-database:
+  vbogs-filebrowser-config:
   vbogs-torch-cache:

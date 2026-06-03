@@ -58,7 +58,8 @@ repo-owned local conda environments. Data flows between services as `.npz` /
 
 - `vbogs-torch` — Octree-AnyGS, stereo matching, `render_scalar`, bucketing
 - `vbogs-jax` — vbgs fits, posterior computations
-- `vbogs-pipeline` — orchestration, bundling, uploads, and transfer helpers
+- `vbogs-pipeline` — shared-volume bootstrap, bundling, and uploads
+- `vbogs-filebrowser` — read-only browser access to project files and artifacts
 
 Each script declares which service it runs in (see PLAN.md's per-milestone
 annotations). Do not add new local conda setup paths unless the user explicitly

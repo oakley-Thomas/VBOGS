@@ -106,7 +106,9 @@ Use the NVIDIA profile as a starting point:
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/nvidia_ncore_dev.yaml \
   --scene-id <clip-id> \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 The default NVIDIA camera subset is `camera_front_wide_120fov`. The default

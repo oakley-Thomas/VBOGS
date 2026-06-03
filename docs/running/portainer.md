@@ -1,42 +1,103 @@
-# Portainer, Uploads, and Transfers
+# Portainer, Uploads, and File Browser
 
 Use `configs/pipeline/portainer.yaml` with `docker/compose/portainer.yml` for
 server deployment. The Portainer profile uses compose-managed Docker volumes
 for datasets, intermediate artifacts, and curated outputs. None of those
 volumes are marked `external`.
 
+## Image Build Choices
+
+For normal Portainer deployment, use `docker/compose/portainer.yml`. It has no
+`build:` directives and pulls published images.
+
+If Portainer is attached to the same local Docker environment that runs the
+stack, `docker/compose/portainer-build.yml` can build the VBOGS images during
+stack deployment. This is not supported for remote Docker environments managed
+through the Portainer agent.
+
+For remote environments with shell access, build on the GPU host outside
+Portainer, then deploy with `docker/compose/portainer-local.yml`:
+
+```bash
+cd /path/to/VBOGS
+bash scripts/build_stack_serial.sh
+```
+
+Then create the Portainer custom template with:
+
+```text
+Compose path: docker/compose/portainer-local.yml
+```
+
+That compose file uses `pull_policy: never`, so Portainer relies on the cached
+`local/vbogs-*` images already present on the Docker host.
+
+If you only have the Portainer web UI, use one of these paths:
+
+1. Use `docker/compose/portainer.yml` and pull the published registry images.
+2. Or build each image from Portainer's **Images > Build a new image** page,
+   then deploy `docker/compose/portainer-local.yml`.
+
+For the web-UI build path, build these image names from the public repository
+URL `https://github.com/oakley-Thomas/VBOGS.git`:
+
+| Image name | Dockerfile path |
+| --- | --- |
+| `local/vbogs-torch` | `docker/torch.Dockerfile` |
+| `local/vbogs-jax` | `docker/jax.Dockerfile` |
+| `local/vbogs-vbgs-render` | `docker/vbgs-render.Dockerfile` |
+| `local/vbogs-pipeline` | `docker/pipeline.Dockerfile` |
+
+The service images install runtime dependencies, but they no longer bake a
+VBOGS checkout into the image. After the stack is running, open a console in
+`vbogs-pipeline` and run:
+
+```bash
+vbogs-bootstrap-repo
+```
+
+The bootstrap prompts for a GitHub username and token, then fetches VBOGS into
+the shared `vbogs-repo` volume mounted by every runtime service. To target a
+branch, tag, or commit other than `main`:
+
+```bash
+vbogs-bootstrap-repo --ref <branch-tag-or-commit>
+```
+
+The token is passed to Git through `GIT_ASKPASS` and is not written into
+`.git/config`.
+
 ## Server Update Workflow
 
-After pulling new code on the GPU server, prefer the repo-owned update path:
+After bootstrapping the shared checkout, update it from a `vbogs-pipeline`
+console:
 
 ```bash
-bash scripts/update_server_stack.sh
+python scripts/update_stack_git_ref.py <branch-tag-or-commit>
 ```
 
-This keeps server rebuilds repeatable instead of relying on ad hoc edits inside
-running containers.
+All VBOGS services see the updated checkout through the same Docker volume.
 
-## Autorun from Environment
+## Host-Side Pipeline Runs
 
-The `vbogs-pipeline` service can launch the drive pipeline automatically:
-
-```bash
-VBOGS_PIPELINE_AUTORUN=1
-VBOGS_PIPELINE_CONFIG=configs/pipeline/portainer.yaml
-VBOGS_DRIVE=2013_05_28_drive_0007_sync
-VBOGS_PIPELINE_ARGS="--gpu 0 --jax-device 0 --start-at prepare --stop-after bundle"
-```
-
-Internally this calls:
+VBOGS containers do not mount the host Docker socket. Launch stage orchestration
+from the Docker host with the relevant compose file:
 
 ```bash
-python scripts/run_pipeline_from_env.py
+python scripts/run_drive_pipeline.py \
+  --config configs/pipeline/portainer.yaml \
+  --compose-file docker/compose/portainer.yml \
+  --compose-project-directory . \
+  --drive 2013_05_28_drive_0007_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after bundle
 ```
 
 ## Google Drive Upload
 
-Enable upload with `--upload-google-drive`, `upload.enabled: true`, or
-`VBOGS_GDRIVE_UPLOAD=1`.
+Enable upload with `--upload-google-drive` or `upload.enabled: true`.
 
 Manual upload example from inside `vbogs-pipeline`:
 
@@ -62,42 +123,76 @@ Important upload controls:
 
 Keep service-account JSON in environment/secrets, not in committed configs.
 
-## SSH/SFTP Artifact Transfer
+## Realtime Renderer Viewer
 
-The Portainer compose file includes `vbogs-transfer`, a read-only SSH/SFTP
-service for pulling artifacts from the server mounts.
-
-Create a local key:
-
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/vbogs_portainer
-```
-
-Set this Portainer stack variable and redeploy:
+The Portainer compose files publish `vbogs-vbgs-render` so the realtime browser
+viewer can be reached from another machine. Start the viewer inside the render
+container after the Octree-AnyGS scene and `U.npy` exist:
 
 ```bash
-VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --resolution 4
 ```
 
-The host port defaults to `22022`. To change it:
+Then open:
+
+```text
+http://<server-host>:8071
+```
+
+The host bind and port are controlled by:
 
 ```bash
-VBOGS_TRANSFER_HOST_PORT=32222
+VBOGS_RENDER_VIEWER_HOST_BIND=0.0.0.0
+VBOGS_RENDER_VIEWER_HOST_PORT=8071
 ```
 
-Download the curated run zip:
+The viewer is not authenticated. Expose it only on trusted networks or put it
+behind your normal VPN, firewall, or TLS reverse proxy.
+
+## File Browser Artifact Access
+
+The Portainer compose files include `vbogs-filebrowser`, a read-only
+[File Browser](https://filebrowser.org/installation) sidecar for project files
+and generated artifacts. It serves the same stack volumes as the pipeline
+containers without mounting the Docker socket.
+
+The host port defaults to `8088`:
+
+```text
+http://<server-host>:8088
+```
+
+Change the bind address or host port with stack variables when needed:
 
 ```bash
-scp -i ~/.ssh/vbogs_portainer -P 22022 \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>.zip .
+VBOGS_FILEBROWSER_HOST_BIND=0.0.0.0
+VBOGS_FILEBROWSER_HOST_PORT=18088
 ```
 
-Mirror a full output directory:
+On first boot, File Browser creates the `admin` account and prints the generated
+password once in the `vbogs-filebrowser` logs. In Portainer, open the
+`vbogs-filebrowser` container logs before logging in. For local compose:
 
 ```bash
-rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 22022" \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>/ ./vbogs-run/
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  logs vbogs-filebrowser
 ```
 
-Disable transfer access by removing `VBOGS_TRANSFER_AUTHORIZED_KEYS` and
-redeploying the stack.
+Useful read-only paths:
+
+| Path | Contents |
+| --- | --- |
+| `/project` | VBOGS checkout. In local dev this is the live bind-mounted repo; in Portainer this is the shared bootstrapped repo volume. |
+| `/outputs` | Curated bundles such as `outputs/v1_0/<drive>.zip` and diagnostics. |
+| `/data` | VBOGS data volume, including `KITTI-360` and NVIDIA NCore mounts. |
+| `/COLMAP` | Prepared COLMAP-style scene inputs. |
+| `/OCTREE-ANYGS` | Octree-AnyGS checkpoints and training outputs. |
+| `/generated_configs` | Generated pipeline and Octree-AnyGS configs. |
+
+If the service is exposed outside a trusted network, put it behind your normal
+VPN, firewall, or TLS reverse proxy. Set `VBOGS_FILEBROWSER_BASE_URL` when the
+proxy serves it from a subpath.

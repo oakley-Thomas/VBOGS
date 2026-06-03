@@ -46,6 +46,12 @@ docker compose --project-directory . \
   exec vbogs-pipeline bash
 ```
 
+Bootstrap a non-dev stack checkout from inside `vbogs-pipeline`:
+
+```bash
+vbogs-bootstrap-repo
+```
+
 Check GPU visibility:
 
 ```bash
@@ -55,13 +61,13 @@ docker compose --project-directory . \
   exec vbogs-pipeline nvidia-smi
 ```
 
-Start the realtime Octree-AnyGS viewer from the Torch container:
+Start the realtime Octree-AnyGS viewer from the published render container:
 
 ```bash
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  exec vbogs-torch \
+  exec vbogs-vbgs-render \
   python scripts/view_octree_anygs.py \
     --drive 2013_05_28_drive_0007_sync \
     --resolution 4
@@ -75,8 +81,10 @@ Dry run:
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
-  --use-service-labels \
-  --dry-run
+  --dry-run \
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Full run:
@@ -89,7 +97,9 @@ python scripts/run_drive_pipeline.py \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Small smoke run:
@@ -108,7 +118,9 @@ python scripts/run_drive_pipeline.py \
   --iterations 7000 \
   --max-points-per-frame 50000 \
   --render-max-views 2 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Direct Stage Entry Points
@@ -182,7 +194,7 @@ python scripts/compute_uncertainty.py \
   --drive 2013_05_28_drive_0007_sync
 ```
 
-Run the original global VBGS KITTI baseline from `vbogs-pipeline`:
+Run the original global VBGS KITTI baseline from the Docker host:
 
 ```bash
 python scripts/run_vbgs_kitti_baseline.py \
@@ -190,8 +202,8 @@ python scripts/run_vbgs_kitti_baseline.py \
   --use-service-labels
 ```
 
-`vbogs-pipeline` only orchestrates this command. The actual JAX/VBGS fit runs
-inside the sibling `vbogs-jax` container and writes artifacts under
+This wrapper uses Docker CLI access to run the actual JAX/VBGS fit inside the
+`vbogs-jax` container and writes artifacts under
 `outputs/vbgs_baseline/<drive>/` by default. Use `--input-mode bucket` to force the
 same normalized points as VBOGS, or `--input-mode stereo` to train directly from
 `data/points_world/<drive>/points_world.npz`.

@@ -5,7 +5,7 @@ the Docker Compose stack. Torch stages run in `vbogs-torch`; JAX stages run in
 `vbogs-jax`. Values in `configs/pipeline/default.yaml` become defaults, and
 explicit CLI arguments override the config.
 
-Common full-pipeline command from inside `vbogs-pipeline`:
+Common full-pipeline command from the Docker host:
 
 ```bash
 python scripts/run_drive_pipeline.py \
@@ -15,7 +15,9 @@ python scripts/run_drive_pipeline.py \
   --start-at prepare \
   --stop-after bundle \
   --run-output-root outputs/v1_0 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Use `--dry-run` to print the commands that would be run without launching the
@@ -40,10 +42,14 @@ artifacts in Docker volumes:
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 ```
 
-From inside `vbogs-pipeline`, run the local-dev profile with:
+Run the local-dev profile from the Docker host with:
 
 ```bash
-python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-service-labels
+python scripts/run_drive_pipeline.py \
+  --config configs/pipeline/dev.yaml \
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Pipeline Selection
@@ -79,8 +85,8 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 | `--project-name PROJECT_NAME` | Empty | Optional Compose/Portainer stack project name passed as `-p`. |
 | `--torch-container TORCH_CONTAINER` | Empty | Concrete container name/id for Torch stages. When set, the runner uses `docker exec` instead of `docker compose exec` for Torch. |
 | `--jax-container JAX_CONTAINER` | Empty | Concrete container name/id for JAX stages. When set, the runner uses `docker exec` instead of `docker compose exec` for JAX. |
-| `--use-service-labels` | `false` | Resolve sibling containers by Docker Compose labels. Use this from inside `vbogs-pipeline`. |
-| `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. Usually unnecessary inside the stack. |
+| `--use-service-labels` | `false` | Resolve containers by Docker Compose labels and use `docker exec`. This is an advanced host-side mode that still requires Docker CLI access. |
+| `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. |
 | `--skip-up` | `false` | Do not run `docker compose up -d` before executing selected stages. Automatically skipped with `--use-service-labels`. |
 
 The `vbogs-pipeline` service is also GPU-enabled, so after the stack is
@@ -93,10 +99,9 @@ docker compose --project-directory . -f docker/compose/compose.yml -f docker/com
 ## Google Drive Upload
 
 The pipeline image includes `rclone` and `scripts/upload_google_drive.py`.
-Pass `--upload-google-drive` to `scripts/run_drive_pipeline.py`, set
-`upload.enabled: true` in the pipeline config, or set `VBOGS_GDRIVE_UPLOAD=1`
-for `scripts/run_pipeline_from_env.py`. The upload runs after all selected
-stages succeed. By default the source is:
+Pass `--upload-google-drive` to `scripts/run_drive_pipeline.py` or set
+`upload.enabled: true` in the pipeline config. The upload runs after all
+selected stages succeed. By default the source is:
 
 ```text
 outputs/v1_0/<drive>.zip
@@ -158,52 +163,53 @@ python scripts/upload_google_drive.py \
   --service-account-file /run/secrets/vbogs-google-drive-service-account.json
 ```
 
-## SSH/SFTP Downloads from Portainer
+## Realtime Renderer Viewer
 
-The pipeline image also includes an optional SSH/SFTP transfer mode for pulling
-artifacts from a Portainer deployment without direct host filesystem access. The
-Portainer compose file runs this as a separate `vbogs-transfer` service using
-the same lightweight pipeline image. It stays idle unless an SSH public key is
-provided, disables password login, does not mount the Docker socket, and mounts
-the VBOGS data/output mounts read-only.
-
-Create a local key if you do not already have one:
+The compose stack publishes `vbogs-vbgs-render` for browser-based RGB and
+uncertainty inspection after the scene and uncertainty artifacts exist. Start
+the viewer inside `vbogs-vbgs-render`:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/vbogs_portainer
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --resolution 4
 ```
 
-Then set this Portainer stack environment variable and redeploy:
+The default host URL is:
 
-```bash
-VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
+```text
+http://<host>:8071
 ```
 
-The host port defaults to `22022`. If that port is already in use on the
-server, set one more stack variable, for example:
+Set `VBOGS_RENDER_VIEWER_HOST_BIND` or `VBOGS_RENDER_VIEWER_HOST_PORT` when the
+viewer should bind to a different interface or host port.
 
-```bash
-VBOGS_TRANSFER_HOST_PORT=32222
+## File Browser Access
+
+The compose stack includes a `vbogs-filebrowser` sidecar using the
+`filebrowser/filebrowser` image. It provides browser-based, read-only access to
+the shared project and artifact volumes in both local Docker Compose and
+Portainer deployments.
+
+The default URL is:
+
+```text
+http://<host>:8088
 ```
 
-Download the curated run zip from your local machine:
+Relevant stack variables:
 
-```bash
-scp -i ~/.ssh/vbogs_portainer -P 22022 \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>.zip .
-```
+| Variable | Description |
+| --- | --- |
+| `VBOGS_FILEBROWSER_IMAGE` | File Browser image, default `filebrowser/filebrowser:v2-s6`. |
+| `VBOGS_FILEBROWSER_HOST_BIND` | Host bind address, default `0.0.0.0`. |
+| `VBOGS_FILEBROWSER_HOST_PORT` | Host HTTP port, default `8088`. |
+| `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath. |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. |
 
-Or mirror a full curated output directory:
-
-```bash
-rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 22022" \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>/ ./vbogs-run/
-```
-
-Other useful read-only paths are `/workspace/VBOGS/data`, `/data/COLMAP`, and
-`/data/OCTREE-ANYGS`. To disable access again, remove
-`VBOGS_TRANSFER_AUTHORIZED_KEYS` from the Portainer stack environment and
-redeploy.
+On first boot, read the generated `admin` password from the
+`vbogs-filebrowser` logs. The mounted paths are `/project`, `/outputs`,
+`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`.
 
 ## KITTI-360 Inputs
 

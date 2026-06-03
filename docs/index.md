@@ -27,7 +27,8 @@ kept separate:
 | --- | --- | --- |
 | `vbogs-torch` | Octree-AnyGS, stereo, bucketing, scalar rendering | M2, M3, M4a, M6 |
 | `vbogs-jax` | VBGS posterior fitting and uncertainty reduction | M4b, M5 |
-| `vbogs-pipeline` | Orchestration, packaging, uploads, transfer helpers | Full pipeline |
+| `vbogs-pipeline` | Orchestration, packaging, uploads | Full pipeline |
+| `vbogs-filebrowser` | Read-only browser access to project files and artifacts | Operator access |
 
 Data crosses that framework boundary only through `.npz`, `.npy`, `.json`,
 `.yaml`, `.ply`, and image files on disk.
@@ -56,21 +57,14 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
-Open the orchestration container:
-
-```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline bash
-```
-
-From inside `vbogs-pipeline`, run the configured dev pipeline:
+Run the configured dev pipeline from the Docker host:
 
 ```bash
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Preview commands without running expensive stages:
@@ -78,6 +72,8 @@ Preview commands without running expensive stages:
 ```bash
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
-  --use-service-labels \
-  --dry-run
+  --dry-run \
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```

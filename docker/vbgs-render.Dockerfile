@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     libgl1 \
     libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,16 +29,38 @@ RUN python -m pip install \
     torchaudio==2.7.1 \
     --index-url https://download.pytorch.org/whl/cu128
 
+RUN python -m pip install torch_scatter \
+    -f https://data.pyg.org/whl/torch-2.7.1+cu128.html
+
 RUN python -m pip install \
     numpy \
     scipy \
+    datasets \
+    equinox \
+    hydra-core \
+    jax \
+    jaxtyping \
+    multimethod \
     opencv-python \
     plyfile \
+    tensorboard \
     pillow \
     matplotlib \
+    einops \
+    wandb \
+    lpips \
+    laspy \
+    colorama \
+    scikit-learn \
+    kornia \
+    pyyaml \
+    huggingface_hub \
+    nvidia-ncore \
     rich \
     tqdm \
-    ninja
+    ninja \
+    "fastapi==0.115.14" \
+    "uvicorn[standard]==0.34.3"
 
 ARG VBOGS_RENDER_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
 ARG VBOGS_RENDER_MAX_JOBS=1
@@ -45,14 +70,8 @@ ENV TORCH_CUDA_ARCH_LIST="${VBOGS_RENDER_CUDA_ARCH_LIST}" \
     CMAKE_BUILD_PARALLEL_LEVEL="${VBOGS_RENDER_MAX_JOBS}" \
     NINJAFLAGS="-j${VBOGS_RENDER_MAX_JOBS}"
 
-ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
-ARG VBOGS_GIT_REF=main
-
-RUN git clone "${VBOGS_GIT_URL}" /workspace/VBOGS && \
-    cd /workspace/VBOGS && \
-    git fetch --tags origin && \
-    (git checkout "${VBOGS_GIT_REF}" || git checkout -B "${VBOGS_GIT_REF}" "origin/${VBOGS_GIT_REF}") && \
-    git submodule update --init --recursive
+RUN python -m pip install --no-build-isolation gsplat==1.5.3 && \
+    python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 
 RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /workspace/gaussian-splatting && \
     cd /workspace/gaussian-splatting && \
@@ -64,10 +83,12 @@ RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.
     cd ../diff-gaussian-rasterization && \
     python setup.py install
 
+RUN python -m pip install "kornia==0.7.4"
+
 WORKDIR /workspace/VBOGS
 
-RUN python -m pip install -e /workspace/VBOGS/vbgs
+ENV PYTHONPATH=/workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
 
-ENV PYTHONPATH=/workspace/VBOGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
+EXPOSE 8070
 
 CMD ["sleep", "infinity"]

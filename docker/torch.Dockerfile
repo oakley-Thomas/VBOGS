@@ -68,15 +68,6 @@ RUN python -m pip install rich && \
 
 RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 
-ARG VBOGS_GIT_URL=https://github.com/oakley-Thomas/VBOGS.git
-ARG VBOGS_GIT_REF=main
-
-RUN git clone "${VBOGS_GIT_URL}" /workspace/VBOGS && \
-    cd /workspace/VBOGS && \
-    git fetch --tags origin && \
-    (git checkout "${VBOGS_GIT_REF}" || git checkout -B "${VBOGS_GIT_REF}" "origin/${VBOGS_GIT_REF}") && \
-    git submodule update --init --recursive
-
 WORKDIR /workspace/VBOGS
 
 ENV PYTHONPATH=/workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS

@@ -72,8 +72,8 @@ services:
       - type: volume
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
-      - type: bind
-        source: ${VBOGS_LOCAL_OUTPUTS:-./outputs}
+      - type: volume
+        source: vbogs-outputs
         target: /workspace/VBOGS/outputs
       - type: volume
         source: vbogs-generated-configs
@@ -84,3 +84,10 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+
+  vbogs-filebrowser:
+    volumes:
+      - type: bind
+        source: .
+        target: /srv/project
+        read_only: true

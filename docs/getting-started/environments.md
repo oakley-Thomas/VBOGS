@@ -12,6 +12,7 @@ The normal path is Docker Compose:
 | `vbogs-torch` | PyTorch/CUDA plus Octree-AnyGS | preparation, training, stereo, bucketing, rendering, NBV scoring |
 | `vbogs-jax` | JAX/CUDA plus VBGS | anchor fitting and uncertainty computation |
 | `vbogs-pipeline` | lightweight orchestration image | running stage commands in sibling containers, bundling, uploads |
+| `vbogs-filebrowser` | File Browser sidecar | read-only browser access to project files and artifacts |
 
 Build with:
 
@@ -28,6 +29,11 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
+The dev overlay bind-mounts the local checkout. Pull-only and Portainer stacks
+do not bake VBOGS into the images; run `vbogs-bootstrap-repo` from
+`vbogs-pipeline` after the stack starts. Server stacks share that bootstrapped
+checkout through the `vbogs-repo` volume so File Browser and all runtime
+services see the same project files.
 
 ## What Runs Where
 

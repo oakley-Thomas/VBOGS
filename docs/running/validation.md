@@ -14,7 +14,9 @@ python scripts/run_drive_pipeline.py \
   --start-at inspect \
   --stop-after inspect \
   --inspect-top-k 10 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Inspect one anchor and export its assigned points:
@@ -27,7 +29,9 @@ python scripts/run_drive_pipeline.py \
   --stop-after inspect \
   --inspect-anchor-id 12345 \
   --inspect-export-ply outputs/anchor_12345_points.ply \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Look for:
@@ -45,7 +49,9 @@ python scripts/run_drive_pipeline.py \
   --drive 2013_05_28_drive_0007_sync \
   --start-at map-viz \
   --stop-after map-viz \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Outputs are CloudCompare-friendly PLY files under:
@@ -72,7 +78,9 @@ python scripts/run_drive_pipeline.py \
   --stop-after render \
   --render-split both \
   --render-max-views 5 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 The render stage writes RGB, uncertainty, and side-by-side diagnostics under:
@@ -106,7 +114,9 @@ python scripts/run_drive_pipeline.py \
   --stop-after nbv-viz \
   --nbv-top-k 10 \
   --nbv-save-top-images 5 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 The score is:

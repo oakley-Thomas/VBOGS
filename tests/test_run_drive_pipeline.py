@@ -17,8 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def service_block(compose_text: str, service: str) -> str:
+    pattern = (
+        rf"^  {re.escape(service)}:\n"
+        r"(?P<block>.*?)(?=^  [\w-]+:|^[A-Za-z][\w-]*:|\Z)"
+    )
     match = re.search(
-        rf"^  {re.escape(service)}:\n(?P<block>.*?)(?=^  [\w-]+:|\Z)",
+        pattern,
         compose_text,
         re.M | re.S,
     )
@@ -312,20 +316,34 @@ def test_environment_pipeline_configs_are_loadable():
     )
 
 
-def test_dev_compose_binds_local_outputs_and_uses_dev_config():
+def test_dev_compose_binds_only_local_checkout_and_uses_dev_config():
     dev_compose = (REPO_ROOT / "docker/compose/dev.yml").read_text(encoding="utf-8")
     override_compose = (REPO_ROOT / "docker/compose/override.yml").read_text(
         encoding="utf-8"
     )
     dev_pipeline = service_block(dev_compose, "vbogs-pipeline")
     override_pipeline = service_block(override_compose, "vbogs-pipeline")
+    dev_filebrowser = service_block(dev_compose, "vbogs-filebrowser")
+    override_filebrowser = service_block(override_compose, "vbogs-filebrowser")
 
-    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in dev_compose
-    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_compose
-    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in dev_pipeline
-    assert "${VBOGS_LOCAL_OUTPUTS:-./outputs}" in override_pipeline
+    assert "VBOGS_LOCAL_OUTPUTS" not in dev_compose
+    assert "VBOGS_LOCAL_OUTPUTS" not in override_compose
+    assert "source: vbogs-outputs" in dev_pipeline
+    assert "source: vbogs-outputs" in override_pipeline
+    assert "target: /srv/project" in dev_filebrowser
+    assert "target: /srv/project" in override_filebrowser
+    assert "target: /srv/outputs" not in dev_filebrowser
+    assert "target: /srv/outputs" not in override_filebrowser
     assert "configs/pipeline/dev.yaml" in dev_compose
     assert "configs/pipeline/dev.yaml" in override_compose
+
+    for compose_text in (dev_compose, override_compose):
+        bind_blocks = re.findall(
+            r"- type: bind\n\s+source: (?P<source>.+)\n\s+target: (?P<target>.+)",
+            compose_text,
+        )
+        assert bind_blocks
+        assert all(source == "." for source, _target in bind_blocks)
 
 
 def test_compose_base_uses_relocated_compose_file_and_project_directory():
@@ -375,10 +393,44 @@ def test_pipeline_image_includes_zip_tools():
     assert "\n    ffmpeg \\" in pipeline_dockerfile
     assert "\n    zip \\" in pipeline_dockerfile
     assert "\n    unzip \\" in pipeline_dockerfile
+    assert "scripts/bootstrap_stack_repo.py" in pipeline_dockerfile
+    assert "vbogs-bootstrap-repo" in pipeline_dockerfile
+    assert "docker:27-cli" not in pipeline_dockerfile
+    assert "COPY --from=docker-cli" not in pipeline_dockerfile
+    assert "openssh-server" not in pipeline_dockerfile
+    assert "vbogs-transfer-sshd" not in pipeline_dockerfile
+
+
+def test_service_images_do_not_clone_vbogs_during_build():
+    for dockerfile_name in (
+        "docker/torch.Dockerfile",
+        "docker/jax.Dockerfile",
+        "docker/vbgs-render.Dockerfile",
+        "docker/pipeline.Dockerfile",
+    ):
+        dockerfile = (REPO_ROOT / dockerfile_name).read_text(encoding="utf-8")
+
+        assert "VBOGS_GIT_URL" not in dockerfile
+        assert "git clone \"${VBOGS_GIT_URL}\"" not in dockerfile
+
+
+def test_vbgs_render_image_can_host_realtime_viewer():
+    dockerfile = (REPO_ROOT / "docker/vbgs-render.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "torch_scatter" in dockerfile
+    assert "gsplat==1.5.3" in dockerfile
+    assert "kornia==0.7.4" in dockerfile
+    assert "fastapi==0.115.14" in dockerfile
+    assert "uvicorn[standard]==0.34.3" in dockerfile
+    assert "/workspace/VBOGS/Octree-AnyGS" in dockerfile
+    assert "EXPOSE 8070" in dockerfile
 
 
 def test_pipeline_compose_mounts_match_shared_stack_volumes():
     shared_targets = [
+        "/workspace/VBOGS",
         "/workspace/VBOGS/data",
         "/workspace/VBOGS/data/KITTI-360",
         "/workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore",
@@ -392,6 +444,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
         "docker/compose/compose.yml",
         "docker/compose/portainer.yml",
         "docker/compose/portainer-build.yml",
+        "docker/compose/portainer-local.yml",
     ):
         pipeline = service_block(
             (REPO_ROOT / compose_name).read_text(encoding="utf-8"),
@@ -401,6 +454,73 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
             assert f"target: {target}" in pipeline
 
 
+def test_stack_compose_files_do_not_bind_host_paths():
+    for compose_name in (
+        "docker/compose/compose.yml",
+        "docker/compose/portainer.yml",
+        "docker/compose/portainer-build.yml",
+        "docker/compose/portainer-local.yml",
+    ):
+        compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
+
+        assert "type: bind" not in compose_text
+        assert "/var/run/docker.sock" not in compose_text
+
+
+def test_vbgs_render_service_publishes_viewer_port():
+    expected_pythonpath = (
+        "PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS:"
+        "/workspace/VBOGS/vbgs:/workspace/gaussian-splatting"
+    )
+
+    for compose_name in (
+        "docker/compose/compose.yml",
+        "docker/compose/portainer.yml",
+        "docker/compose/portainer-build.yml",
+        "docker/compose/portainer-local.yml",
+    ):
+        compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
+        render = service_block(compose_text, "vbogs-vbgs-render")
+
+        assert "VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0" in render
+        assert "VBOGS_RENDER_VIEWER_HOST_PORT:-8071" in render
+        assert ":8070" in render
+        assert expected_pythonpath in render
+        assert "*vbogs-octree-anygs-mount" in render or "target: /data/OCTREE-ANYGS" in render
+
+
+def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
+    filebrowser_targets = [
+        "/srv/project",
+        "/srv/data",
+        "/srv/data/KITTI-360",
+        "/srv/data/NVIDIA-PhysicalAI-AV-NCore",
+        "/srv/outputs",
+        "/srv/generated_configs",
+        "/srv/COLMAP",
+        "/srv/OCTREE-ANYGS",
+    ]
+
+    for compose_name in (
+        "docker/compose/compose.yml",
+        "docker/compose/portainer.yml",
+        "docker/compose/portainer-build.yml",
+        "docker/compose/portainer-local.yml",
+    ):
+        compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
+        filebrowser = service_block(compose_text, "vbogs-filebrowser")
+
+        assert "vbogs-transfer:" not in compose_text
+        assert "filebrowser/filebrowser:v2-s6" in filebrowser
+        assert "VBOGS_FILEBROWSER_HOST_PORT:-8088" in filebrowser
+        assert "FB_DISABLE_EXEC" in filebrowser
+        assert "vbogs-filebrowser-database" in filebrowser
+        assert "vbogs-filebrowser-config" in filebrowser
+        for target in filebrowser_targets:
+            assert f"target: {target}" in filebrowser
+        assert filebrowser.count("read_only: true") >= len(filebrowser_targets)
+
+
 def test_portainer_compose_uses_portainer_config():
     portainer_compose = (REPO_ROOT / "docker/compose/portainer.yml").read_text(
         encoding="utf-8"
@@ -408,17 +528,34 @@ def test_portainer_compose_uses_portainer_config():
     portainer_build_compose = (
         REPO_ROOT / "docker/compose/portainer-build.yml"
     ).read_text(encoding="utf-8")
+    portainer_local_compose = (
+        REPO_ROOT / "docker/compose/portainer-local.yml"
+    ).read_text(encoding="utf-8")
     stack_env = (REPO_ROOT / "configs/docker/stack.env").read_text(encoding="utf-8")
 
     assert "configs/pipeline/portainer.yaml" in portainer_compose
     assert "configs/pipeline/portainer.yaml" in portainer_build_compose
+    assert "configs/pipeline/portainer.yaml" in portainer_local_compose
     assert "VBOGS_PIPELINE_CONFIG=configs/pipeline/portainer.yaml" in stack_env
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_compose
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_build_compose
+    assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility" in portainer_local_compose
     assert "VBOGS_GDRIVE_UPLOAD" in portainer_compose
     assert "VBOGS_GDRIVE_UPLOAD" in portainer_build_compose
+    assert "VBOGS_GDRIVE_UPLOAD" in portainer_local_compose
     assert "target: /workspace/VBOGS/outputs" in portainer_compose
     assert "target: /workspace/VBOGS/outputs" in portainer_build_compose
+    assert "target: /workspace/VBOGS/outputs" in portainer_local_compose
+    assert "VBOGS_FILEBROWSER_IMAGE=filebrowser/filebrowser:v2-s6" in stack_env
+    assert "VBOGS_FILEBROWSER_HOST_PORT=8088" in stack_env
+    assert "VBOGS_RENDER_VIEWER_HOST_BIND=0.0.0.0" in stack_env
+    assert "VBOGS_RENDER_VIEWER_HOST_PORT=8071" in stack_env
+    assert "VBOGS_TRANSFER_AUTHORIZED_KEYS" not in stack_env
+    assert "VBOGS_PIPELINE_AUTORUN" not in stack_env
+    assert "VBOGS_PIPELINE_ARGS" not in stack_env
+    assert "VBOGS_PIPELINE_AUTORUN" not in portainer_compose
+    assert "VBOGS_PIPELINE_AUTORUN" not in portainer_build_compose
+    assert "VBOGS_PIPELINE_AUTORUN" not in portainer_local_compose
 
 
 def test_portainer_build_compose_builds_local_images():
@@ -432,3 +569,18 @@ def test_portainer_build_compose_builds_local_images():
     assert "build: *vbogs-vbgs-render-build" in portainer_build_compose
     assert "build: *vbogs-pipeline-build" in portainer_build_compose
     assert "oakleyth/vbogs" not in portainer_build_compose
+    assert "VBOGS_GIT_URL" not in portainer_build_compose
+
+
+def test_portainer_local_compose_uses_cached_local_images():
+    portainer_local_compose = (
+        REPO_ROOT / "docker/compose/portainer-local.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "build:" not in portainer_local_compose
+    assert "pull_policy: never" in portainer_local_compose
+    assert "local/vbogs-torch" in portainer_local_compose
+    assert "local/vbogs-jax" in portainer_local_compose
+    assert "local/vbogs-vbgs-render" in portainer_local_compose
+    assert "local/vbogs-pipeline" in portainer_local_compose
+    assert "oakleyth/vbogs" not in portainer_local_compose

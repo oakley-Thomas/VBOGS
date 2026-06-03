@@ -21,19 +21,31 @@ bash scripts/build_stack_serial.sh vbogs-pipeline
 ## Start Local Development Containers
 
 Use the base compose file plus the local development overlay, which
-bind-mounts this checkout into the containers and maps local `outputs/` to
-`/workspace/VBOGS/outputs`.
+bind-mounts only this checkout into the containers. Generated artifacts stay in
+Docker volumes.
 
 ```bash
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
-docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml exec vbogs-pipeline bash
 ```
 
-From inside `vbogs-pipeline`, run the default configured pipeline:
+Run the default configured pipeline from the Docker host:
 
 ```bash
-python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-service-labels
+python scripts/run_drive_pipeline.py \
+  --config configs/pipeline/dev.yaml \
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
+
+Open project files and generated artifacts through File Browser:
+
+```text
+http://localhost:8088
+```
+
+Read the first-boot `admin` password from `docker compose ... logs
+vbogs-filebrowser`. The useful roots are `/project` and `/outputs`.
 
 ## Run a Full Drive
 
@@ -45,7 +57,9 @@ python scripts/run_drive_pipeline.py \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Stage order:
@@ -76,7 +90,9 @@ python scripts/run_drive_pipeline.py \
   --iterations 7000 \
   --max-points-per-frame 50000 \
   --render-max-views 2 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Config Profiles

@@ -30,7 +30,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Find the running `vbogs-jax` sibling through Docker Compose labels. "
-            "This is the normal mode from `vbogs-pipeline`."
+            "This mode requires host-side Docker CLI access."
         ),
     )
     parser.add_argument(
@@ -165,7 +165,7 @@ def docker_exec_prefix(args: argparse.Namespace) -> list[str]:
         )
     else:
         raise RuntimeError(
-            "Pass --use-service-labels from vbogs-pipeline, or pass "
+            "Pass --use-service-labels from the Docker host, or pass "
             "--jax-container with a concrete running JAX container name/id."
         )
     return ["docker", "exec", "-i", "-w", "/workspace/VBOGS", container]

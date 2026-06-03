@@ -24,6 +24,7 @@ To rebuild one service:
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
+bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
 
@@ -39,20 +40,36 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
-Then enter the pipeline container:
+Confirm GPU visibility from a stack container:
 
 ```bash
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  exec vbogs-pipeline bash
+  exec vbogs-pipeline nvidia-smi
 ```
 
-Inside the container, confirm GPU visibility:
+## Browse Files and Artifacts
+
+The stack starts a read-only File Browser sidecar for project files and
+artifacts:
+
+```text
+http://localhost:8088
+```
+
+On first boot, get the generated `admin` password from the service logs:
 
 ```bash
-nvidia-smi
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  logs vbogs-filebrowser
 ```
+
+Use `/project` for the checkout and `/outputs` for curated bundles and
+diagnostics. The same `vbogs-filebrowser` service is present in Portainer
+stacks; see [Portainer](../running/portainer.md) for server access settings.
 
 ## Download KITTI-360
 
@@ -108,8 +125,10 @@ Print the planned stage commands:
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0004_sync \
-  --use-service-labels \
-  --dry-run
+  --dry-run \
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 Quick end-to-end check:
@@ -128,22 +147,24 @@ python scripts/run_drive_pipeline.py \
   --iterations 7000 \
   --max-points-per-frame 50000 \
   --render-max-views 2 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Realtime Visualization
 
 After the smoke run has produced an Octree-AnyGS scene and `U.npy`, enter the
-Torch container from the host:
+render container from the host:
 
 ```bash
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  exec vbogs-torch bash
+  exec vbogs-vbgs-render bash
 ```
 
-Then start the browser viewer from inside `vbogs-torch`:
+Then start the browser viewer from inside `vbogs-vbgs-render`:
 
 ```bash
 python scripts/view_octree_anygs.py \
@@ -154,12 +175,14 @@ python scripts/view_octree_anygs.py \
 Open the viewer:
 
 ```text
-http://localhost:8070
+http://localhost:8071
 ```
 
-The dev compose overlay maps `${VBOGS_VIEWER_PORT:-8070}` on the host to port
-`8070` in `vbogs-torch`. Use `--rgb-only` when you only want to inspect the
-trained Octree-AnyGS scene before uncertainty artifacts exist:
+The compose stack maps
+`${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}`
+on the host to port `8070` in `vbogs-vbgs-render`. Use `--rgb-only` when you
+only want to inspect the trained Octree-AnyGS scene before uncertainty artifacts
+exist:
 
 ```bash
 python scripts/view_octree_anygs.py \

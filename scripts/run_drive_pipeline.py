@@ -3,7 +3,8 @@
 """Run the implemented VBOGS pipeline for one KITTI-360 drive.
 
 This is an orchestration script for the two-container Docker / Portainer stack.
-It can run from the host or from a stack-contained `vbogs-pipeline` service.
+Run it from the Docker host so it can call `docker compose` without mounting
+the host Docker socket into any VBOGS container.
 The framework boundary stays explicit:
 
 - `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
@@ -347,8 +348,8 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         action="store_true",
         help=(
             "Find sibling containers through Docker Compose labels and run "
-            "`docker exec` against them. This is the mode used by the "
-            "stack-contained `vbogs-pipeline` service."
+            "`docker exec` against them. This mode requires host-side Docker "
+            "CLI access."
         ),
     )
     parser.add_argument(
@@ -356,7 +357,8 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=os.environ.get("VBOGS_COMPOSE_PROJECT", ""),
         help=(
             "Compose project/Portainer stack label used with --use-service-labels. "
-            "Defaults to VBOGS_COMPOSE_PROJECT or auto-detects from this container."
+            "Defaults to VBOGS_COMPOSE_PROJECT or auto-detects from the current "
+            "container when Docker CLI access is available."
         ),
     )
     parser.add_argument(

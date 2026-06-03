@@ -1,8 +1,10 @@
 # Realtime Viewer
 
 The realtime viewer is a browser-based debug tool for trained Octree-AnyGS
-scenes. It runs in the `vbogs-torch` environment, keeps the scene loaded on the
-GPU, and streams server-rendered RGB and uncertainty frames to the browser.
+scenes. It can run in any Torch-capable VBOGS service, but the stack publishes
+the `vbogs-vbgs-render` service for browser access. The viewer keeps the scene
+loaded on the GPU and streams server-rendered RGB and uncertainty frames to the
+browser.
 
 This is intended for trusted local debugging, not as an authenticated public
 service. Bind it only on networks you trust.
@@ -24,7 +26,7 @@ Run the viewer:
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  exec vbogs-torch \
+  exec vbogs-vbgs-render \
   python scripts/view_octree_anygs.py \
     --drive 2013_05_28_drive_0007_sync \
     --resolution 4
@@ -33,11 +35,21 @@ docker compose --project-directory . \
 Open:
 
 ```text
-http://localhost:8070
+http://localhost:8071
 ```
 
-The dev compose overlay maps `${VBOGS_VIEWER_PORT:-8070}` on the host to port
-`8070` in the Torch container.
+The compose stack maps
+`${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}`
+on the host to port `8070` in `vbogs-vbgs-render`. For a remote Portainer
+server, open:
+
+```text
+http://<server-host>:8071
+```
+
+Change the host port with `VBOGS_RENDER_VIEWER_HOST_PORT` if `8071` is already
+in use. The local dev overlay still maps `${VBOGS_VIEWER_PORT:-8070}` to
+`vbogs-torch` for older Torch-container viewer workflows.
 
 ## Useful Modes
 
@@ -128,7 +140,7 @@ above:
 Render one arbitrary pose:
 
 ```bash
-curl -X POST http://localhost:8070/api/render \
+curl -X POST http://localhost:8071/api/render \
   -H 'Content-Type: application/json' \
   -d '{
     "camera_id": "test:0",
@@ -152,7 +164,7 @@ The API returns JSON with render metadata and a base64-encoded JPEG:
 Query rendered anchors and their uncertainty values:
 
 ```bash
-curl -X POST http://localhost:8070/api/rendered-anchors \
+curl -X POST http://localhost:8071/api/rendered-anchors \
   -H 'Content-Type: application/json' \
   -d '{
     "camera_id": "test:0",
@@ -184,7 +196,7 @@ Capture the first few training views through the API:
 
 ```bash
 python scripts/capture_viewer_api_views.py \
-  --base-url http://localhost:8070 \
+  --base-url http://localhost:8071 \
   --source train \
   --count 5 \
   --layer side_by_side
@@ -199,7 +211,8 @@ the full uncertainty totals, or `--skip-rendered-anchors` to capture only the
 rendered images.
 
 If you are running from the Docker dev stack, `outputs/` is a Docker volume, not
-your host checkout's `outputs/` directory. Copy captures back to the host with:
+a host checkout directory. Download captures through File Browser at
+`/outputs`, or copy them back to the host with:
 
 ```bash
 mkdir -p outputs/viewer_api_captures
@@ -207,7 +220,7 @@ mkdir -p outputs/viewer_api_captures
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  cp vbogs-torch:/workspace/VBOGS/outputs/viewer_api_captures/<drive> \
+  cp vbogs-vbgs-render:/workspace/VBOGS/outputs/viewer_api_captures/<drive> \
      outputs/viewer_api_captures/
 ```
 

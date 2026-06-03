@@ -4,7 +4,7 @@ This page describes the full curated run path for a KITTI-360 drive.
 
 ## Recommended Full Run
 
-From inside `vbogs-pipeline`:
+From the Docker host:
 
 ```bash
 python scripts/run_drive_pipeline.py \
@@ -15,7 +15,9 @@ python scripts/run_drive_pipeline.py \
   --start-at prepare \
   --stop-after bundle \
   --run-output-root outputs/v1_0 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 For the server/Portainer profile:
@@ -29,7 +31,8 @@ python scripts/run_drive_pipeline.py \
   --start-at prepare \
   --stop-after bundle \
   --run-output-root outputs/v1_0 \
-  --use-service-labels
+  --compose-file docker/compose/portainer.yml \
+  --compose-project-directory .
 ```
 
 ## Expected Outputs
@@ -89,7 +92,9 @@ python scripts/run_drive_pipeline.py \
   --iterations 7000 \
   --max-points-per-frame 50000 \
   --render-max-views 2 \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Before M7

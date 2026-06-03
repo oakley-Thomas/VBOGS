@@ -62,7 +62,9 @@ Run it with:
 ```bash
 python scripts/run_drive_pipeline.py \
   --config configs/pipeline/my-local.yaml \
-  --use-service-labels
+  --compose-file docker/compose/compose.yml \
+  --compose-file docker/compose/dev.yml \
+  --compose-project-directory .
 ```
 
 ## Dev vs Portainer Training Defaults
@@ -85,10 +87,8 @@ The compose stack reads these frequently used variables:
 
 | Variable | Use |
 | --- | --- |
-| `VBOGS_DRIVE` | Drive id for autorun |
-| `VBOGS_PIPELINE_AUTORUN` | Set to `1` to run pipeline on service start |
-| `VBOGS_PIPELINE_CONFIG` | Config path for autorun |
-| `VBOGS_PIPELINE_ARGS` | Extra CLI args for autorun |
+| `VBOGS_DRIVE` | Drive id used by manual upload helpers |
+| `VBOGS_PIPELINE_CONFIG` | Default config path available inside `vbogs-pipeline` |
 | `VBOGS_TORCH_IMAGE` | Torch image name |
 | `VBOGS_JAX_IMAGE` | JAX image name |
 | `VBOGS_VBGS_RENDER_IMAGE` | Base VBGS render image name |
@@ -97,8 +97,19 @@ The compose stack reads these frequently used variables:
 | `VBOGS_TORCH_MAX_JOBS` | Torch build parallelism |
 | `VBOGS_RENDER_CUDA_ARCH_LIST` | CUDA arch list for the base VBGS render image |
 | `VBOGS_RENDER_MAX_JOBS` | Base VBGS render image build parallelism |
+| `VBOGS_RENDER_VIEWER_HOST_BIND` | Host bind address for the browser viewer served from `vbogs-vbgs-render`, default `0.0.0.0` |
+| `VBOGS_RENDER_VIEWER_HOST_PORT` | Host HTTP port for the browser viewer served from `vbogs-vbgs-render`, default `8071` |
 | `VBOGS_GDRIVE_UPLOAD` | Enable post-run Google Drive upload |
-| `VBOGS_TRANSFER_AUTHORIZED_KEYS` | Enable read-only SSH/SFTP transfer service |
+| `VBOGS_FILEBROWSER_IMAGE` | File Browser sidecar image, default `filebrowser/filebrowser:v2-s6` |
+| `VBOGS_FILEBROWSER_HOST_BIND` | File Browser host bind address, default `0.0.0.0` |
+| `VBOGS_FILEBROWSER_HOST_PORT` | File Browser host HTTP port, default `8088` |
+| `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath for File Browser |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID overrides for File Browser database/config volumes |
+
+Pull-only and Portainer stacks share a `vbogs-repo` volume mounted at
+`/workspace/VBOGS`. Run `vbogs-bootstrap-repo` once after stack creation so the
+runtime services and File Browser see the same checkout. The local dev overlay
+bind-mounts only the working tree instead.
 
 ## Argument Reference
 
