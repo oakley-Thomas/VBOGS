@@ -1,0 +1,265 @@
+# Portainer build profile for a local Portainer Docker environment. This keeps
+# the Portainer volume layout, but builds VBOGS service images instead of
+# pulling Docker Hub tags. Portainer remote-agent environments may not support
+# compose stack build steps; use portainer-local.yml with prebuilt images there.
+
+x-vbogs-mounts:
+  repo: &vbogs-repo-mount
+    type: volume
+    source: vbogs-repo
+    target: /workspace/VBOGS
+  data: &vbogs-data-mount
+    type: volume
+    source: vbogs-data
+    target: /workspace/VBOGS/data
+  kitti360: &vbogs-kitti360-mount
+    type: volume
+    source: KITTI-360
+    target: /workspace/VBOGS/data/KITTI-360
+  nvidia-ncore: &vbogs-nvidia-ncore-mount
+    type: volume
+    source: NVIDIA-PhysicalAI-AV-NCore
+    target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+  outputs: &vbogs-outputs-mount
+    type: volume
+    source: vbogs-outputs
+    target: /workspace/VBOGS/outputs
+  generated-configs: &vbogs-generated-configs-mount
+    type: volume
+    source: vbogs-generated-configs
+    target: /workspace/VBOGS/generated_configs
+  colmap: &vbogs-colmap-mount
+    type: volume
+    source: COLMAP
+    target: /data/COLMAP
+  octree-anygs: &vbogs-octree-anygs-mount
+    type: volume
+    source: OCTREE-ANYGS
+    target: /data/OCTREE-ANYGS
+  torch-cache: &vbogs-torch-cache-mount
+    type: volume
+    source: vbogs-torch-cache
+    target: /root/.cache/torch
+
+x-vbogs-builds:
+  torch: &vbogs-torch-build
+    context: ../..
+    dockerfile: docker/torch.Dockerfile
+    args:
+      VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
+      VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
+  jax: &vbogs-jax-build
+    context: ../..
+    dockerfile: docker/jax.Dockerfile
+  vbgs-render: &vbogs-vbgs-render-build
+    context: ../..
+    dockerfile: docker/vbgs-render.Dockerfile
+    args:
+      VBOGS_RENDER_CUDA_ARCH_LIST: ${VBOGS_RENDER_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
+      VBOGS_RENDER_MAX_JOBS: ${VBOGS_RENDER_MAX_JOBS:-1}
+  pipeline: &vbogs-pipeline-build
+    context: ../..
+    dockerfile: docker/pipeline.Dockerfile
+
+services:
+  vbogs-torch:
+    image: ${VBOGS_TORCH_BUILD_IMAGE:-local/vbogs-torch}
+    pull_policy: build
+    build: *vbogs-torch-build
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS
+    volumes:
+      - *vbogs-repo-mount
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
+      - *vbogs-torch-cache-mount
+    command: sleep infinity
+
+  vbogs-jax:
+    image: ${VBOGS_JAX_BUILD_IMAGE:-local/vbogs-jax}
+    pull_policy: build
+    build: *vbogs-jax-build
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      JAX_PLATFORMS: cuda
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
+    volumes:
+      - *vbogs-repo-mount
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
+    command: sleep infinity
+
+  vbogs-vbgs-render:
+    image: ${VBOGS_VBGS_RENDER_BUILD_IMAGE:-local/vbogs-vbgs-render}
+    pull_policy: build
+    build: *vbogs-vbgs-render-build
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
+    ports:
+      - "${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}:8070"
+    volumes:
+      - *vbogs-repo-mount
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
+      - *vbogs-outputs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
+    command: sleep infinity
+
+  vbogs-pipeline:
+    image: ${VBOGS_PIPELINE_BUILD_IMAGE:-local/vbogs-pipeline}
+    pull_policy: build
+    build: *vbogs-pipeline-build
+    working_dir: /workspace/VBOGS
+    depends_on:
+      - vbogs-torch
+      - vbogs-jax
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VBOGS_DRIVE: ${VBOGS_DRIVE:-}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/portainer.yaml}
+      VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
+      VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
+      VBOGS_GDRIVE_DEST: ${VBOGS_GDRIVE_DEST:-}
+      VBOGS_GDRIVE_FOLDER_ID: ${VBOGS_GDRIVE_FOLDER_ID:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_FILE:-}
+      VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS: ${VBOGS_GDRIVE_SERVICE_ACCOUNT_CREDENTIALS:-}
+      VBOGS_GDRIVE_SCOPE: ${VBOGS_GDRIVE_SCOPE:-drive}
+      VBOGS_GDRIVE_SOURCE: ${VBOGS_GDRIVE_SOURCE:-}
+      VBOGS_GDRIVE_RCLONE_ARGS: ${VBOGS_GDRIVE_RCLONE_ARGS:-}
+      VBOGS_GDRIVE_DRY_RUN: ${VBOGS_GDRIVE_DRY_RUN:-0}
+    volumes:
+      - *vbogs-repo-mount
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+    command:
+      - sh
+      - -lc
+      - |
+        echo "vbogs-pipeline idle. Use vbogs-bootstrap-repo to fetch VBOGS into the shared repo volume, then run scripts/run_drive_pipeline.py from the Docker host."
+        sleep infinity
+
+  vbogs-filebrowser:
+    image: ${VBOGS_FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2-s6}
+    environment:
+      FB_ADDRESS: 0.0.0.0
+      FB_PORT: "80"
+      FB_ROOT: /srv
+      FB_DATABASE: /database/filebrowser.db
+      FB_BASEURL: ${VBOGS_FILEBROWSER_BASE_URL:-}
+      FB_DISABLE_EXEC: "true"
+      PUID: ${VBOGS_FILEBROWSER_PUID:-1000}
+      PGID: ${VBOGS_FILEBROWSER_PGID:-1000}
+    ports:
+      - "${VBOGS_FILEBROWSER_HOST_BIND:-0.0.0.0}:${VBOGS_FILEBROWSER_HOST_PORT:-8088}:80"
+    volumes:
+      - type: volume
+        source: vbogs-filebrowser-database
+        target: /database
+      - type: volume
+        source: vbogs-filebrowser-config
+        target: /config
+      - <<: *vbogs-repo-mount
+        target: /srv/project
+        read_only: true
+      - <<: *vbogs-data-mount
+        target: /srv/data
+        read_only: true
+      - <<: *vbogs-kitti360-mount
+        target: /srv/data/KITTI-360
+        read_only: true
+      - <<: *vbogs-nvidia-ncore-mount
+        target: /srv/data/NVIDIA-PhysicalAI-AV-NCore
+        read_only: true
+      - <<: *vbogs-outputs-mount
+        target: /srv/outputs
+        read_only: true
+      - <<: *vbogs-generated-configs-mount
+        target: /srv/generated_configs
+        read_only: true
+      - <<: *vbogs-colmap-mount
+        target: /srv/COLMAP
+        read_only: true
+      - <<: *vbogs-octree-anygs-mount
+        target: /srv/OCTREE-ANYGS
+        read_only: true
+
+volumes:
+  COLMAP:
+  OCTREE-ANYGS:
+  KITTI-360:
+    name: ${VBOGS_DATASETS_VOLUME:-KITTI-360}
+  NVIDIA-PhysicalAI-AV-NCore:
+    name: ${VBOGS_NVIDIA_NCORE_VOLUME:-NVIDIA-PhysicalAI-AV-NCore}
+  vbogs-repo:
+  vbogs-data:
+  vbogs-outputs:
+  vbogs-generated-configs:
+  vbogs-filebrowser-database:
+  vbogs-filebrowser-config:
+  vbogs-torch-cache:
