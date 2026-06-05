@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-"""Run the implemented VBOGS pipeline for one KITTI-360 drive.
+"""Run the implemented VBOGS pipeline for one scene.
 
-This is an orchestration script for the two-container Docker / Portainer stack.
-It can run from the host or from a stack-contained `vbogs-pipeline` service.
+This is the internal implementation behind ``scripts/run_pipeline.sh``. Run the
+operator entrypoint from inside ``vbogs-pipeline`` so it can resolve sibling
+containers and call ``docker exec`` through the mounted Docker socket.
 The framework boundary stays explicit:
 
 - `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
@@ -43,15 +44,21 @@ STAGES = (
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("configs/pipeline/default.yaml")
-DEFAULT_COMPOSE_FILE = Path("docker/compose/compose.yml")
-DEFAULT_COMPOSE_PROJECT_DIRECTORY = Path(".")
 CONFIG_KEY_MAP = {
+    "dataset": {
+        "name": "dataset_name",
+        "scene_id": "scene_id",
+        "ncore_root": "ncore_root",
+        "camera_ids": "camera_ids",
+        "point_source": "point_source",
+        "camera_depth_pair": "camera_depth_pair",
+        "lidar_id": "ncore_lidar_id",
+    },
     "pipeline": {
         "drive": "drive",
         "start_at": "start_at",
         "stop_after": "stop_after",
         "dry_run": "dry_run",
-        "skip_up": "skip_up",
     },
     "inputs": {
         "raw_root": "raw_root",
@@ -75,8 +82,16 @@ CONFIG_KEY_MAP = {
         "visible_threshold": "visible_threshold",
         "port": "train_port",
         "write_config_only": "write_config_only",
+        "skip_stack_check": "skip_stack_check",
     },
     "stereo": {
+        "matcher": "matcher",
+        "pixel_step": "pixel_step",
+        "max_points_per_frame": "max_points_per_frame",
+        "write_ply": "write_ply",
+    },
+    "points": {
+        "point_source": "point_source",
         "matcher": "matcher",
         "pixel_step": "pixel_step",
         "max_points_per_frame": "max_points_per_frame",
@@ -150,10 +165,6 @@ CONFIG_KEY_MAP = {
         "dry_run": "gdrive_dry_run",
     },
     "orchestration": {
-        "compose_command": "compose_command",
-        "compose_file": "compose_file",
-        "compose_project_directory": "compose_project_directory",
-        "project_name": "project_name",
         "torch_container": "torch_container",
         "jax_container": "jax_container",
         "use_service_labels": "use_service_labels",
@@ -229,39 +240,54 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--drive",
         default=None,
-        help="KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`.",
+        help=(
+            "Backward-compatible scene id alias. For KITTI-360 this is the drive "
+            "id, for example `2013_05_28_drive_0008_sync`."
+        ),
     )
-    parser.add_argument(
-        "--compose-command",
-        default="docker compose",
-        help="Compose command used on the host. Defaults to `docker compose`.",
+    dataset_group = parser.add_argument_group("dataset selection")
+    dataset_group.add_argument(
+        "--dataset-name",
+        choices=("kitti360", "nvidia_ncore"),
+        default="kitti360",
+        help="Dataset adapter used by the prepare and point-cloud stages.",
     )
-    parser.add_argument(
-        "--compose-file",
+    dataset_group.add_argument(
+        "--scene-id",
+        default=None,
+        help="Scene/clip id. Defaults to --drive for backward compatibility.",
+    )
+    dataset_group.add_argument(
+        "--ncore-root",
         type=Path,
+        default=None,
+        help="Root containing converted NVIDIA PhysicalAI AV NCore clips.",
+    )
+    dataset_group.add_argument(
+        "--camera-id",
+        dest="camera_ids",
         action="append",
         default=None,
         help=(
-            "Compose file for the VBOGS stack. Repeat to layer overlays, for "
-            "example `--compose-file docker/compose/compose.yml "
-            "--compose-file docker/compose/dev.yml`. Defaults to "
-            "`docker/compose/compose.yml`."
+            "NVIDIA NCore camera id to include. Repeat or pass comma-separated "
+            "ids. Defaults to camera_front_wide_120fov."
         ),
     )
-    parser.add_argument(
-        "--compose-project-directory",
-        type=Path,
-        default=DEFAULT_COMPOSE_PROJECT_DIRECTORY,
-        help=(
-            "Project directory for Docker Compose path resolution. Defaults to "
-            "the current directory so relocated compose files still resolve "
-            "build contexts and bind mounts from the repo root."
-        ),
+    dataset_group.add_argument(
+        "--point-source",
+        choices=("stereo", "lidar", "camera_depth"),
+        default=None,
+        help="Point source. Defaults to stereo for KITTI-360 and lidar for NVIDIA NCore.",
     )
-    parser.add_argument(
-        "--project-name",
-        default="",
-        help="Optional compose/Portainer stack project name passed as `-p`.",
+    dataset_group.add_argument(
+        "--camera-depth-pair",
+        default=None,
+        help="Comma-separated left,right NCore camera ids for camera_depth export.",
+    )
+    dataset_group.add_argument(
+        "--ncore-lidar-id",
+        default="lidar_top_360fov",
+        help="NCore LiDAR id used by lidar point export and sparse seeding.",
     )
     parser.add_argument(
         "--torch-container",
@@ -282,10 +308,11 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--use-service-labels",
         action="store_true",
+        default=True,
         help=(
             "Find sibling containers through Docker Compose labels and run "
-            "`docker exec` against them. This is the mode used by the "
-            "stack-contained `vbogs-pipeline` service."
+            "`docker exec` against them. Enabled by default for the "
+            "container-only pipeline entrypoint."
         ),
     )
     parser.add_argument(
@@ -293,13 +320,9 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=os.environ.get("VBOGS_COMPOSE_PROJECT", ""),
         help=(
             "Compose project/Portainer stack label used with --use-service-labels. "
-            "Defaults to VBOGS_COMPOSE_PROJECT or auto-detects from this container."
+            "Defaults to VBOGS_COMPOSE_PROJECT or auto-detects from the current "
+            "container when Docker CLI access is available."
         ),
-    )
-    parser.add_argument(
-        "--skip-up",
-        action="store_true",
-        help="Do not run `docker compose up -d` before executing stages.",
     )
     parser.add_argument(
         "--dry-run",
@@ -396,7 +419,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     )
     prep_group.add_argument(
         "--seed-mode",
-        choices=("stereo", "random"),
+        choices=("stereo", "lidar", "random"),
         default="stereo",
     )
 
@@ -431,8 +454,16 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         action="store_true",
         help="Generate the Octree-AnyGS config but skip training.",
     )
+    train_group.add_argument(
+        "--skip-stack-check",
+        action="store_true",
+        help=(
+            "Skip the Torch CUDA/gsplat preflight before launching Octree-AnyGS "
+            "training. Useful only for debugging a stuck preflight."
+        ),
+    )
 
-    stereo_group = parser.add_argument_group("stereo point cloud")
+    stereo_group = parser.add_argument_group("point-cloud export")
     stereo_group.add_argument(
         "--matcher",
         choices=("sgbm", "raft"),
@@ -449,7 +480,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--bucket-point-chunk-size",
         type=int,
         default=1_000_000,
-        help="Number of stereo points processed per bucketing chunk.",
+        help="Number of world points processed per bucketing chunk.",
     )
     bucket_group.add_argument(
         "--bucket-max-points",
@@ -659,8 +690,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     parser = build_parser(config_defaults)
     args = parser.parse_args(argv)
-    if not args.drive:
-        parser.error("--drive is required unless `pipeline.drive` is set in the config")
+    if not (args.scene_id or args.drive):
+        parser.error(
+            "--scene-id is required unless --drive or `pipeline.drive` is set in the config"
+        )
     return args
 
 
@@ -683,10 +716,36 @@ def maybe_option(flag: str, value: object | None) -> list[str]:
     return [flag, str(value)]
 
 
+def scene_id_arg(args: argparse.Namespace) -> str:
+    scene = args.scene_id or args.drive
+    if not scene:
+        raise ValueError("A scene id is required")
+    return str(scene)
+
+
+def effective_point_source(args: argparse.Namespace) -> str:
+    if args.point_source:
+        return str(args.point_source)
+    return "stereo" if args.dataset_name == "kitti360" else "lidar"
+
+
+def camera_id_args(camera_ids: object | None) -> list[str]:
+    if camera_ids is None or camera_ids == "":
+        return []
+    if isinstance(camera_ids, (str, Path)):
+        values = [str(camera_ids)]
+    else:
+        values = [str(value) for value in camera_ids]
+    result: list[str] = []
+    for value in values:
+        result.extend(["--camera-id", value])
+    return result
+
+
 def run_output_dir(args: argparse.Namespace) -> Path | None:
     if args.run_output_root is None:
         return None
-    return Path(args.run_output_root) / args.drive
+    return Path(args.run_output_root) / scene_id_arg(args)
 
 
 def derived_output_dir(
@@ -702,9 +761,10 @@ def derived_output_dir(
 
 
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
-    dataset_path = f"/data/COLMAP/{args.drive}"
+    scene = scene_id_arg(args)
+    dataset_path = f"/data/COLMAP/{scene}"
     selection_metadata = f"{dataset_path}/metadata.json"
-    bucket_root = f"data/m4/{args.drive}"
+    bucket_root = f"data/m4/{scene}"
     run_dir = run_output_dir(args)
     map_viz_output_dir = derived_output_dir(
         args.map_viz_output_dir,
@@ -715,21 +775,41 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     render_output_dir = derived_output_dir(args.render_output_dir, run_dir, "views")
     nbv_output_dir = derived_output_dir(args.nbv_output_dir, run_dir, "nbv")
 
-    prepare_cmd = (
-        "python",
-        "scripts/prepare_kitti360_colmap.py",
-        "--drive",
-        args.drive,
-        "--frame-step",
-        str(args.frame_step),
-        "--max-frames",
-        str(args.max_frames),
-        "--copy-mode",
-        args.copy_mode,
-        "--seed-mode",
-        args.seed_mode,
-        *maybe_path_args(args),
-    )
+    if args.dataset_name == "kitti360":
+        prepare_cmd = (
+            "python",
+            "scripts/prepare_kitti360_colmap.py",
+            "--drive",
+            scene,
+            "--frame-step",
+            str(args.frame_step),
+            "--max-frames",
+            str(args.max_frames),
+            "--copy-mode",
+            args.copy_mode,
+            "--seed-mode",
+            "stereo" if args.seed_mode == "lidar" else args.seed_mode,
+            *maybe_path_args(args),
+        )
+    else:
+        prepare_cmd = (
+            "python",
+            "scripts/prepare_nvidia_ncore_colmap.py",
+            "--scene-id",
+            scene,
+            "--frame-step",
+            str(args.frame_step),
+            "--max-frames",
+            str(args.max_frames),
+            "--copy-mode",
+            args.copy_mode,
+            "--seed-mode",
+            "lidar" if args.seed_mode == "stereo" else args.seed_mode,
+            "--lidar-id",
+            args.ncore_lidar_id,
+            *maybe_option("--ncore-root", args.ncore_root),
+            *camera_id_args(args.camera_ids),
+        )
 
     train_cmd = (
         "python",
@@ -737,7 +817,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--dataset-path",
         dataset_path,
         "--scene-name",
-        args.drive,
+        scene,
+        "--dataset-name",
+        args.dataset_name,
         "--gpu",
         str(args.gpu),
         "--resolution",
@@ -756,13 +838,18 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.visible_threshold),
         *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
+        *(("--skip-stack-check",) if args.skip_stack_check else ()),
     )
 
-    stereo_cmd = (
+    point_cmd = (
         "python",
-        "scripts/stereo_to_pointcloud.py",
-        "--drive",
-        args.drive,
+        "scripts/export_points_world.py",
+        "--dataset-name",
+        args.dataset_name,
+        "--scene-id",
+        scene,
+        "--point-source",
+        effective_point_source(args),
         "--selection-metadata",
         selection_metadata,
         "--matcher",
@@ -775,13 +862,17 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.max_frames),
         *(("--write-ply",) if args.write_ply else ()),
         *maybe_path_args(args),
+        *maybe_option("--ncore-root", args.ncore_root),
+        *camera_id_args(args.camera_ids),
+        *maybe_option("--camera-depth-pair", args.camera_depth_pair),
+        *maybe_option("--lidar-id", args.ncore_lidar_id),
     )
 
     bucket_cmd = (
         "python",
         "scripts/bucket_points.py",
         "--drive",
-        args.drive,
+        scene,
         "--iteration",
         str(args.bucket_iteration),
         "--point-chunk-size",
@@ -795,7 +886,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/fit_anchors.py",
         "--drive",
-        args.drive,
+        scene,
         "--device",
         str(args.jax_device),
         "--fit-mode",
@@ -818,7 +909,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/inspect_anchor_fits.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -835,7 +926,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/compute_uncertainty.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -848,7 +939,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/export_uncertainty_map.py",
         "--drive",
-        args.drive,
+        scene,
         "--bucket-root",
         bucket_root,
         "--posterior",
@@ -872,7 +963,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/render_uncertainty_views.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--model-path", args.model_path),
         "--uncertainty",
         f"{bucket_root}/U.npy",
@@ -894,7 +985,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/score_nbv.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--model-path", args.model_path),
         "--u-path",
         f"{bucket_root}/U.npy",
@@ -916,7 +1007,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/visualize_m6.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--m6-root", nbv_output_dir),
         *maybe_option("--output-dir", nbv_output_dir / "viz" if nbv_output_dir else None),
     )
@@ -925,7 +1016,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "python",
         "scripts/bundle_run_outputs.py",
         "--drive",
-        args.drive,
+        scene,
         *maybe_option("--run-output-dir", run_dir),
         *maybe_option("--map-viz-output-dir", map_viz_output_dir),
         *maybe_option("--render-output-dir", render_output_dir),
@@ -935,7 +1026,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     return [
         PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
-        PipelineStep("stereo", TORCH_SERVICE, stereo_cmd),
+        PipelineStep("stereo", TORCH_SERVICE, point_cmd),
         PipelineStep("bucket", TORCH_SERVICE, bucket_cmd),
         PipelineStep("fit", JAX_SERVICE, fit_cmd),
         PipelineStep("inspect", JAX_SERVICE, inspect_cmd),
@@ -959,25 +1050,6 @@ def selected_steps(
         raise ValueError("--start-at must be earlier than or equal to --stop-after")
     selected_names = set(STAGES[start_idx : stop_idx + 1])
     return [step for step in steps if step.name in selected_names]
-
-
-def normalize_compose_files(raw_value: object) -> list[Path]:
-    if raw_value is None or raw_value == "":
-        return [DEFAULT_COMPOSE_FILE]
-    if isinstance(raw_value, (str, Path)):
-        return [Path(raw_value)]
-    return [Path(value) for value in raw_value]
-
-
-def compose_base(args: argparse.Namespace) -> list[str]:
-    base = shlex.split(args.compose_command)
-    if args.compose_project_directory:
-        base.extend(["--project-directory", str(args.compose_project_directory)])
-    for compose_file in normalize_compose_files(args.compose_file):
-        base.extend(["-f", str(compose_file)])
-    if args.project_name:
-        base.extend(["-p", args.project_name])
-    return base
 
 
 def container_override(args: argparse.Namespace, service: str) -> str:
@@ -1012,6 +1084,28 @@ def current_container_project() -> str:
     if project == "<no value>":
         return ""
     return project
+
+
+def running_inside_container() -> bool:
+    if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(
+        marker in cgroup
+        for marker in ("docker", "containerd", "kubepods", "libpod")
+    )
+
+
+def require_container_runtime() -> None:
+    if running_inside_container():
+        return
+    raise RuntimeError(
+        "Host-side pipeline orchestration is disabled. Enter vbogs-pipeline "
+        "with `./dc_bash.sh`, then run `scripts/run_pipeline.sh ...`."
+    )
 
 
 def resolve_service_container(
@@ -1068,7 +1162,11 @@ def exec_prefix(args: argparse.Namespace, service: str) -> list[str]:
         project = args.label_project or current_container_project()
         container = resolve_service_container(service, project=project, dry_run=args.dry_run)
         return ["docker", "exec", "-i", "-w", "/workspace/VBOGS", container]
-    return [*compose_base(args), "exec", "-T", service]
+    raise RuntimeError(
+        "No container resolution mode is enabled. Use scripts/run_pipeline.sh "
+        "inside vbogs-pipeline, or pass explicit --torch-container and "
+        "--jax-container values."
+    )
 
 
 def shell_exec_command(script: str) -> tuple[str, ...]:
@@ -1083,17 +1181,6 @@ def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
     subprocess.run(cmd, check=True)
 
 
-def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
-    if args.skip_up or args.use_service_labels:
-        return
-    services = sorted(
-        {step.service for step in steps if not container_override(args, step.service)}
-    )
-    if not services:
-        return
-    run_command([*compose_base(args), "up", "-d", *services], dry_run=args.dry_run)
-
-
 def build_upload_command(args: argparse.Namespace) -> list[str]:
     cmd = [
         sys.executable,
@@ -1101,7 +1188,7 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
         "--config",
         str(args.config) if args.config is not None else "",
         "--drive",
-        args.drive,
+        scene_id_arg(args),
     ]
 
     if args.run_output_root is not None:
@@ -1127,13 +1214,14 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
 
 def main() -> None:
     args = parse_args()
+    require_container_runtime()
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
-    print(f"Drive: {args.drive}")
+    print(f"Dataset: {args.dataset_name}")
+    print(f"Scene: {scene_id_arg(args)}")
     print("Stages: " + ", ".join(step.name for step in steps))
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")
-    run_optional_up(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)
@@ -1151,3 +1239,6 @@ if __name__ == "__main__":
         main()
     except subprocess.CalledProcessError as exc:
         sys.exit(exc.returncode)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)

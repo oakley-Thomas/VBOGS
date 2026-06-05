@@ -1,122 +1,68 @@
 # Quickstart
 
-This page is the shortest path from a fresh checkout to a runnable VBOGS
-pipeline. Use it first, then jump into the detailed references when a stage
-needs tuning.
+This page explains how to get up and running with the VBOGS pipeline
 
 ## Prerequisites
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
-- Docker Compose v2.
-- The two submodules checked out: `Octree-AnyGS/` and `vbgs/`.
 
 ## Build
-
-The CUDA images are intentionally built serially. This avoids overlapping
-large CUDA wheel downloads and compiles on smaller local machines.
-
 ```bash
 bash scripts/build_stack_serial.sh
 ```
 
-To rebuild one service:
+**IMPORTANT NOTE:** by default, ```scripts/build_stack_serial.sh``` will compile ```gsplat``` against the CUDA architecture on the machine that builds the images. If you intend to deploy on a different CUDA architecture, you need to specify the supported versions using ```--cuda-arch-list```.
 
+```bash
+# Example - supports RTX 5080 (sm_12.0) and RTX Quadro 8000 (sm_7.5)
+bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;12.0'
+```
+
+To rebuild one service:
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
+bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
+Use `--no-cache` to rebuild from scratch
 
-## Start Local Containers
+## Running Local Compose Stacks
 
-Use the base compose file plus the dev overlay. The dev overlay bind-mounts
-this checkout; generated artifacts stay in Docker volumes.
+The dev overlay bind-mounts the local VBOGS code checkout.
 
+**Start the stack:**
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  up -d --no-build
+./dc_up.sh
+```
+**Stop the stack:**
+```bash
+./dc_down.sh
+```
+**Enter a container:**
+```bash
+./dc_bash.sh # Default entrypoint is vbogs-pipeline container
+
+# To enter another container pass it as an argument
+# Example:
+# ./dc_bash.sh vbogs-jax
 ```
 
-Then enter the pipeline container:
+## Running Remote Compose Stack
+Coming Soon!
+
+## Downloading the Datasets
+
+VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset. Follow the instructions [here](data.md).
+
+
+
+## KITTI-360 Test Run
+
+From inside `vbogs-pipeline`, run a quick end-to-end check:
 
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline bash
-```
-
-Inside the container, confirm GPU visibility:
-
-```bash
-nvidia-smi
-```
-
-## Download KITTI-360
-
-VBOGS expects the KITTI-360 perspective stereo images, camera poses, and
-calibration files in the container at `/workspace/VBOGS/data/KITTI-360`. In the
-compose stack, that path is backed by the `KITTI-360` external Docker volume.
-
-From [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
-accept the dataset terms and get the official **KITTI-360 download links** for 
-
-1.) Calibrations
-
-2.) Vehicle Poses 
-
-3.) Left/Right perspective images ("Test SLAM" recommended)
-
-
-Run the downloader from the interactive `vbogs-pipeline` container shell:
-
-```bash
-export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
-export KITTI_POSES_LINK='https://.../data_poses.zip'
-export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
-
-bash scripts/download_kitti_360.sh
-```
-
-Use the `scripts/` path inside Docker so the helper comes from this checkout;
-`/workspace/VBOGS/data` is a persistent volume.
-
-The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the linked
-left and right perspective image archive, extracts all archives, and
-normalizes them into the layout VBOGS expects:
-
-```text
-/workspace/VBOGS/data/KITTI-360/
-  calibration/
-    perspective.txt
-  data_poses/
-    2013_05_28_drive_0007_sync/
-      cam0_to_world.txt
-  images/
-    2013_05_28_drive_0007_sync/
-      image_00/data_rect/
-      image_01/data_rect/
-```
-
-## Test Runs
-
-Print the planned stage commands:
-
-```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
-  --drive 2013_05_28_drive_0004_sync \
-  --use-service-labels \
-  --dry-run
-```
-
-Quick end-to-end check:
-
-```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0004_sync \
   --gpu 0 \
   --jax-device 0 \
@@ -127,46 +73,53 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --use-service-labels
+  --render-max-views 2
 ```
 
-## Realtime Visualization
-
-After the smoke run has produced an Octree-AnyGS scene and `U.npy`, enter the
-Torch container from the host:
+For a full run:
 
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-torch bash
-```
-
-Then start the browser viewer from inside `vbogs-torch`:
-
-```bash
-python scripts/view_octree_anygs.py \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0004_sync \
-  --resolution 4
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after bundle
 ```
 
-Open the viewer:
+## Realtime Navigation and Visualization
 
-```text
-http://localhost:8070
-```
+Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Map
 
-The dev compose overlay maps `${VBOGS_VIEWER_PORT:-8070}` on the host to port
-`8070` in `vbogs-torch`. Use `--rgb-only` when you only want to inspect the
-trained Octree-AnyGS scene before uncertainty artifacts exist:
-
+Enter the render server container
 ```bash
+# Enter the container
+./dc_bash vbogs-vbgs-render
+
+# Start the render server
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
   --resolution 1
 ```
 
+In a browser visit: 
+```http://localhost:8071```
+
 For more options, including explicit model paths, pose teleport, REST API
 usage, rendered-anchor uncertainty queries, and capture scripts, see
 [Realtime Viewer](../running/realtime-viewer.md).
+
+
+## Browse Files and Artifacts
+
+Open the web-based file browser
+
+```text
+http://localhost:8088
+```
+
+From ```vbogs-pipeline``` get the filebrowser credentials
+
+```bash
+python scripts/get_filebrowser_login.py --reset-password
+```

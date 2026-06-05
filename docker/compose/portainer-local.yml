@@ -1,3 +1,6 @@
+# Portainer local-image profile. Build the VBOGS images on the Docker host
+# outside Portainer, then deploy this stack without any compose build steps.
+
 x-vbogs-mounts:
   repo: &vbogs-repo-mount
     type: volume
@@ -39,12 +42,7 @@ x-vbogs-mounts:
 services:
   vbogs-torch:
     image: ${VBOGS_TORCH_IMAGE:-local/vbogs-torch}
-    build:
-      context: .
-      dockerfile: docker/torch.Dockerfile
-      args:
-        VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
-        VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
+    pull_policy: never
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -71,9 +69,7 @@ services:
 
   vbogs-jax:
     image: ${VBOGS_JAX_IMAGE:-local/vbogs-jax}
-    build:
-      context: .
-      dockerfile: docker/jax.Dockerfile
+    pull_policy: never
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -89,37 +85,18 @@ services:
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/vbgs
     volumes:
       - *vbogs-repo-mount
-      - type: volume
-        source: vbogs-data
-        target: /workspace/VBOGS/data
-      - type: volume
-        source: KITTI-360
-        target: /workspace/VBOGS/data/KITTI-360
-      - type: volume
-        source: NVIDIA-PhysicalAI-AV-NCore
-        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
-      - type: volume
-        source: vbogs-outputs
-        target: /workspace/VBOGS/outputs
-      - type: volume
-        source: vbogs-generated-configs
-        target: /workspace/VBOGS/generated_configs
-      - type: volume
-        source: COLMAP
-        target: /data/COLMAP
-      - type: volume
-        source: OCTREE-ANYGS
-        target: /data/OCTREE-ANYGS
+      - *vbogs-data-mount
+      - *vbogs-kitti360-mount
+      - *vbogs-nvidia-ncore-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+      - *vbogs-octree-anygs-mount
     command: sleep infinity
 
   vbogs-vbgs-render:
     image: ${VBOGS_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}
-    build:
-      context: .
-      dockerfile: docker/vbgs-render.Dockerfile
-      args:
-        VBOGS_RENDER_CUDA_ARCH_LIST: ${VBOGS_RENDER_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
-        VBOGS_RENDER_MAX_JOBS: ${VBOGS_RENDER_MAX_JOBS:-1}
+    pull_policy: never
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -146,9 +123,7 @@ services:
 
   vbogs-pipeline:
     image: ${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}
-    build:
-      context: .
-      dockerfile: docker/pipeline.Dockerfile
+    pull_policy: never
     working_dir: /workspace/VBOGS
     depends_on:
       - vbogs-torch
@@ -162,7 +137,7 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       VBOGS_DRIVE: ${VBOGS_DRIVE:-}
-      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/default.yaml}
+      VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/portainer.yaml}
       VBOGS_GDRIVE_UPLOAD: ${VBOGS_GDRIVE_UPLOAD:-0}
       VBOGS_GDRIVE_REMOTE: ${VBOGS_GDRIVE_REMOTE:-vbogs_gdrive}
       VBOGS_GDRIVE_DEST: ${VBOGS_GDRIVE_DEST:-}

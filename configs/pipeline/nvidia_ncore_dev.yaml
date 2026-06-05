@@ -1,13 +1,24 @@
-# Explicit 3D baseline experiment: conservative local full pipeline.
+# Local development profile for NVIDIA PhysicalAI AV clips converted to NCore.
+#
+# The clip id must match a converted NCore sequence under `dataset.ncore_root`.
+
+dataset:
+  name: nvidia_ncore
+  scene_id: pai_example_clip
+  ncore_root: null
+  camera_ids:
+    - camera_front_wide_120fov
+  point_source: lidar
+  camera_depth_pair: camera_front_wide_120fov,camera_front_tele_30fov
+  lidar_id: lidar_top_360fov
 
 pipeline:
-  drive: 2013_05_28_drive_0007_sync
   start_at: prepare
   stop_after: bundle
   dry_run: false
 
 outputs:
-  run_root: outputs/experiments/exp02_explicit3d_baseline
+  run_root: outputs/v1_0
 
 inputs:
   raw_root: null
@@ -15,15 +26,15 @@ inputs:
   calibration_dir: null
 
 prepare:
-  frame_step: 1
-  max_frames: 1000
-  copy_mode: symlink
-  seed_mode: stereo
+  frame_step: 2
+  max_frames: 200
+  copy_mode: copy
+  seed_mode: lidar
 
 train:
   gpu: "0"
   resolution: 4
-  iterations: 120000
+  iterations: 30000
   llffhold: 8
   gaussian_type: explicit3D
   feat_dim: 16
@@ -31,10 +42,10 @@ train:
   visible_threshold: 0.02
   write_config_only: false
 
-stereo:
+points:
   matcher: sgbm
-  pixel_step: 1
-  max_points_per_frame: 300000
+  pixel_step: 2
+  max_points_per_frame: 100000
   write_ply: true
 
 bucket:
@@ -62,7 +73,7 @@ uncertainty:
 
 render:
   split: both
-  resolution: 1
+  resolution: 2
   max_views: 0
   colormap: turbo
   vmin: null

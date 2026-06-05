@@ -44,8 +44,8 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     )
     parser.add_argument(
         "--drive",
-        default=defaults.get("drive"),
-        help="KITTI-360 drive id. Defaults to `pipeline.drive` from --config.",
+        default=defaults.get("drive") or defaults.get("scene_id"),
+        help="Scene/drive id. Defaults to `pipeline.drive` or `dataset.scene_id` from --config.",
     )
     parser.add_argument(
         "--run-output-root",

@@ -43,3 +43,20 @@ def resolve_kitti360_path(explicit_path: Path | None, *, kind: str) -> Path:
             return candidate
 
     return _candidate_paths(kind)[0]
+
+
+def resolve_nvidia_ncore_root(explicit_path: Path | None) -> Path:
+    """Resolve the NVIDIA PhysicalAI AV NCore data root."""
+
+    if explicit_path is not None:
+        return explicit_path
+
+    candidates = [
+        Path("data/NVIDIA-PhysicalAI-AV-NCore"),
+        Path("data/NVIDIA-PhysicalAI-Autonomous-Vehicles-NCore"),
+        Path("data/nvidia_ncore"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]

@@ -30,7 +30,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Find the running `vbogs-jax` sibling through Docker Compose labels. "
-            "This is the normal mode from `vbogs-pipeline`."
+            "This mode requires Docker CLI access, usually from vbogs-pipeline."
         ),
     )
     parser.add_argument(

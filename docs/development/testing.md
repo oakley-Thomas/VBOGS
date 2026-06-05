@@ -40,12 +40,8 @@ docker compose --project-directory . \
 Pipeline dry run:
 
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
-  --use-service-labels \
   --dry-run
 ```
 

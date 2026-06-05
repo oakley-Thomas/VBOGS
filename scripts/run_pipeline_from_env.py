@@ -65,19 +65,13 @@ def upload_cmd(config: str, drive: str | None) -> list[str]:
 
 def pipeline_cmd(config: str, drive: str | None) -> list[str]:
     cmd = [
-        sys.executable,
-        "scripts/run_drive_pipeline.py",
+        "scripts/run_pipeline.sh",
         "--config",
         config,
-        "--use-service-labels",
     ]
 
     if drive:
         cmd.extend(["--drive", drive])
-
-    extra_args = os.environ.get("VBOGS_PIPELINE_ARGS", "")
-    if extra_args:
-        cmd.extend(shlex.split(extra_args))
 
     if truthy(os.environ.get("VBOGS_GDRIVE_UPLOAD")):
         cmd.append("--upload-google-drive")

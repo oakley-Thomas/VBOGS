@@ -370,6 +370,32 @@ def parse_cam0_to_world(path: Path) -> dict[int, np.ndarray]:
     return poses
 
 
+def parse_ncore_metadata_poses(path: Path) -> tuple[list[int], dict[int, np.ndarray]] | None:
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    if metadata.get("dataset") != "nvidia_ncore":
+        return None
+    frame_records = metadata.get("frame_records")
+    if not isinstance(frame_records, list) or not frame_records:
+        return None
+
+    frame_ids: list[int] = []
+    poses_by_frame: dict[int, np.ndarray] = {}
+    for record in frame_records:
+        if not isinstance(record, dict):
+            continue
+        frame_id = int(record["frame_id"])
+        primary_camera_id = str(record.get("primary_camera_id") or metadata.get("primary_camera_id"))
+        cameras = record.get("cameras")
+        if not isinstance(cameras, dict) or primary_camera_id not in cameras:
+            continue
+        c2w = np.asarray(cameras[primary_camera_id]["c2w"], dtype=np.float64).reshape(4, 4)
+        frame_ids.append(frame_id)
+        poses_by_frame[frame_id] = c2w
+    if not frame_ids:
+        return None
+    return frame_ids, poses_by_frame
+
+
 def build_trajectory_rows(
     frame_ids: list[int],
     poses_by_frame: dict[int, np.ndarray],
@@ -437,6 +463,23 @@ def export_camera_trajectory(
     selection_metadata: Path,
     poses_root: Path | None,
 ) -> dict[str, Any]:
+    ncore_trajectory = parse_ncore_metadata_poses(selection_metadata)
+    if ncore_trajectory is not None:
+        frame_ids, poses_by_frame = ncore_trajectory
+        vertex_rows, edge_rows = build_trajectory_rows(frame_ids, poses_by_frame)
+        trajectory_path = output_dir / "camera_trajectory.ply"
+        write_trajectory_ply(trajectory_path, vertex_rows, edge_rows)
+        return {
+            "trajectory_path": str(trajectory_path),
+            "selection_metadata": str(selection_metadata),
+            "poses_path": None,
+            "camera_count": int(vertex_rows.shape[0]),
+            "edge_count": int(edge_rows.shape[0]),
+            "first_frame_id": int(frame_ids[0]),
+            "last_frame_id": int(frame_ids[-1]),
+            "dataset": "nvidia_ncore",
+        }
+
     resolved_poses_root = resolve_kitti360_path(poses_root, kind="poses")
     poses_path = resolved_poses_root / drive / "cam0_to_world.txt"
     frame_ids = load_selected_frames(selection_metadata)

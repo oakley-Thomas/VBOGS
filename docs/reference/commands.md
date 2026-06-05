@@ -19,6 +19,14 @@ Build every image:
 bash scripts/build_stack_serial.sh
 ```
 
+Build Torch/render CUDA extensions for both RTX 5080 and Quadro RTX 8000:
+
+```bash
+bash scripts/build_stack_serial.sh \
+  --cuda-arch-list '7.5;12.0' \
+  vbogs-torch vbogs-vbgs-render
+```
+
 Build one image:
 
 ```bash
@@ -26,6 +34,13 @@ bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
 bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
+```
+
+Force a rebuild without Docker layer cache:
+
+```bash
+bash scripts/build_stack_serial.sh --no-cache
+bash scripts/build_stack_serial.sh --force vbogs-torch vbogs-jax
 ```
 
 Start the local dev stack:
@@ -46,6 +61,12 @@ docker compose --project-directory . \
   exec vbogs-pipeline bash
 ```
 
+Bootstrap a non-dev stack checkout from inside `vbogs-pipeline`:
+
+```bash
+vbogs-bootstrap-repo
+```
+
 Check GPU visibility:
 
 ```bash
@@ -55,13 +76,13 @@ docker compose --project-directory . \
   exec vbogs-pipeline nvidia-smi
 ```
 
-Start the realtime Octree-AnyGS viewer from the Torch container:
+Start the realtime Octree-AnyGS viewer from the published render container:
 
 ```bash
 docker compose --project-directory . \
   -f docker/compose/compose.yml \
   -f docker/compose/dev.yml \
-  exec vbogs-torch \
+  exec vbogs-vbgs-render \
   python scripts/view_octree_anygs.py \
     --drive 2013_05_28_drive_0007_sync \
     --resolution 4
@@ -72,30 +93,28 @@ docker compose --project-directory . \
 Dry run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
-  --use-service-labels \
   --dry-run
 ```
 
 Full run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
-  --stop-after bundle \
-  --use-service-labels
+  --stop-after bundle
 ```
 
 Small smoke run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
@@ -107,8 +126,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --use-service-labels
+  --render-max-views 2
 ```
 
 ## Direct Stage Entry Points
@@ -133,11 +151,23 @@ python scripts/train_octree_anygs.py \
   --iterations 30000
 ```
 
-Export stereo points:
+Prepare NVIDIA NCore into COLMAP layout:
 
 ```bash
-python scripts/stereo_to_pointcloud.py \
-  --drive 2013_05_28_drive_0007_sync \
+python scripts/prepare_nvidia_ncore_colmap.py \
+  --scene-id <clip-id> \
+  --camera-id camera_front_wide_120fov \
+  --frame-step 2 \
+  --max-frames 200
+```
+
+Export world points:
+
+```bash
+python scripts/export_points_world.py \
+  --dataset-name kitti360 \
+  --scene-id 2013_05_28_drive_0007_sync \
+  --point-source stereo \
   --matcher sgbm \
   --pixel-step 1 \
   --max-points-per-frame 100000 \
@@ -170,7 +200,7 @@ python scripts/compute_uncertainty.py \
   --drive 2013_05_28_drive_0007_sync
 ```
 
-Run the original global VBGS KITTI baseline from `vbogs-pipeline`:
+Run the original global VBGS KITTI baseline from inside `vbogs-pipeline`:
 
 ```bash
 python scripts/run_vbgs_kitti_baseline.py \
@@ -178,8 +208,8 @@ python scripts/run_vbgs_kitti_baseline.py \
   --use-service-labels
 ```
 
-`vbogs-pipeline` only orchestrates this command. The actual JAX/VBGS fit runs
-inside the sibling `vbogs-jax` container and writes artifacts under
+This wrapper uses Docker CLI access to run the actual JAX/VBGS fit inside the
+`vbogs-jax` container and writes artifacts under
 `outputs/vbgs_baseline/<drive>/` by default. Use `--input-mode bucket` to force the
 same normalized points as VBOGS, or `--input-mode stereo` to train directly from
 `data/points_world/<drive>/points_world.npz`.

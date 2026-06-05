@@ -10,15 +10,18 @@ data/KITTI-360/
   data_poses/<drive>/cam0_to_world.txt
   images/<drive>/image_00/data_rect/*.png
   images/<drive>/image_01/data_rect/*.png
+
+data/NVIDIA-PhysicalAI-AV-NCore/
+  <clip-or-sequence>/...
 ```
 
 ## Prepared Octree-AnyGS Data
 
 Stage: `prepare`  
-Default path: `/data/COLMAP/<drive>/`
+Default path: `/data/COLMAP/<scene-id>/`
 
 ```text
-/data/COLMAP/<drive>/
+/data/COLMAP/<scene-id>/
   images/
     *.png
   sparse/0/
@@ -31,7 +34,7 @@ Default path: `/data/COLMAP/<drive>/`
 ## Octree-AnyGS Training Runs
 
 Stage: `train`  
-Default path: `/data/OCTREE-ANYGS/<drive>/<timestamp>/`
+Default path: `/data/OCTREE-ANYGS/<scene-id>/<timestamp>/`
 
 Important files:
 
@@ -41,13 +44,13 @@ input.ply
 point_cloud/iteration_<N>/point_cloud_anchor.ply
 ```
 
-`bucket` defaults to the latest run directory under `/data/OCTREE-ANYGS/<drive>`.
+`bucket` defaults to the latest run directory under `/data/OCTREE-ANYGS/<scene-id>`.
 Use `--model-path` to pin a specific run.
 
-## Stereo Point Cloud
+## World Point Cloud
 
 Stage: `stereo`  
-Default path: `data/points_world/<drive>/`
+Default path: `data/points_world/<scene-id>/`
 
 ```text
 points_world.npz
@@ -60,8 +63,8 @@ metadata.json
 | Key | Meaning |
 | --- | --- |
 | `xyz` | World-frame positions |
-| `rgb` | RGB values from the left image |
-| `frame_id` | Source KITTI-360 frame id |
+| `rgb` | RGB values from the source image/projection |
+| `frame_id` | Source frame id in the dataset adapter |
 
 ## Bucketing and Normalization
 

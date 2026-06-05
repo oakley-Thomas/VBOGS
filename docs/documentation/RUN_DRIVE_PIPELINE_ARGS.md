@@ -1,21 +1,22 @@
-# `scripts/run_drive_pipeline.py` arguments
+# `scripts/run_pipeline.sh` arguments
 
-`scripts/run_drive_pipeline.py` orchestrates the implemented VBOGS stages across
-the Docker Compose stack. Torch stages run in `vbogs-torch`; JAX stages run in
-`vbogs-jax`. Values in `configs/pipeline/default.yaml` become defaults, and
-explicit CLI arguments override the config.
+`scripts/run_pipeline.sh` is the container-side operator entry point. Run it
+from inside `vbogs-pipeline`; it forwards arguments to the internal Python
+runner, which orchestrates implemented VBOGS stages across the Docker Compose
+stack. Torch stages run in `vbogs-torch`; JAX stages run in `vbogs-jax`.
+Values in `configs/pipeline/default.yaml` become defaults, and explicit CLI
+arguments override the config.
 
 Common full-pipeline command from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --run-output-root outputs/v1_0 \
-  --use-service-labels
+  --run-output-root outputs/v1_0
 ```
 
 Use `--dry-run` to print the commands that would be run without launching the
@@ -29,6 +30,7 @@ Use the profile config that matches where the stack is running:
 | --- | --- | --- |
 | `configs/pipeline/dev.yaml` | Local Docker Compose development stack | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
 | `configs/pipeline/portainer.yaml` | Portainer deployment | `outputs/v1_0/<drive>/` inside the `vbogs-outputs` Docker volume |
+| `configs/pipeline/nvidia_ncore_dev.yaml` | NVIDIA PhysicalAI AV NCore development | `outputs/v1_0/<scene-id>/` |
 | `configs/pipeline/default.yaml` | Backward-compatible default | Depends on the active compose mounts |
 
 For local development, use the base compose file plus the dev overlay, which
@@ -39,10 +41,12 @@ artifacts in Docker volumes:
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 ```
 
-From inside `vbogs-pipeline`, run the local-dev profile with:
+Enter `vbogs-pipeline`, then run the local-dev profile with:
 
 ```bash
-python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-service-labels
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
 
 ## Pipeline Selection
@@ -50,7 +54,13 @@ python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-se
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--config CONFIG` | `configs/pipeline/default.yaml` | YAML file used for defaults. Pass an empty string (`--config ""`) to disable config loading. |
-| `--drive DRIVE` | Config: `pipeline.drive` | KITTI-360 drive id, for example `2013_05_28_drive_0008_sync`. Required if not set in config. |
+| `--dataset-name {kitti360,nvidia_ncore}` | Config: `dataset.name`; parser: `kitti360` | Dataset adapter used by `prepare` and point-cloud export. |
+| `--scene-id SCENE_ID` | Config: `dataset.scene_id` | Dataset scene/clip id. Defaults to `--drive` for backward compatibility. |
+| `--drive DRIVE` | Config: `pipeline.drive` | Backward-compatible scene id alias. For KITTI-360 this is the drive id. |
+| `--ncore-root NCORE_ROOT` | Config: `dataset.ncore_root` | Root containing converted NVIDIA NCore clips. |
+| `--camera-id CAMERA_ID` | Config: `dataset.camera_ids` | NVIDIA camera id. Repeat or pass comma-separated ids. |
+| `--point-source {stereo,lidar,camera_depth}` | Config: `dataset.point_source` or `points.point_source` | Point source. Defaults to `stereo` for KITTI-360 and `lidar` for NVIDIA NCore. |
+| `--camera-depth-pair LEFT,RIGHT` | Config: `dataset.camera_depth_pair` | NVIDIA camera pair used by `camera_depth`. |
 | `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
 | `--stop-after {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | Parser: `inspect`; profile configs usually use `bundle` | Last stage to run. Use `bundle` for the full curated run output. |
 | `--run-output-root RUN_OUTPUT_ROOT` | Config: `outputs.run_root` | Optional root for curated outputs. When set, stage outputs are derived under `<root>/<drive>/`. |
@@ -66,15 +76,10 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--compose-command COMPOSE_COMMAND` | `docker compose` | Compose command used when running from the host. |
-| `--compose-file COMPOSE_FILE` | `docker/compose/compose.yml` | Compose file used when running from the host. Repeat it to layer overlays such as `docker/compose/dev.yml`. |
-| `--compose-project-directory COMPOSE_PROJECT_DIRECTORY` | `.` | Project directory used by Docker Compose to resolve relative paths in relocated compose files. |
-| `--project-name PROJECT_NAME` | Empty | Optional Compose/Portainer stack project name passed as `-p`. |
 | `--torch-container TORCH_CONTAINER` | Empty | Concrete container name/id for Torch stages. When set, the runner uses `docker exec` instead of `docker compose exec` for Torch. |
 | `--jax-container JAX_CONTAINER` | Empty | Concrete container name/id for JAX stages. When set, the runner uses `docker exec` instead of `docker compose exec` for JAX. |
-| `--use-service-labels` | `false` | Resolve sibling containers by Docker Compose labels. Use this from inside `vbogs-pipeline`. |
-| `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. Usually unnecessary inside the stack. |
-| `--skip-up` | `false` | Do not run `docker compose up -d` before executing selected stages. Automatically skipped with `--use-service-labels`. |
+| `--use-service-labels` | `true` | Resolve containers by Docker Compose labels and use `docker exec`. This is the default container-side mode. |
+| `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. |
 
 The `vbogs-pipeline` service is also GPU-enabled, so after the stack is
 running you can check host GPU visibility from the pipeline container:
@@ -86,10 +91,9 @@ docker compose --project-directory . -f docker/compose/compose.yml -f docker/com
 ## Google Drive Upload
 
 The pipeline image includes `rclone` and `scripts/upload_google_drive.py`.
-Pass `--upload-google-drive` to `scripts/run_drive_pipeline.py`, set
-`upload.enabled: true` in the pipeline config, or set `VBOGS_GDRIVE_UPLOAD=1`
-for `scripts/run_pipeline_from_env.py`. The upload runs after all selected
-stages succeed. By default the source is:
+Pass `--upload-google-drive` to `scripts/run_pipeline.sh` or set
+`upload.enabled: true` in the pipeline config. The upload runs after all
+selected stages succeed. By default the source is:
 
 ```text
 outputs/v1_0/<drive>.zip
@@ -151,52 +155,53 @@ python scripts/upload_google_drive.py \
   --service-account-file /run/secrets/vbogs-google-drive-service-account.json
 ```
 
-## SSH/SFTP Downloads from Portainer
+## Realtime Renderer Viewer
 
-The pipeline image also includes an optional SSH/SFTP transfer mode for pulling
-artifacts from a Portainer deployment without direct host filesystem access. The
-Portainer compose file runs this as a separate `vbogs-transfer` service using
-the same lightweight pipeline image. It stays idle unless an SSH public key is
-provided, disables password login, does not mount the Docker socket, and mounts
-the VBOGS data/output mounts read-only.
-
-Create a local key if you do not already have one:
+The compose stack publishes `vbogs-vbgs-render` for browser-based RGB and
+uncertainty inspection after the scene and uncertainty artifacts exist. Start
+the viewer inside `vbogs-vbgs-render`:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/vbogs_portainer
+python scripts/view_octree_anygs.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --resolution 4
 ```
 
-Then set this Portainer stack environment variable and redeploy:
+The default host URL is:
 
-```bash
-VBOGS_TRANSFER_AUTHORIZED_KEYS=<contents-of-~/.ssh/vbogs_portainer.pub>
+```text
+http://<host>:8071
 ```
 
-The host port defaults to `22022`. If that port is already in use on the
-server, set one more stack variable, for example:
+Set `VBOGS_RENDER_VIEWER_HOST_BIND` or `VBOGS_RENDER_VIEWER_HOST_PORT` when the
+viewer should bind to a different interface or host port.
 
-```bash
-VBOGS_TRANSFER_HOST_PORT=32222
+## File Browser Access
+
+The compose stack includes a `vbogs-filebrowser` sidecar using the
+`filebrowser/filebrowser` image. It provides browser-based, read-only access to
+the shared project and artifact volumes in both local Docker Compose and
+Portainer deployments.
+
+The default URL is:
+
+```text
+http://<host>:8088
 ```
 
-Download the curated run zip from your local machine:
+Relevant stack variables:
 
-```bash
-scp -i ~/.ssh/vbogs_portainer -P 22022 \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>.zip .
-```
+| Variable | Description |
+| --- | --- |
+| `VBOGS_FILEBROWSER_IMAGE` | File Browser image, default `filebrowser/filebrowser:v2-s6`. |
+| `VBOGS_FILEBROWSER_HOST_BIND` | Host bind address, default `0.0.0.0`. |
+| `VBOGS_FILEBROWSER_HOST_PORT` | Host HTTP port, default `8088`. |
+| `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath. |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. |
 
-Or mirror a full curated output directory:
-
-```bash
-rsync -avP -e "ssh -i ~/.ssh/vbogs_portainer -p 22022" \
-  vbogs@<server-host>:/workspace/VBOGS/outputs/v1_0/<drive>/ ./vbogs-run/
-```
-
-Other useful read-only paths are `/workspace/VBOGS/data`, `/data/COLMAP`, and
-`/data/OCTREE-ANYGS`. To disable access again, remove
-`VBOGS_TRANSFER_AUTHORIZED_KEYS` from the Portainer stack environment and
-redeploy.
+On first boot, read the generated `admin` password from the
+`vbogs-filebrowser` logs. The mounted paths are `/project`, `/outputs`,
+`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`.
 
 ## KITTI-360 Inputs
 
@@ -209,17 +214,31 @@ stages.
 | `--poses-root POSES_ROOT` | Auto-detect | Root containing KITTI-360 pose text files. |
 | `--calibration-dir CALIBRATION_DIR` | Auto-detect | Directory containing KITTI-360 calibration text files. |
 
+## NVIDIA NCore Inputs
+
+NVIDIA PhysicalAI AV clips must already be converted to NCore V4. The compose
+stack mounts them at `/workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--ncore-root NCORE_ROOT` | Auto-detect | Root containing converted NCore clips. |
+| `--camera-id CAMERA_ID` | `camera_front_wide_120fov` | Camera subset used for training and LiDAR coloring. |
+| `--ncore-lidar-id LIDAR_ID` | `lidar_top_360fov` | LiDAR sensor used for sparse seeding and LiDAR point export. |
+| `--camera-depth-pair LEFT,RIGHT` | `camera_front_wide_120fov,camera_front_tele_30fov` | Camera pair for camera-depth export. |
+
 ## `prepare`
 
-Runs `scripts/prepare_kitti360_colmap.py` in `vbogs-torch` and writes a
-COLMAP-style dataset under `/data/COLMAP/<drive>`.
+Runs the selected dataset adapter in `vbogs-torch` and writes a COLMAP-style
+dataset under `/data/COLMAP/<scene-id>`. KITTI uses
+`scripts/prepare_kitti360_colmap.py`; NVIDIA NCore uses
+`scripts/prepare_nvidia_ncore_colmap.py`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--frame-step FRAME_STEP` | Config: `1` | Keep every Nth frame from the drive. Higher values are faster and smaller. |
 | `--max-frames MAX_FRAMES` | Config: `1000` | Maximum number of frames to prepare. `0` means no cap. |
 | `--copy-mode {symlink,copy}` | `symlink` | How images are placed in the prepared dataset. `symlink` is faster and saves space when supported. |
-| `--seed-mode {stereo,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. |
+| `--seed-mode {stereo,lidar,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. `stereo` maps to LiDAR for NVIDIA NCore. |
 
 ## `train`
 
@@ -240,20 +259,22 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | `--train-port TRAIN_PORT` | Auto | Octree-AnyGS network GUI port. The wrapper defaults to `6009 + GPU index`, so GPU 1 uses `6010`. |
 | `--write-config-only` | `false` | Generate the Octree-AnyGS YAML config and skip training. |
 
-## `stereo`
+## `stereo` / Point-Cloud Export
 
-Runs `scripts/stereo_to_pointcloud.py` in `vbogs-torch` and writes world-frame
-stereo points under `data/points_world/<drive>/`.
+Runs `scripts/export_points_world.py` in `vbogs-torch` and writes world-frame
+points under `data/points_world/<scene-id>/`. The stage name remains `stereo`
+for backward compatibility with existing command slices.
 
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--matcher {sgbm,raft}` | `sgbm` | Stereo matcher backend. `raft` is reserved for a future provider unless installed/implemented. |
 | `--pixel-step PIXEL_STEP` | `1` | Pixel subsampling step for point export. Higher values reduce density and runtime. |
-| `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported stereo points. |
+| `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported world points. |
 | `--write-ply` | Config: `true` | Also write a PLY point cloud for quick visual inspection and the curated bundle. |
+| `--point-source {stereo,lidar,camera_depth}` | Dataset default | Selects KITTI stereo, NVIDIA LiDAR, or NVIDIA camera-depth export. |
 
-The stereo stage also receives `--max-frames` and any KITTI-360 input override
-arguments.
+The point-cloud stage also receives `--max-frames`, KITTI input overrides, and
+NVIDIA NCore sensor options as applicable.
 
 ## `bucket`
 
@@ -264,8 +285,8 @@ assignments under `data/m4/<drive>/`.
 | --- | --- | --- |
 | `--model-path MODEL_PATH` | Latest run under `/data/OCTREE-ANYGS/<drive>` | Explicit Octree-AnyGS model/run directory to bucket against. |
 | `--bucket-iteration BUCKET_ITERATION` | `-1` | Checkpoint iteration to load. `-1` means use the latest available checkpoint. |
-| `--bucket-point-chunk-size BUCKET_POINT_CHUNK_SIZE` | `1000000` | Number of stereo points processed per bucketing chunk. Lower values reduce peak memory. |
-| `--bucket-max-points BUCKET_MAX_POINTS` | `0` | Optional deterministic cap on stereo points used for M4 bucketing/fitting. `0` keeps all points. |
+| `--bucket-point-chunk-size BUCKET_POINT_CHUNK_SIZE` | `1000000` | Number of world points processed per bucketing chunk. Lower values reduce peak memory. |
+| `--bucket-max-points BUCKET_MAX_POINTS` | `0` | Optional deterministic cap on exported points used for M4 bucketing/fitting. `0` keeps all points. |
 
 ## `fit`
 
@@ -381,10 +402,10 @@ The default config file uses section names that map to CLI arguments:
 
 | Config section | Example keys |
 | --- | --- |
-| `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run`, `skip_up` |
+| `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
-| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only` |
+| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `batch_buckets`, `no_auto_extend_buckets`, `vmap_group_size`, `max_padded_points_per_group`, `log_every` |
@@ -395,4 +416,4 @@ The default config file uses section names that map to CLI arguments:
 | `nbv` | `candidate_source`, `max_candidates`, `top_k`, `save_top_images`, `force_all_levels`, `output_dir` |
 | `outputs` | `run_root` |
 | `upload` | `enabled`, `source`, `remote`, `dest`, `folder_id`, `service_account_file`, `scope`, `rclone_args`, `dry_run` |
-| `orchestration` | `compose_command`, `compose_file`, `project_name`, `torch_container`, `jax_container`, `use_service_labels`, `label_project` |
+| `orchestration` | `torch_container`, `jax_container`, `use_service_labels`, `label_project` |

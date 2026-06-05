@@ -121,12 +121,11 @@ unknown-ray penalty.
 Run through `bundle`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive <drive> \
   --start-at bundle \
-  --stop-after bundle \
-  --use-service-labels
+  --stop-after bundle
 ```
 
 If a stage output lives outside the derived defaults, pass the relevant output

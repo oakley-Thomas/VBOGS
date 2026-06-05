@@ -15,7 +15,7 @@ stages.
 
 Main inputs:
 
-- `/data/COLMAP/<drive>/`
+- `/data/COLMAP/<scene-id>/`
 - training profile from `configs/pipeline/*.yaml`
 
 Main outputs:
@@ -23,15 +23,16 @@ Main outputs:
 - `/data/OCTREE-ANYGS/<drive>/<timestamp>/config.yaml`
 - `/data/OCTREE-ANYGS/<drive>/<timestamp>/point_cloud/iteration_*/`
 
-## Stage 2: Stereo Point Cloud
+## Stage 2: World Point Cloud
 
 Repo milestone: M3  
-Entry point: `scripts/stereo_to_pointcloud.py`  
+Entry point: `scripts/export_points_world.py`  
 Docker service: `vbogs-torch`
 
-For each rectified stereo pair, VBOGS estimates disparity, converts disparity
-to depth, unprojects points into the left camera frame, transforms them to
-world coordinates, attaches RGB, and concatenates the result.
+For KITTI-360, VBOGS estimates disparity from rectified stereo and unprojects
+left-camera depth to world coordinates. For NVIDIA PhysicalAI AV NCore,
+VBOGS can instead export motion-compensated LiDAR points colored from cameras,
+or use a configured camera pair for a camera-depth export.
 
 Main inputs:
 
@@ -39,14 +40,15 @@ Main inputs:
 - `data/KITTI-360/images/<drive>/image_01/data_rect/`
 - `data/KITTI-360/data_poses/<drive>/cam0_to_world.txt`
 - `data/KITTI-360/calibration/perspective.txt`
+- or converted NCore clips under `data/NVIDIA-PhysicalAI-AV-NCore/`
 
 Main outputs:
 
-- `data/points_world/<drive>/points_world.npz`
-- optional `data/points_world/<drive>/points_world.ply`
+- `data/points_world/<scene-id>/points_world.npz`
+- optional `data/points_world/<scene-id>/points_world.ply`
 - metadata sidecars
 
-The NPZ contains `xyz`, `rgb`, and `frame_id`.
+The NPZ contains `xyz`, `rgb`, and `frame_id` for every dataset.
 
 ## Stage 3: Per-Anchor VBGS Fitting
 

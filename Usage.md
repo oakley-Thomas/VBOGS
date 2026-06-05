@@ -10,6 +10,15 @@ complete argument reference, see
 bash scripts/build_stack_serial.sh
 ```
 
+Build Torch/render CUDA extensions for both an RTX 5080 (`sm_120`) and a
+Quadro RTX 8000 (`sm_75`):
+
+```bash
+bash scripts/build_stack_serial.sh \
+  --cuda-arch-list '7.5;12.0' \
+  vbogs-torch vbogs-vbgs-render
+```
+
 To rebuild one service:
 
 ```bash
@@ -21,31 +30,42 @@ bash scripts/build_stack_serial.sh vbogs-pipeline
 ## Start Local Development Containers
 
 Use the base compose file plus the local development overlay, which
-bind-mounts this checkout into the containers and maps local `outputs/` to
-`/workspace/VBOGS/outputs`.
+bind-mounts only this checkout into the containers. Generated artifacts stay in
+Docker volumes.
 
 ```bash
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
-docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml exec vbogs-pipeline bash
 ```
 
-From inside `vbogs-pipeline`, run the default configured pipeline:
+Enter `vbogs-pipeline`, then run the default configured pipeline:
 
 ```bash
-python scripts/run_drive_pipeline.py --config configs/pipeline/dev.yaml --use-service-labels
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
+
+Open project files and generated artifacts through File Browser:
+
+```text
+http://localhost:8088
+```
+
+Read the first-boot `admin` password from `docker compose ... logs
+vbogs-filebrowser`. The useful roots are `/project` and `/outputs`.
 
 ## Run a Full Drive
 
+From inside `vbogs-pipeline`:
+
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
-  --stop-after bundle \
-  --use-service-labels
+  --stop-after bundle
 ```
 
 Stage order:
@@ -60,10 +80,10 @@ work.
 ## Development Smoke Run
 
 This keeps data volume, training time, and renders small enough for quick
-verification:
+verification. Run it from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
@@ -75,8 +95,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --use-service-labels
+  --render-max-views 2
 ```
 
 ## Config Profiles

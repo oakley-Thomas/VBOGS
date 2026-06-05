@@ -6,7 +6,7 @@ This page summarizes what the implementation computes.
 
 ## Observations
 
-Each stereo point is a six-dimensional observation:
+Each exported world point is a six-dimensional observation:
 
 ```text
 x_world = [xyz_world, rgb]
@@ -97,7 +97,7 @@ U_MAX = max finite observed U
 ```
 
 Override it with `scripts/compute_uncertainty.py --u-max` or
-`scripts/run_drive_pipeline.py --uncertainty-u-max`.
+`scripts/run_pipeline.sh --uncertainty-u-max`.
 
 ## Diagnostic Dirichlet Entropy
 

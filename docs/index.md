@@ -2,7 +2,7 @@
 
 VBOGS combines Octree-AnyGS, a scalable Gaussian-splatting scene
 representation, with VBGS, a per-anchor Bayesian uncertainty head. The pipeline
-trains a scene, assigns stereo points to Octree-AnyGS anchors, fits posterior
+trains a scene, assigns exported world points to Octree-AnyGS anchors, fits posterior
 models per anchor, renders uncertainty, and scores next-best camera views.
 
 ## Start Here
@@ -14,7 +14,7 @@ models per anchor, renders uncertainty, and scores next-best camera views.
 | Run a complete drive through the pipeline | [Full Drive Runs](running/full-drive.md) |
 | Use the browser viewer or viewer APIs | [Realtime Viewer](running/realtime-viewer.md) |
 | Understand what each stage is doing | [Algorithm Overview](algorithm/index.md) |
-| Look up every `run_drive_pipeline.py` argument | [Pipeline Arguments](documentation/RUN_DRIVE_PIPELINE_ARGS.md) |
+| Look up every `run_pipeline.sh` argument | [Pipeline Arguments](documentation/RUN_DRIVE_PIPELINE_ARGS.md) |
 | Find output files and artifact contracts | [Artifacts and Data Layout](reference/artifacts.md) |
 | Debug common failures | [Troubleshooting](reference/troubleshooting.md) |
 
@@ -27,7 +27,8 @@ kept separate:
 | --- | --- | --- |
 | `vbogs-torch` | Octree-AnyGS, stereo, bucketing, scalar rendering | M2, M3, M4a, M6 |
 | `vbogs-jax` | VBGS posterior fitting and uncertainty reduction | M4b, M5 |
-| `vbogs-pipeline` | Orchestration, packaging, uploads, transfer helpers | Full pipeline |
+| `vbogs-pipeline` | Orchestration, packaging, uploads | Full pipeline |
+| `vbogs-filebrowser` | Read-only browser access to project files and artifacts | Operator access |
 
 Data crosses that framework boundary only through `.npz`, `.npy`, `.json`,
 `.yaml`, `.ply`, and image files on disk.
@@ -56,28 +57,18 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
-Open the orchestration container:
+Enter `vbogs-pipeline`, then run the configured dev pipeline:
 
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline bash
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
 
-From inside `vbogs-pipeline`, run the configured dev pipeline:
+Preview commands without running expensive stages from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
-  --use-service-labels
-```
-
-Preview commands without running expensive stages:
-
-```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
-  --use-service-labels \
   --dry-run
 ```

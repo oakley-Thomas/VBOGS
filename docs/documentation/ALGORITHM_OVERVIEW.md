@@ -19,12 +19,12 @@ cell at some octree level. The project does not change upstream Octree-AnyGS
 training here: the result is the geometry, opacity, and appearance model used
 later for rendering and visibility.
 
-## 2. Build a Stereo Point Cloud
+## 2. Build a World Point Cloud
 
-For each stereo image pair, the algorithm estimates disparity, converts it to
-depth, unprojects depth pixels into the left camera frame, and transforms those
-points into world coordinates. Each point keeps its RGB value, producing a
-six-dimensional point cloud: `xyz + rgb`.
+The dataset adapter exports world-frame observations as `xyz + rgb`. KITTI-360
+uses rectified stereo disparity. NVIDIA PhysicalAI AV NCore can use
+motion-compensated LiDAR colored by camera projection, or a configured
+camera-depth pair.
 
 The point cloud is kept in two coordinate systems for two different jobs:
 
@@ -37,7 +37,7 @@ coordinates would no longer match the Octree-AnyGS grid.
 
 ## 3. Fit a VBGS Posterior Per Anchor
 
-Each stereo point is assigned to every Octree-AnyGS anchor cell that contains it,
+Each exported point is assigned to every Octree-AnyGS anchor cell that contains it,
 across all levels of detail. This matters because Octree-AnyGS may render a
 coarse anchor from a distant camera and a finer anchor from a nearby camera. If
 only the finest anchor received points, coarse anchors would look falsely
