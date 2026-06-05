@@ -20,6 +20,19 @@ COMPOSE_PROJECT_DIRECTORY="${VBOGS_COMPOSE_PROJECT_DIRECTORY:-${REPO_ROOT}}"
 
 DEFAULT_TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX"
 
+usage() {
+  cat <<'USAGE'
+Usage: bash scripts/build_stack_serial.sh [--no-cache|--force] [SERVICE...]
+
+Builds VBOGS images one at a time. When no services are listed, builds:
+  vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline
+
+Options:
+  --no-cache, --force  Rebuild without using Docker layer cache.
+  -h, --help           Show this help text.
+USAGE
+}
+
 detect_torch_cuda_arch() {
   detected_arch=""
   if command -v nvidia-smi >/dev/null 2>&1; then
@@ -38,17 +51,47 @@ elif [ "${VBOGS_TORCH_CUDA_ARCH_LIST}" = "auto" ]; then
   export VBOGS_TORCH_CUDA_ARCH_LIST="${detected_arch:-${DEFAULT_TORCH_CUDA_ARCH_LIST}}"
 fi
 
-services=("$@")
+services=()
+build_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --no-cache | --force)
+      build_args+=(--no-cache)
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      services+=("$@")
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      services+=("$1")
+      ;;
+  esac
+  shift
+done
+
 if [ "${#services[@]}" -eq 0 ]; then
   services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
 fi
 
 for service in "${services[@]}"; do
   echo "Building ${service} with COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT}"
+  if [ "${#build_args[@]}" -gt 0 ]; then
+    echo "Docker compose build args: ${build_args[*]}"
+  fi
   if [ "${service}" = "vbogs-torch" ]; then
     echo "Torch CUDA arch list: ${VBOGS_TORCH_CUDA_ARCH_LIST}; build jobs: ${VBOGS_TORCH_MAX_JOBS}"
   elif [ "${service}" = "vbogs-vbgs-render" ]; then
     echo "VBGS render CUDA arch list: ${VBOGS_RENDER_CUDA_ARCH_LIST:-default}; build jobs: ${VBOGS_RENDER_MAX_JOBS}"
   fi
-  docker compose --project-directory "${COMPOSE_PROJECT_DIRECTORY}" -f "${COMPOSE_FILE}" build "${service}"
+  docker compose --project-directory "${COMPOSE_PROJECT_DIRECTORY}" -f "${COMPOSE_FILE}" build "${build_args[@]}" "${service}"
 done

@@ -1,121 +1,70 @@
 # Quickstart
 
-This page is the shortest path from a fresh checkout to a runnable VBOGS
-pipeline. Use it first, then jump into the detailed references when a stage
-needs tuning.
+This page explains how to get up and running with the VBOGS pipeline
 
 ## Prerequisites
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
-- Docker Compose v2.
-- The two submodules checked out: `Octree-AnyGS/` and `vbgs/`.
 
 ## Build
-
-The CUDA images are intentionally built serially. This avoids overlapping
-large CUDA wheel downloads and compiles on smaller local machines.
-
 ```bash
 bash scripts/build_stack_serial.sh
 ```
 
 To rebuild one service:
-
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
 bash scripts/build_stack_serial.sh vbogs-jax
 bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
+Use `--no-cache` to rebuild from scratch
 
-## Start Local Containers
+## Running Local Compose Stacks
 
-Use the base compose file plus the dev overlay. The dev overlay bind-mounts
-this checkout; generated artifacts stay in Docker volumes.
+The dev overlay bind-mounts the local VBOGS code checkout.
 
+**Start the stack:**
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  up -d --no-build
+./dc_up.sh
 ```
-
-Confirm GPU visibility from a stack container:
-
+**Stop the stack:**
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline nvidia-smi
+./dc_down.sh
 ```
-
-## Browse Files and Artifacts
-
-The stack starts a read-only File Browser sidecar for project files and
-artifacts:
-
-```text
-http://localhost:8088
-```
-
-On first boot, get the generated `admin` password from the service logs:
-
+**Enter a container:**
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  logs vbogs-filebrowser
+./dc_bash.sh # Default entrypoint is vbogs-pipeline container
+
+# To enter another container pass it as an argument
+# Example:
+# ./dc_bash.sh vbogs-jax
 ```
 
-Use `/project` for the checkout and `/outputs` for curated bundles and
-diagnostics. The same `vbogs-filebrowser` service is present in Portainer
-stacks; see [Portainer](../running/portainer.md) for server access settings.
 
-## Download KITTI-360
+## Running Remote Compose Stack
+Coming Soon!
 
-VBOGS expects the KITTI-360 perspective stereo images, camera poses, and
-calibration files in the container at `/workspace/VBOGS/data/KITTI-360`. In the
-compose stack, that path is backed by the `KITTI-360` external Docker volume.
+## Downloading the Datasets
 
-From [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
-accept the dataset terms and get the official **KITTI-360 download links** for 
-
-1.) Calibrations
-
-2.) Vehicle Poses 
-
-3.) Left/Right perspective images ("Test SLAM" recommended)
+VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset. Follow the instructions [here](data.md).
 
 
-Run the downloader from the interactive `vbogs-pipeline` container shell:
 
-```bash
-export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
-export KITTI_POSES_LINK='https://.../data_poses.zip'
-export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
 
-bash scripts/download_kitti_360.sh
-```
 
-Use the `scripts/` path inside Docker so the helper comes from this checkout;
-`/workspace/VBOGS/data` is a persistent volume.
 
-The helper writes into `/workspace/VBOGS/data/KITTI-360`, downloads the linked
-left and right perspective image archive, extracts all archives, and
-normalizes them into the layout VBOGS expects:
 
-```text
-/workspace/VBOGS/data/KITTI-360/
-  calibration/
-    perspective.txt
-  data_poses/
-    2013_05_28_drive_0007_sync/
-      cam0_to_world.txt
-  images/
-    2013_05_28_drive_0007_sync/
-      image_00/data_rect/
-      image_01/data_rect/
-```
+
+
+
+
+
+
+
+
+
+
 
 ## Test Runs
 
@@ -193,3 +142,31 @@ python scripts/view_octree_anygs.py \
 For more options, including explicit model paths, pose teleport, REST API
 usage, rendered-anchor uncertainty queries, and capture scripts, see
 [Realtime Viewer](../running/realtime-viewer.md).
+
+
+## Browse Files and Artifacts
+
+The stack starts a read-only File Browser sidecar for project files and
+artifacts:
+
+```text
+http://localhost:8088
+```
+
+On first boot, get the generated `admin` password from the service logs:
+
+```bash
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  logs vbogs-filebrowser
+```
+
+Confirm GPU visibility from a stack container:
+
+```bash
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  exec vbogs-pipeline nvidia-smi
+```

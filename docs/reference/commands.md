@@ -28,6 +28,13 @@ bash scripts/build_stack_serial.sh vbogs-vbgs-render
 bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
 
+Force a rebuild without Docker layer cache:
+
+```bash
+bash scripts/build_stack_serial.sh --no-cache
+bash scripts/build_stack_serial.sh --force vbogs-torch vbogs-jax
+```
+
 Start the local dev stack:
 
 ```bash
