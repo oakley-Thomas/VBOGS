@@ -70,7 +70,7 @@ ENV TORCH_CUDA_ARCH_LIST="${VBOGS_RENDER_CUDA_ARCH_LIST}" \
     CMAKE_BUILD_PARALLEL_LEVEL="${VBOGS_RENDER_MAX_JOBS}" \
     NINJAFLAGS="-j${VBOGS_RENDER_MAX_JOBS}"
 
-RUN python -m pip install --no-build-isolation gsplat==1.5.3 && \
+RUN python -m pip install --no-build-isolation --no-binary=gsplat gsplat==1.5.3 && \
     python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 
 RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /workspace/gaussian-splatting && \

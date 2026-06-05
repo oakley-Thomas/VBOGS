@@ -19,6 +19,14 @@ Build every image:
 bash scripts/build_stack_serial.sh
 ```
 
+Build Torch/render CUDA extensions for both RTX 5080 and Quadro RTX 8000:
+
+```bash
+bash scripts/build_stack_serial.sh \
+  --cuda-arch-list '7.5;12.0' \
+  vbogs-torch vbogs-vbgs-render
+```
+
 Build one image:
 
 ```bash

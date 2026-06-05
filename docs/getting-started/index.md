@@ -11,6 +11,13 @@ This page explains how to get up and running with the VBOGS pipeline
 bash scripts/build_stack_serial.sh
 ```
 
+**IMPORTANT NOTE:** by default, ```scripts/build_stack_serial.sh``` will compile ```gsplat``` against the CUDA architecture on the machine that builds the images. If you intend to deploy on a different CUDA architecture, you need to specify the supported versions using ```--cuda-arch-list```.
+
+```bash
+# Example - supports RTX 5080 (sm_12.0) and RTX Quadro 8000 (sm_7.5)
+bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;12.0'
+```
+
 To rebuild one service:
 ```bash
 bash scripts/build_stack_serial.sh vbogs-torch
@@ -50,30 +57,7 @@ VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## Test Runs
-
-From inside `vbogs-pipeline`, print the planned stage commands:
-
-```bash
-scripts/run_pipeline.sh \
-  --drive 2013_05_28_drive_0004_sync \
-  --dry-run
-```
+## KITTI-360 Test Run
 
 From inside `vbogs-pipeline`, run a quick end-to-end check:
 
@@ -92,54 +76,34 @@ scripts/run_pipeline.sh \
   --render-max-views 2
 ```
 
-From inside `vbogs-pipeline`, run the full dev pipeline:
+For a full run:
 
 ```bash
 scripts/run_pipeline.sh \
-  --drive 2013_05_28_drive_0008_sync \
+  --drive 2013_05_28_drive_0004_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle
 ```
 
-## Realtime Visualization
+## Realtime Navigation and Visualization
 
-After the smoke run has produced an Octree-AnyGS scene and `U.npy`, enter the
-render container from the host:
+Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Map
 
+Enter the render server container
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-vbgs-render bash
-```
+# Enter the container
+./dc_bash vbogs-vbgs-render
 
-Then start the browser viewer from inside `vbogs-vbgs-render`:
-
-```bash
-python scripts/view_octree_anygs.py \
-  --drive 2013_05_28_drive_0004_sync \
-  --resolution 4
-```
-
-Open the viewer:
-
-```text
-http://localhost:8071
-```
-
-The compose stack maps
-`${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}`
-on the host to port `8070` in `vbogs-vbgs-render`. Use `--rgb-only` when you
-only want to inspect the trained Octree-AnyGS scene before uncertainty artifacts
-exist:
-
-```bash
+# Start the render server
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
   --resolution 1
 ```
+
+In a browser visit: 
+```http://localhost:8071```
 
 For more options, including explicit model paths, pose teleport, REST API
 usage, rendered-anchor uncertainty queries, and capture scripts, see
@@ -148,27 +112,14 @@ usage, rendered-anchor uncertainty queries, and capture scripts, see
 
 ## Browse Files and Artifacts
 
-The stack starts a read-only File Browser sidecar for project files and
-artifacts:
+Open the web-based file browser
 
 ```text
 http://localhost:8088
 ```
 
-On first boot, get the generated `admin` password from the service logs:
+From ```vbogs-pipeline``` get the filebrowser credentials
 
 ```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  logs vbogs-filebrowser
-```
-
-Confirm GPU visibility from a stack container:
-
-```bash
-docker compose --project-directory . \
-  -f docker/compose/compose.yml \
-  -f docker/compose/dev.yml \
-  exec vbogs-pipeline nvidia-smi
+python scripts/get_filebrowser_login.py --reset-password
 ```

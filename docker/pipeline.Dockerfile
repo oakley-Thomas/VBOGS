@@ -20,7 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
 COPY scripts/bootstrap_stack_repo.py /usr/local/bin/vbogs-bootstrap-repo
+COPY scripts/get_filebrowser_login.py /usr/local/bin/vbogs-filebrowser-login
 RUN chmod +x /usr/local/bin/vbogs-bootstrap-repo
+RUN chmod +x /usr/local/bin/vbogs-filebrowser-login
 
 WORKDIR /workspace/VBOGS
 

@@ -64,7 +64,7 @@ ENV TORCH_CUDA_ARCH_LIST="${VBOGS_TORCH_CUDA_ARCH_LIST}" \
     NINJAFLAGS="-j${VBOGS_TORCH_MAX_JOBS}"
 
 RUN python -m pip install rich && \
-    python -m pip install --no-build-isolation gsplat==1.5.3
+    python -m pip install --no-build-isolation --no-binary=gsplat gsplat==1.5.3
 
 RUN python -c "import gsplat, torch; assert torch.version.cuda == '12.8', torch.version.cuda; print('gsplat', getattr(gsplat, '__version__', 'unknown'))"
 

@@ -82,6 +82,7 @@ CONFIG_KEY_MAP = {
         "visible_threshold": "visible_threshold",
         "port": "train_port",
         "write_config_only": "write_config_only",
+        "skip_stack_check": "skip_stack_check",
     },
     "stereo": {
         "matcher": "matcher",
@@ -452,6 +453,14 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--write-config-only",
         action="store_true",
         help="Generate the Octree-AnyGS config but skip training.",
+    )
+    train_group.add_argument(
+        "--skip-stack-check",
+        action="store_true",
+        help=(
+            "Skip the Torch CUDA/gsplat preflight before launching Octree-AnyGS "
+            "training. Useful only for debugging a stuck preflight."
+        ),
     )
 
     stereo_group = parser.add_argument_group("point-cloud export")
@@ -829,6 +838,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.visible_threshold),
         *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
+        *(("--skip-stack-check",) if args.skip_stack_check else ()),
     )
 
     point_cmd = (

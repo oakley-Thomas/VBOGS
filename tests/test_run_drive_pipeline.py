@@ -377,6 +377,14 @@ def test_pipeline_image_includes_zip_tools():
     assert "vbogs-transfer-sshd" not in pipeline_dockerfile
 
 
+def test_gsplat_is_built_from_source_for_requested_cuda_arches():
+    for dockerfile_name in ("docker/torch.Dockerfile", "docker/vbgs-render.Dockerfile"):
+        dockerfile = (REPO_ROOT / dockerfile_name).read_text(encoding="utf-8")
+
+        assert "gsplat==1.5.3" in dockerfile
+        assert "--no-binary=gsplat" in dockerfile
+
+
 def test_service_images_do_not_clone_vbogs_during_build():
     for dockerfile_name in (
         "docker/torch.Dockerfile",

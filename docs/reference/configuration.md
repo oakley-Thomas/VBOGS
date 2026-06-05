@@ -90,9 +90,9 @@ The compose stack reads these frequently used variables:
 | `VBOGS_JAX_IMAGE` | JAX image name |
 | `VBOGS_VBGS_RENDER_IMAGE` | Base VBGS render image name |
 | `VBOGS_PIPELINE_IMAGE` | Pipeline image name |
-| `VBOGS_TORCH_CUDA_ARCH_LIST` | CUDA arch list for Torch image build; `auto` detects GPU 0 |
+| `VBOGS_TORCH_CUDA_ARCH_LIST` | CUDA arch list for Torch image build; `auto` detects GPU 0. Can also be set with `scripts/build_stack_serial.sh --torch-cuda-arch-list`. |
 | `VBOGS_TORCH_MAX_JOBS` | Torch build parallelism |
-| `VBOGS_RENDER_CUDA_ARCH_LIST` | CUDA arch list for the base VBGS render image |
+| `VBOGS_RENDER_CUDA_ARCH_LIST` | CUDA arch list for the base VBGS render image. Can also be set with `scripts/build_stack_serial.sh --render-cuda-arch-list`. |
 | `VBOGS_RENDER_MAX_JOBS` | Base VBGS render image build parallelism |
 | `VBOGS_RENDER_VIEWER_HOST_BIND` | Host bind address for the browser viewer served from `vbogs-vbgs-render`, default `0.0.0.0` |
 | `VBOGS_RENDER_VIEWER_HOST_PORT` | Host HTTP port for the browser viewer served from `vbogs-vbgs-render`, default `8071` |

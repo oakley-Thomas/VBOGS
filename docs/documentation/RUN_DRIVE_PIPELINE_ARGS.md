@@ -405,7 +405,7 @@ The default config file uses section names that map to CLI arguments:
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
-| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only` |
+| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `batch_buckets`, `no_auto_extend_buckets`, `vmap_group_size`, `max_padded_points_per_group`, `log_every` |

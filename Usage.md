@@ -10,6 +10,15 @@ complete argument reference, see
 bash scripts/build_stack_serial.sh
 ```
 
+Build Torch/render CUDA extensions for both an RTX 5080 (`sm_120`) and a
+Quadro RTX 8000 (`sm_75`):
+
+```bash
+bash scripts/build_stack_serial.sh \
+  --cuda-arch-list '7.5;12.0' \
+  vbogs-torch vbogs-vbgs-render
+```
+
 To rebuild one service:
 
 ```bash

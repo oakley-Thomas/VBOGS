@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 
 
+def progress(message: str) -> None:
+    print(message, flush=True)
+
+
 def add_octree_anygs_to_path(repo_root: Path) -> None:
     octree_root = repo_root / "Octree-AnyGS"
     if str(octree_root) not in sys.path:
@@ -32,7 +36,7 @@ def gsplat_arch_error(device_name: str, capability: tuple[int, int]) -> str:
         f"not contain kernels for {device_name} (sm_{capability[0]}{capability[1]})."
         f"{env_suffix}\n"
         "Rebuild the vbogs-torch image with a matching architecture, for example:\n"
-        f"  VBOGS_TORCH_CUDA_ARCH_LIST='{arch}' bash scripts/build_stack_serial.sh vbogs-torch\n"
+        f"  bash scripts/build_stack_serial.sh --torch-cuda-arch-list '{arch}' vbogs-torch\n"
         "For a portable image, leave VBOGS_TORCH_CUDA_ARCH_LIST unset and use the "
         "repo default multi-architecture build."
     )
@@ -65,14 +69,14 @@ def main() -> int:
 
     from gaussian_renderer.render import render  # noqa: F401
 
-    print(f"repo_root={repo_root}")
-    print(f"torch={torch.__version__}")
-    print(f"torch_cuda={torch.version.cuda}")
-    print(f"torch_scatter={torch_scatter.__version__}")
-    print(f"gsplat={getattr(gsplat, '__version__', 'unknown')}")
+    progress(f"repo_root={repo_root}")
+    progress(f"torch={torch.__version__}")
+    progress(f"torch_cuda={torch.version.cuda}")
+    progress(f"torch_scatter={torch_scatter.__version__}")
+    progress(f"gsplat={getattr(gsplat, '__version__', 'unknown')}")
 
     cuda_available = torch.cuda.is_available()
-    print(f"cuda_available={cuda_available}")
+    progress(f"cuda_available={cuda_available}")
     if not cuda_available:
         raise RuntimeError("CUDA is not available in the current torch environment")
 
@@ -86,16 +90,20 @@ def main() -> int:
     device = torch.device(f"cuda:{args.device_index}")
     device_name = torch.cuda.get_device_name(device)
     capability = torch.cuda.get_device_capability(device)
-    print(f"device={device_name}")
-    print(f"capability=sm_{capability[0]}{capability[1]}")
+    progress(f"device={device_name}")
+    progress(f"capability=sm_{capability[0]}{capability[1]}")
 
     # Exercise a real CUDA op and a torch_scatter CUDA kernel.
+    progress("cuda_matmul: starting")
     lhs = torch.arange(16, dtype=torch.float32, device=device).reshape(4, 4)
     rhs = torch.eye(4, dtype=torch.float32, device=device)
     prod = lhs @ rhs
+    torch.cuda.synchronize(device)
     if not torch.allclose(prod, lhs):
         raise RuntimeError("Basic CUDA matmul sanity check failed")
+    progress("cuda_matmul=ok")
 
+    progress("torch_scatter_cuda: starting")
     src = torch.tensor(
         [[1.0, 2.0], [3.0, 0.5], [2.5, 4.0], [0.1, 8.0]],
         dtype=torch.float32,
@@ -103,6 +111,7 @@ def main() -> int:
     )
     index = torch.tensor([0, 1, 0, 1], dtype=torch.long, device=device)
     scattered, argmax = torch_scatter.scatter_max(src, index, dim=0)
+    torch.cuda.synchronize(device)
     expected = torch.tensor([[2.5, 4.0], [3.0, 8.0]], dtype=torch.float32, device=device)
     if not torch.allclose(scattered, expected):
         raise RuntimeError(
@@ -111,9 +120,11 @@ def main() -> int:
 
     if argmax.shape != expected.shape:
         raise RuntimeError("torch_scatter returned an unexpected argmax shape")
+    progress("torch_scatter_cuda=ok")
 
     # Exercise gsplat's lazy CUDA extension path, which a plain import does not
     # cover. This mirrors the first renderer call in Octree-AnyGS training.
+    progress("gsplat_rasterization: starting")
     means = torch.tensor([[0.0, 0.0, 3.0]], dtype=torch.float32, device=device)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32, device=device)
     scales = torch.tensor([[0.1, 0.1, 0.1]], dtype=torch.float32, device=device)
@@ -136,6 +147,7 @@ def main() -> int:
             Ks=Ks,
             width=16,
             height=16,
+            packed=False,
             render_mode="RGB",
         )
         torch.cuda.synchronize(device)
@@ -150,11 +162,9 @@ def main() -> int:
             f"colors={tuple(render_colors.shape)}, alphas={tuple(render_alphas.shape)}"
         )
 
-    print("cuda_matmul=ok")
-    print("torch_scatter_cuda=ok")
-    print("gsplat_rasterization=ok")
-    print("gaussian_renderer_import=ok")
-    print("torch_stack_check=ok")
+    progress("gsplat_rasterization=ok")
+    progress("gaussian_renderer_import=ok")
+    progress("torch_stack_check=ok")
     return 0
 
 
