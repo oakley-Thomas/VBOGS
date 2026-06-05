@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-"""Run the implemented VBOGS pipeline for one KITTI-360 drive.
+"""Run the implemented VBOGS pipeline for one scene.
 
-This is an orchestration script for the two-container Docker / Portainer stack.
-Run it from the Docker host so it can call `docker compose` without mounting
-the host Docker socket into any VBOGS container.
+This is the internal implementation behind ``scripts/run_pipeline.sh``. Run the
+operator entrypoint from inside ``vbogs-pipeline`` so it can resolve sibling
+containers and call ``docker exec`` through the mounted Docker socket.
 The framework boundary stays explicit:
 
 - `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
@@ -44,8 +44,6 @@ STAGES = (
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
 DEFAULT_CONFIG = Path("configs/pipeline/default.yaml")
-DEFAULT_COMPOSE_FILE = Path("docker/compose/compose.yml")
-DEFAULT_COMPOSE_PROJECT_DIRECTORY = Path(".")
 CONFIG_KEY_MAP = {
     "dataset": {
         "name": "dataset_name",
@@ -61,7 +59,6 @@ CONFIG_KEY_MAP = {
         "start_at": "start_at",
         "stop_after": "stop_after",
         "dry_run": "dry_run",
-        "skip_up": "skip_up",
     },
     "inputs": {
         "raw_root": "raw_root",
@@ -167,10 +164,6 @@ CONFIG_KEY_MAP = {
         "dry_run": "gdrive_dry_run",
     },
     "orchestration": {
-        "compose_command": "compose_command",
-        "compose_file": "compose_file",
-        "compose_project_directory": "compose_project_directory",
-        "project_name": "project_name",
         "torch_container": "torch_container",
         "jax_container": "jax_container",
         "use_service_labels": "use_service_labels",
@@ -296,38 +289,6 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="NCore LiDAR id used by lidar point export and sparse seeding.",
     )
     parser.add_argument(
-        "--compose-command",
-        default="docker compose",
-        help="Compose command used on the host. Defaults to `docker compose`.",
-    )
-    parser.add_argument(
-        "--compose-file",
-        type=Path,
-        action="append",
-        default=None,
-        help=(
-            "Compose file for the VBOGS stack. Repeat to layer overlays, for "
-            "example `--compose-file docker/compose/compose.yml "
-            "--compose-file docker/compose/dev.yml`. Defaults to "
-            "`docker/compose/compose.yml`."
-        ),
-    )
-    parser.add_argument(
-        "--compose-project-directory",
-        type=Path,
-        default=DEFAULT_COMPOSE_PROJECT_DIRECTORY,
-        help=(
-            "Project directory for Docker Compose path resolution. Defaults to "
-            "the current directory so relocated compose files still resolve "
-            "build contexts and bind mounts from the repo root."
-        ),
-    )
-    parser.add_argument(
-        "--project-name",
-        default="",
-        help="Optional compose/Portainer stack project name passed as `-p`.",
-    )
-    parser.add_argument(
         "--torch-container",
         default="",
         help=(
@@ -346,10 +307,11 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     parser.add_argument(
         "--use-service-labels",
         action="store_true",
+        default=True,
         help=(
             "Find sibling containers through Docker Compose labels and run "
-            "`docker exec` against them. This mode requires host-side Docker "
-            "CLI access."
+            "`docker exec` against them. Enabled by default for the "
+            "container-only pipeline entrypoint."
         ),
     )
     parser.add_argument(
@@ -360,11 +322,6 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Defaults to VBOGS_COMPOSE_PROJECT or auto-detects from the current "
             "container when Docker CLI access is available."
         ),
-    )
-    parser.add_argument(
-        "--skip-up",
-        action="store_true",
-        help="Do not run `docker compose up -d` before executing stages.",
     )
     parser.add_argument(
         "--dry-run",
@@ -1085,25 +1042,6 @@ def selected_steps(
     return [step for step in steps if step.name in selected_names]
 
 
-def normalize_compose_files(raw_value: object) -> list[Path]:
-    if raw_value is None or raw_value == "":
-        return [DEFAULT_COMPOSE_FILE]
-    if isinstance(raw_value, (str, Path)):
-        return [Path(raw_value)]
-    return [Path(value) for value in raw_value]
-
-
-def compose_base(args: argparse.Namespace) -> list[str]:
-    base = shlex.split(args.compose_command)
-    if args.compose_project_directory:
-        base.extend(["--project-directory", str(args.compose_project_directory)])
-    for compose_file in normalize_compose_files(args.compose_file):
-        base.extend(["-f", str(compose_file)])
-    if args.project_name:
-        base.extend(["-p", args.project_name])
-    return base
-
-
 def container_override(args: argparse.Namespace, service: str) -> str:
     if service == TORCH_SERVICE:
         return args.torch_container
@@ -1136,6 +1074,28 @@ def current_container_project() -> str:
     if project == "<no value>":
         return ""
     return project
+
+
+def running_inside_container() -> bool:
+    if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(
+        marker in cgroup
+        for marker in ("docker", "containerd", "kubepods", "libpod")
+    )
+
+
+def require_container_runtime() -> None:
+    if running_inside_container():
+        return
+    raise RuntimeError(
+        "Host-side pipeline orchestration is disabled. Enter vbogs-pipeline "
+        "with `./dc_bash.sh`, then run `scripts/run_pipeline.sh ...`."
+    )
 
 
 def resolve_service_container(
@@ -1192,7 +1152,11 @@ def exec_prefix(args: argparse.Namespace, service: str) -> list[str]:
         project = args.label_project or current_container_project()
         container = resolve_service_container(service, project=project, dry_run=args.dry_run)
         return ["docker", "exec", "-i", "-w", "/workspace/VBOGS", container]
-    return [*compose_base(args), "exec", "-T", service]
+    raise RuntimeError(
+        "No container resolution mode is enabled. Use scripts/run_pipeline.sh "
+        "inside vbogs-pipeline, or pass explicit --torch-container and "
+        "--jax-container values."
+    )
 
 
 def shell_exec_command(script: str) -> tuple[str, ...]:
@@ -1205,17 +1169,6 @@ def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
     if dry_run:
         return
     subprocess.run(cmd, check=True)
-
-
-def run_optional_up(args: argparse.Namespace, steps: Sequence[PipelineStep]) -> None:
-    if args.skip_up or args.use_service_labels:
-        return
-    services = sorted(
-        {step.service for step in steps if not container_override(args, step.service)}
-    )
-    if not services:
-        return
-    run_command([*compose_base(args), "up", "-d", *services], dry_run=args.dry_run)
 
 
 def build_upload_command(args: argparse.Namespace) -> list[str]:
@@ -1251,6 +1204,7 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
 
 def main() -> None:
     args = parse_args()
+    require_container_runtime()
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
     print(f"Dataset: {args.dataset_name}")
@@ -1258,7 +1212,6 @@ def main() -> None:
     print("Stages: " + ", ".join(step.name for step in steps))
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")
-    run_optional_up(args, steps)
 
     for step in steps:
         print(f"\n=== {step.name} ({step.service}) ===", flush=True)
@@ -1276,3 +1229,6 @@ if __name__ == "__main__":
         main()
     except subprocess.CalledProcessError as exc:
         sys.exit(exc.returncode)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)

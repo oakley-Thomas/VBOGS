@@ -28,14 +28,12 @@ Docker volumes.
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 ```
 
-Run the default configured pipeline from the Docker host:
+Enter `vbogs-pipeline`, then run the default configured pipeline:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
 
 Open project files and generated artifacts through File Browser:
@@ -49,17 +47,16 @@ vbogs-filebrowser`. The useful roots are `/project` and `/outputs`.
 
 ## Run a Full Drive
 
+From inside `vbogs-pipeline`:
+
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
-  --stop-after bundle \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --stop-after bundle
 ```
 
 Stage order:
@@ -74,10 +71,10 @@ work.
 ## Development Smoke Run
 
 This keeps data volume, training time, and renders small enough for quick
-verification:
+verification. Run it from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
@@ -89,10 +86,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --render-max-views 2
 ```
 
 ## Config Profiles

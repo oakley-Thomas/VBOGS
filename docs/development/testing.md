@@ -40,12 +40,9 @@ docker compose --project-directory . \
 Pipeline dry run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
-  --dry-run \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --dry-run
 ```
 
 ## Docs Checks

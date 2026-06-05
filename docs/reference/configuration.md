@@ -1,8 +1,8 @@
 # Configuration
 
-`scripts/run_drive_pipeline.py` loads `configs/pipeline/default.yaml` by
-default. Pass a different file with `--config`, or disable config loading with
-`--config ""`.
+`scripts/run_pipeline.sh` loads `configs/pipeline/default.yaml` through the
+internal pipeline runner. Pass a different file with `--config`, or disable
+config loading with `--config ""`.
 
 CLI flags override config values.
 
@@ -60,11 +60,8 @@ fit:
 Run it with:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/my-local.yaml \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+scripts/run_pipeline.sh \
+  --config configs/pipeline/my-local.yaml
 ```
 
 ## Dev vs Portainer Training Defaults

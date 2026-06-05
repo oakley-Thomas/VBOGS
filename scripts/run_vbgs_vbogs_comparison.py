@@ -376,7 +376,7 @@ def exec_prefix(args: argparse.Namespace, service: str) -> list[str]:
     if not container:
         if not args.use_service_labels:
             raise RuntimeError(
-                "Pass --use-service-labels from the Docker host, or pass "
+                "Pass --use-service-labels from vbogs-pipeline, or pass "
                 "explicit --torch-container and --jax-container values."
             )
         project = args.label_project or current_container_project()

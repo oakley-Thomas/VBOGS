@@ -4,35 +4,31 @@ This page describes the full curated run path for a KITTI-360 drive.
 
 ## Recommended Full Run
 
-From the Docker host:
+From inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --run-output-root outputs/v1_0 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --run-output-root outputs/v1_0
 ```
 
-For the server/Portainer profile:
+For the server/Portainer profile, run this from inside the stack's
+`vbogs-pipeline` container:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/portainer.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --run-output-root outputs/v1_0 \
-  --compose-file docker/compose/portainer.yml \
-  --compose-project-directory .
+  --run-output-root outputs/v1_0
 ```
 
 ## Expected Outputs
@@ -79,7 +75,7 @@ complete argument reference.
 Use this before committing to a long run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
@@ -91,10 +87,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --render-max-views 2
 ```
 
 ## Before M7

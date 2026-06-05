@@ -14,7 +14,7 @@ models per anchor, renders uncertainty, and scores next-best camera views.
 | Run a complete drive through the pipeline | [Full Drive Runs](running/full-drive.md) |
 | Use the browser viewer or viewer APIs | [Realtime Viewer](running/realtime-viewer.md) |
 | Understand what each stage is doing | [Algorithm Overview](algorithm/index.md) |
-| Look up every `run_drive_pipeline.py` argument | [Pipeline Arguments](documentation/RUN_DRIVE_PIPELINE_ARGS.md) |
+| Look up every `run_pipeline.sh` argument | [Pipeline Arguments](documentation/RUN_DRIVE_PIPELINE_ARGS.md) |
 | Find output files and artifact contracts | [Artifacts and Data Layout](reference/artifacts.md) |
 | Debug common failures | [Troubleshooting](reference/troubleshooting.md) |
 
@@ -57,23 +57,18 @@ docker compose --project-directory . \
   up -d --no-build
 ```
 
-Run the configured dev pipeline from the Docker host:
+Enter `vbogs-pipeline`, then run the configured dev pipeline:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
 
-Preview commands without running expensive stages:
+Preview commands without running expensive stages from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
-  --dry-run \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --dry-run
 ```

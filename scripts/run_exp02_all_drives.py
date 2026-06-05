@@ -2,7 +2,7 @@
 
 """Run exp02 pipeline profiles across KITTI-360 drives.
 
-The heavy lifting stays in ``scripts/run_drive_pipeline.py``. This wrapper only
+The heavy lifting stays in ``scripts/run_pipeline.sh``. This wrapper only
 discovers drive ids, chooses the exp02 config profile(s), and launches the
 single-drive runner once per drive/profile pair.
 """
@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Pipeline config to run instead of --variant. May be repeated. "
-            "Each config is passed to scripts/run_drive_pipeline.py."
+            "Each config is passed to scripts/run_pipeline.sh."
         ),
     )
     parser.add_argument(
@@ -184,8 +184,7 @@ def build_pipeline_command(
     extra_args: Sequence[str],
 ) -> list[str]:
     cmd = [
-        sys.executable,
-        "scripts/run_drive_pipeline.py",
+        "scripts/run_pipeline.sh",
         "--config",
         path_for_command(config),
         "--drive",

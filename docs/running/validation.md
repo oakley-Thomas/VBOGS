@@ -8,30 +8,24 @@ repeatable.
 After `fit`, inspect posterior quality before trusting `U.npy`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --start-at inspect \
   --stop-after inspect \
-  --inspect-top-k 10 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --inspect-top-k 10
 ```
 
 Inspect one anchor and export its assigned points:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --start-at inspect \
   --stop-after inspect \
   --inspect-anchor-id 12345 \
-  --inspect-export-ply outputs/anchor_12345_points.ply \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --inspect-export-ply outputs/anchor_12345_points.ply
 ```
 
 Look for:
@@ -44,14 +38,11 @@ Look for:
 ## Export Map-Scale Anchor Uncertainty
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --start-at map-viz \
-  --stop-after map-viz \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --stop-after map-viz
 ```
 
 Outputs are CloudCompare-friendly PLY files under:
@@ -71,16 +62,13 @@ Useful flags:
 ## Render Uncertainty Views
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --start-at render \
   --stop-after render \
   --render-split both \
-  --render-max-views 5 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --render-max-views 5
 ```
 
 The render stage writes RGB, uncertainty, and side-by-side diagnostics under:
@@ -107,16 +95,13 @@ python scripts/query_uncertainty_view.py \
 ## Score and Visualize NBV Candidates
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --start-at nbv \
   --stop-after nbv-viz \
   --nbv-top-k 10 \
-  --nbv-save-top-images 5 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --nbv-save-top-images 5
 ```
 
 The score is:

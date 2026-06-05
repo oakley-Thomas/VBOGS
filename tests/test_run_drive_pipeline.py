@@ -2,12 +2,13 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.run_drive_pipeline import (
     TORCH_SERVICE,
     build_parser,
     build_upload_command,
     build_steps,
-    compose_base,
     load_config_defaults,
     selected_steps,
 )
@@ -343,46 +344,20 @@ def test_dev_compose_binds_only_local_checkout_and_uses_dev_config():
             compose_text,
         )
         assert bind_blocks
-        assert all(source == "." for source, _target in bind_blocks)
+        assert (".", "/workspace/VBOGS") in bind_blocks
+        assert (
+            "${DOCKER_HOST_SOCKET:-/var/run/docker.sock}",
+            "/var/run/docker.sock",
+        ) in bind_blocks
 
 
-def test_compose_base_uses_relocated_compose_file_and_project_directory():
+def test_host_compose_flags_are_not_pipeline_arguments():
     parser = build_parser({})
-    args = parser.parse_args(["--drive", "drive_sync"])
 
-    assert compose_base(args)[:6] == [
-        "docker",
-        "compose",
-        "--project-directory",
-        ".",
-        "-f",
-        "docker/compose/compose.yml",
-    ]
-
-
-def test_compose_base_supports_multiple_compose_files():
-    parser = build_parser({})
-    args = parser.parse_args(
-        [
-            "--drive",
-            "drive_sync",
-            "--compose-file",
-            "docker/compose/compose.yml",
-            "--compose-file",
-            "docker/compose/dev.yml",
-        ]
-    )
-
-    assert compose_base(args) == [
-        "docker",
-        "compose",
-        "--project-directory",
-        ".",
-        "-f",
-        "docker/compose/compose.yml",
-        "-f",
-        "docker/compose/dev.yml",
-    ]
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["--drive", "drive_sync", "--compose-file", "docker/compose/dev.yml"]
+        )
 
 
 def test_pipeline_image_includes_zip_tools():
@@ -393,6 +368,7 @@ def test_pipeline_image_includes_zip_tools():
     assert "\n    ffmpeg \\" in pipeline_dockerfile
     assert "\n    zip \\" in pipeline_dockerfile
     assert "\n    unzip \\" in pipeline_dockerfile
+    assert "\n    docker.io \\" in pipeline_dockerfile
     assert "scripts/bootstrap_stack_repo.py" in pipeline_dockerfile
     assert "vbogs-bootstrap-repo" in pipeline_dockerfile
     assert "docker:27-cli" not in pipeline_dockerfile
@@ -454,7 +430,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
             assert f"target: {target}" in pipeline
 
 
-def test_stack_compose_files_do_not_bind_host_paths():
+def test_stack_compose_files_only_bind_docker_socket_for_pipeline():
     for compose_name in (
         "docker/compose/compose.yml",
         "docker/compose/portainer.yml",
@@ -463,8 +439,15 @@ def test_stack_compose_files_do_not_bind_host_paths():
     ):
         compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
 
-        assert "type: bind" not in compose_text
-        assert "/var/run/docker.sock" not in compose_text
+        assert "source: ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}" in compose_text
+        assert "target: /var/run/docker.sock" in compose_text
+        for service in (
+            "vbogs-torch",
+            "vbogs-jax",
+            "vbogs-vbgs-render",
+            "vbogs-filebrowser",
+        ):
+            assert "type: bind" not in service_block(compose_text, service)
 
 
 def test_vbgs_render_service_publishes_viewer_port():

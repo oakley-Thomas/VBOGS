@@ -85,34 +85,28 @@ docker compose --project-directory . \
 Dry run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
-  --dry-run \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --dry-run
 ```
 
 Full run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
-  --stop-after bundle \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --stop-after bundle
 ```
 
 Small smoke run:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
@@ -124,10 +118,7 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --render-max-views 2
 ```
 
 ## Direct Stage Entry Points
@@ -201,7 +192,7 @@ python scripts/compute_uncertainty.py \
   --drive 2013_05_28_drive_0007_sync
 ```
 
-Run the original global VBGS KITTI baseline from the Docker host:
+Run the original global VBGS KITTI baseline from inside `vbogs-pipeline`:
 
 ```bash
 python scripts/run_vbgs_kitti_baseline.py \

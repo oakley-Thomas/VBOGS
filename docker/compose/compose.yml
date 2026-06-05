@@ -196,11 +196,14 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: bind
+        source: ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
     command:
       - sh
       - -lc
       - |
-        echo "vbogs-pipeline idle. Use vbogs-bootstrap-repo to fetch VBOGS into the shared repo volume, then run scripts/run_drive_pipeline.py from the Docker host."
+        echo "vbogs-pipeline idle. Use vbogs-bootstrap-repo if needed, then run scripts/run_pipeline.sh inside this container."
         sleep infinity
 
   vbogs-filebrowser:

@@ -41,7 +41,6 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 # ./dc_bash.sh vbogs-jax
 ```
 
-
 ## Running Remote Compose Stack
 Coming Soon!
 
@@ -68,23 +67,18 @@ VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset
 
 ## Test Runs
 
-Print the planned stage commands:
+From inside `vbogs-pipeline`, print the planned stage commands:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0004_sync \
-  --dry-run \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --dry-run
 ```
 
-Quick end-to-end check:
+From inside `vbogs-pipeline`, run a quick end-to-end check:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0004_sync \
   --gpu 0 \
   --jax-device 0 \
@@ -95,10 +89,18 @@ python scripts/run_drive_pipeline.py \
   --resolution 4 \
   --iterations 7000 \
   --max-points-per-frame 50000 \
-  --render-max-views 2 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --render-max-views 2
+```
+
+From inside `vbogs-pipeline`, run the full dev pipeline:
+
+```bash
+scripts/run_pipeline.sh \
+  --drive 2013_05_28_drive_0008_sync \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after bundle
 ```
 
 ## Realtime Visualization

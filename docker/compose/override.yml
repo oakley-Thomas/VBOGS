@@ -84,6 +84,9 @@ services:
       - type: volume
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
+      - type: bind
+        source: ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
 
   vbogs-filebrowser:
     volumes:

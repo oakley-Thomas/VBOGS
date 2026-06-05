@@ -1,5 +1,4 @@
 import argparse
-import sys
 from pathlib import Path
 
 import pytest
@@ -66,12 +65,11 @@ def test_build_pipeline_command_forwards_roots_and_extra_args():
         config=EXP02_CONFIGS["implicit"],
         drive="2013_05_28_drive_0007_sync",
         args=args,
-        extra_args=["--use-service-labels", "--skip-up"],
+        extra_args=["--render-max-views", "1"],
     )
 
-    assert cmd[:6] == [
-        sys.executable,
-        "scripts/run_drive_pipeline.py",
+    assert cmd[:5] == [
+        "scripts/run_pipeline.sh",
         "--config",
         "outputs/experiments/exp02_B_implicit3d_baseline_pipeline_config.yaml",
         "--drive",
@@ -79,11 +77,14 @@ def test_build_pipeline_command_forwards_roots_and_extra_args():
     ]
     assert "--raw-root" in cmd
     assert cmd[cmd.index("--poses-root") + 1] == "/data/KITTI-360/data_poses"
-    assert cmd[-2:] == ["--use-service-labels", "--skip-up"]
+    assert cmd[-2:] == ["--render-max-views", "1"]
 
 
 def test_normalize_extra_args_strips_passthrough_separator():
-    assert normalize_extra_args(["--", "--use-service-labels"]) == ["--use-service-labels"]
+    assert normalize_extra_args(["--", "--render-max-views", "1"]) == [
+        "--render-max-views",
+        "1",
+    ]
 
 
 def test_raw_layout_resolver_accepts_kitti360_data_2d_raw(tmp_path, monkeypatch):

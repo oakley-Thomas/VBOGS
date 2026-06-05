@@ -15,7 +15,7 @@ the documentation site.
 
 | Document | Use |
 | --- | --- |
-| [Pipeline arguments](../documentation/RUN_DRIVE_PIPELINE_ARGS.md) | Exhaustive `scripts/run_drive_pipeline.py` CLI/config reference |
+| [Pipeline arguments](../documentation/RUN_DRIVE_PIPELINE_ARGS.md) | Exhaustive `scripts/run_pipeline.sh` CLI/config reference |
 | [Command reference](commands.md) | Common command snippets and direct stage entry points |
 | [Artifacts and data layout](artifacts.md) | File contracts by stage |
 

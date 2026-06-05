@@ -78,16 +78,15 @@ python scripts/update_stack_git_ref.py <branch-tag-or-commit>
 
 All VBOGS services see the updated checkout through the same Docker volume.
 
-## Host-Side Pipeline Runs
+## Container-Side Pipeline Runs
 
-VBOGS containers do not mount the host Docker socket. Launch stage orchestration
-from the Docker host with the relevant compose file:
+Run stage orchestration from inside `vbogs-pipeline`. The stack mounts the
+Docker socket into that container so it can resolve and execute sibling
+services by label:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/portainer.yaml \
-  --compose-file docker/compose/portainer.yml \
-  --compose-project-directory . \
   --drive 2013_05_28_drive_0007_sync \
   --gpu 0 \
   --jax-device 0 \

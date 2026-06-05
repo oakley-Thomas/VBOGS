@@ -121,14 +121,11 @@ unknown-ray penalty.
 Run through `bundle`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --config configs/pipeline/dev.yaml \
   --drive <drive> \
   --start-at bundle \
-  --stop-after bundle \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --stop-after bundle
 ```
 
 If a stage output lives outside the derived defaults, pass the relevant output

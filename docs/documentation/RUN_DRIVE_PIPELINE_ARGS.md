@@ -1,23 +1,22 @@
-# `scripts/run_drive_pipeline.py` arguments
+# `scripts/run_pipeline.sh` arguments
 
-`scripts/run_drive_pipeline.py` orchestrates the implemented VBOGS stages across
-the Docker Compose stack. Torch stages run in `vbogs-torch`; JAX stages run in
-`vbogs-jax`. Values in `configs/pipeline/default.yaml` become defaults, and
-explicit CLI arguments override the config.
+`scripts/run_pipeline.sh` is the container-side operator entry point. Run it
+from inside `vbogs-pipeline`; it forwards arguments to the internal Python
+runner, which orchestrates implemented VBOGS stages across the Docker Compose
+stack. Torch stages run in `vbogs-torch`; JAX stages run in `vbogs-jax`.
+Values in `configs/pipeline/default.yaml` become defaults, and explicit CLI
+arguments override the config.
 
-Common full-pipeline command from the Docker host:
+Common full-pipeline command from inside `vbogs-pipeline`:
 
 ```bash
-python scripts/run_drive_pipeline.py \
+scripts/run_pipeline.sh \
   --drive 2013_05_28_drive_0000_sync \
   --gpu 0 \
   --jax-device 0 \
   --start-at prepare \
   --stop-after bundle \
-  --run-output-root outputs/v1_0 \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+  --run-output-root outputs/v1_0
 ```
 
 Use `--dry-run` to print the commands that would be run without launching the
@@ -42,14 +41,12 @@ artifacts in Docker volumes:
 docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 ```
 
-Run the local-dev profile from the Docker host with:
+Enter `vbogs-pipeline`, then run the local-dev profile with:
 
 ```bash
-python scripts/run_drive_pipeline.py \
-  --config configs/pipeline/dev.yaml \
-  --compose-file docker/compose/compose.yml \
-  --compose-file docker/compose/dev.yml \
-  --compose-project-directory .
+./dc_bash.sh
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dev.yaml
 ```
 
 ## Pipeline Selection
@@ -79,15 +76,10 @@ prepare -> train -> stereo -> bucket -> fit -> inspect -> uncertainty -> map-viz
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--compose-command COMPOSE_COMMAND` | `docker compose` | Compose command used when running from the host. |
-| `--compose-file COMPOSE_FILE` | `docker/compose/compose.yml` | Compose file used when running from the host. Repeat it to layer overlays such as `docker/compose/dev.yml`. |
-| `--compose-project-directory COMPOSE_PROJECT_DIRECTORY` | `.` | Project directory used by Docker Compose to resolve relative paths in relocated compose files. |
-| `--project-name PROJECT_NAME` | Empty | Optional Compose/Portainer stack project name passed as `-p`. |
 | `--torch-container TORCH_CONTAINER` | Empty | Concrete container name/id for Torch stages. When set, the runner uses `docker exec` instead of `docker compose exec` for Torch. |
 | `--jax-container JAX_CONTAINER` | Empty | Concrete container name/id for JAX stages. When set, the runner uses `docker exec` instead of `docker compose exec` for JAX. |
-| `--use-service-labels` | `false` | Resolve containers by Docker Compose labels and use `docker exec`. This is an advanced host-side mode that still requires Docker CLI access. |
+| `--use-service-labels` | `true` | Resolve containers by Docker Compose labels and use `docker exec`. This is the default container-side mode. |
 | `--label-project LABEL_PROJECT` | `VBOGS_COMPOSE_PROJECT` or auto-detected | Compose project label to use with `--use-service-labels`. |
-| `--skip-up` | `false` | Do not run `docker compose up -d` before executing selected stages. Automatically skipped with `--use-service-labels`. |
 
 The `vbogs-pipeline` service is also GPU-enabled, so after the stack is
 running you can check host GPU visibility from the pipeline container:
@@ -99,7 +91,7 @@ docker compose --project-directory . -f docker/compose/compose.yml -f docker/com
 ## Google Drive Upload
 
 The pipeline image includes `rclone` and `scripts/upload_google_drive.py`.
-Pass `--upload-google-drive` to `scripts/run_drive_pipeline.py` or set
+Pass `--upload-google-drive` to `scripts/run_pipeline.sh` or set
 `upload.enabled: true` in the pipeline config. The upload runs after all
 selected stages succeed. By default the source is:
 
@@ -410,7 +402,7 @@ The default config file uses section names that map to CLI arguments:
 
 | Config section | Example keys |
 | --- | --- |
-| `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run`, `skip_up` |
+| `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
 | `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only` |
@@ -424,4 +416,4 @@ The default config file uses section names that map to CLI arguments:
 | `nbv` | `candidate_source`, `max_candidates`, `top_k`, `save_top_images`, `force_all_levels`, `output_dir` |
 | `outputs` | `run_root` |
 | `upload` | `enabled`, `source`, `remote`, `dest`, `folder_id`, `service_account_file`, `scope`, `rclone_args`, `dry_run` |
-| `orchestration` | `compose_command`, `compose_file`, `project_name`, `torch_container`, `jax_container`, `use_service_labels`, `label_project` |
+| `orchestration` | `torch_container`, `jax_container`, `use_service_labels`, `label_project` |

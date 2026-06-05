@@ -34,14 +34,14 @@ def test_pipeline_cmd_forwards_upload_without_echoing_raw_credentials(monkeypatc
 
     cmd = pipeline_cmd("configs/pipeline/portainer.yaml", "drive_sync")
 
-    assert cmd[:4] == [
-        sys.executable,
-        "scripts/run_drive_pipeline.py",
+    assert cmd[:3] == [
+        "scripts/run_pipeline.sh",
         "--config",
         "configs/pipeline/portainer.yaml",
     ]
+    assert "--drive" in cmd
+    assert cmd[cmd.index("--drive") + 1] == "drive_sync"
     assert "--upload-google-drive" in cmd
-    assert "--use-service-labels" not in cmd
     assert "--gdrive-folder-id" in cmd
     assert cmd[cmd.index("--gdrive-folder-id") + 1] == "folder123"
     assert "--gdrive-dest" in cmd

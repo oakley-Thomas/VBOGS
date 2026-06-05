@@ -65,8 +65,7 @@ def upload_cmd(config: str, drive: str | None) -> list[str]:
 
 def pipeline_cmd(config: str, drive: str | None) -> list[str]:
     cmd = [
-        sys.executable,
-        "scripts/run_drive_pipeline.py",
+        "scripts/run_pipeline.sh",
         "--config",
         config,
     ]
