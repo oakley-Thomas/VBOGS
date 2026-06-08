@@ -27,6 +27,20 @@ bash scripts/build_stack_serial.sh vbogs-pipeline
 ```
 Use `--no-cache` to rebuild from scratch
 
+### Publish to Dockerhub (optional)
+To publish the built images to Docker Hub:
+```bash
+docker login
+bash scripts/push_stack_images.sh <dockerhub-username> <version>
+```
+
+If Docker Hub returns a transient registry or auth `500` during a push, rerun
+the failed service and any remaining services:
+
+```bash
+bash scripts/push_stack_images.sh <dockerhub-username> <version> vbogs-vbgs-render vbogs-pipeline
+```
+
 ## Running Local Compose Stacks
 
 The dev overlay bind-mounts the local VBOGS code checkout.
@@ -104,10 +118,6 @@ python scripts/view_octree_anygs.py \
 
 In a browser visit: 
 ```http://localhost:8071```
-
-For more options, including explicit model paths, pose teleport, REST API
-usage, rendered-anchor uncertainty queries, and capture scripts, see
-[Realtime Viewer](../running/realtime-viewer.md).
 
 
 ## Browse Files and Artifacts
