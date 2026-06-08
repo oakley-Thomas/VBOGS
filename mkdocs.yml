@@ -22,6 +22,7 @@ nav:
   - Home: index.md
   - Getting Started:
       - Quickstart: getting-started/index.md
+      - Deployment: getting-started/deployment.md
       - Data Setup: getting-started/data.md
       - Environments: getting-started/environments.md
 

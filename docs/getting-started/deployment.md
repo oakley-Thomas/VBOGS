@@ -1,14 +1,6 @@
 # Deployment
 
-## Prebuilt Images
-### Local
-```bash
-docker compose --project-directory . \
-  -f docker/compose/deploy.yml \
-  up -d
-```
-
-### Portainer
+## Portainer
 To deploy on Portainer, use the prebuilt images on Dockerhub
 
 1. "Add Stack"

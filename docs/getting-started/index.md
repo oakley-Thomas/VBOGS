@@ -6,8 +6,11 @@ This page explains how to get up and running with the VBOGS pipeline
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
 
-## Deploy the stack
-
+## Build the Stack
+By default, ```scripts/build_stack_serial.sh``` will compile against the host machine's CUDA architecture. 
+```bash
+bash scripts/build_stack_serial.sh
+```
 
 ## Start the Stack
 
@@ -93,8 +96,10 @@ Open the web-based file browser
 http://localhost:8088
 ```
 
-From ```vbogs-pipeline``` get the filebrowser credentials
+From ```vbogs-pipeline``` get the filebrowser credentials, you may need to refresh the page after running the following command
 
 ```bash
 python scripts/get_filebrowser_login.py --reset-password
 ```
+
+
