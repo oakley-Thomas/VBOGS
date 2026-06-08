@@ -1,6 +1,6 @@
 # Portainer pipeline configuration.
 #
-# Use this with `docker/compose/portainer.yml`,
+# Use this with `docker/compose/deploy.yml`,
 # `docker/compose/portainer-build.yml`, or
 # `docker/compose/portainer-local.yml`. Outputs are written to the compose-
 # managed `vbogs-outputs` Docker volume at `/workspace/VBOGS/outputs`.

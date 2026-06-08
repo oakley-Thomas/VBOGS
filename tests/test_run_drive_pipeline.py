@@ -426,7 +426,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -441,7 +441,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
 def test_stack_compose_files_only_bind_docker_socket_for_pipeline():
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -466,7 +466,7 @@ def test_vbgs_render_service_publishes_viewer_port():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -494,7 +494,7 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -513,7 +513,7 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
 
 
 def test_portainer_compose_uses_portainer_config():
-    portainer_compose = (REPO_ROOT / "docker/compose/portainer.yml").read_text(
+    portainer_compose = (REPO_ROOT / "docker/compose/deploy.yml").read_text(
         encoding="utf-8"
     )
     portainer_build_compose = (

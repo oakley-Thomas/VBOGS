@@ -1,13 +1,13 @@
 # Portainer, Uploads, and File Browser
 
-Use `configs/pipeline/portainer.yaml` with `docker/compose/portainer.yml` for
+Use `configs/pipeline/portainer.yaml` with `docker/compose/deploy.yml` for
 server deployment. The Portainer profile uses compose-managed Docker volumes
 for datasets, intermediate artifacts, and curated outputs. None of those
 volumes are marked `external`.
 
 ## Image Build Choices
 
-For normal Portainer deployment, use `docker/compose/portainer.yml`. It has no
+For normal Portainer deployment, use `docker/compose/deploy.yml`. It has no
 `build:` directives and pulls published images.
 
 If Portainer is attached to the same local Docker environment that runs the
@@ -34,7 +34,7 @@ That compose file uses `pull_policy: never`, so Portainer relies on the cached
 
 If you only have the Portainer web UI, use one of these paths:
 
-1. Use `docker/compose/portainer.yml` and pull the published registry images.
+1. Use `docker/compose/deploy.yml` and pull the published registry images.
 2. Or build each image from Portainer's **Images > Build a new image** page,
    then deploy `docker/compose/portainer-local.yml`.
 

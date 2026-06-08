@@ -6,42 +6,10 @@ This page explains how to get up and running with the VBOGS pipeline
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
 
-## Build
-```bash
-bash scripts/build_stack_serial.sh
-```
+## Deploy the stack
 
-**IMPORTANT NOTE:** by default, ```scripts/build_stack_serial.sh``` will compile ```gsplat``` against the CUDA architecture on the machine that builds the images. If you intend to deploy on a different CUDA architecture, you need to specify the supported versions using ```--cuda-arch-list```.
 
-```bash
-# Example - supports RTX 5080 (sm_12.0) and RTX Quadro 8000 (sm_7.5)
-bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;12.0'
-```
-
-To rebuild one service:
-```bash
-bash scripts/build_stack_serial.sh vbogs-torch
-bash scripts/build_stack_serial.sh vbogs-jax
-bash scripts/build_stack_serial.sh vbogs-vbgs-render
-bash scripts/build_stack_serial.sh vbogs-pipeline
-```
-Use `--no-cache` to rebuild from scratch
-
-### Publish to Dockerhub (optional)
-To publish the built images to Docker Hub:
-```bash
-docker login
-bash scripts/push_stack_images.sh <dockerhub-username> <version>
-```
-
-If Docker Hub returns a transient registry or auth `500` during a push, rerun
-the failed service and any remaining services:
-
-```bash
-bash scripts/push_stack_images.sh <dockerhub-username> <version> vbogs-vbgs-render vbogs-pipeline
-```
-
-## Running Local Compose Stacks
+## Start the Stack
 
 The dev overlay bind-mounts the local VBOGS code checkout.
 
@@ -61,9 +29,6 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 # Example:
 # ./dc_bash.sh vbogs-jax
 ```
-
-## Running Remote Compose Stack
-Coming Soon!
 
 ## Downloading the Datasets
 
