@@ -43,6 +43,13 @@ bash scripts/build_stack_serial.sh --no-cache
 bash scripts/build_stack_serial.sh --force vbogs-torch vbogs-jax
 ```
 
+Push the built images to Docker Hub:
+
+```bash
+docker login
+bash scripts/push_stack_images.sh <dockerhub-username> <version>
+```
+
 Start the local dev stack:
 
 ```bash
