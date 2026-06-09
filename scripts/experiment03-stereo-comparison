@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/experiment03-stereo-comparison [OPTIONS] [-- RUN_PIPELINE_ARGS...]
+
+Run Experiment 03: KITTI-360 drive 004 left-only vs stereo RGB
+Octree-AnyGS training comparison.
+
+This script is intended to run from inside the Portainer vbogs-pipeline
+container. It launches two full high-quality pipeline runs by default:
+
+  1. left-only RGB training
+  2. left+right stereo RGB training
+
+Defaults:
+  --drive        2013_05_28_drive_0004_sync
+  --config       configs/pipeline/portainer.yaml
+  --output-root  outputs/experiments/experiment03-stereo-comparison
+  --start-at     prepare
+  --stop-after   bundle
+  --gpu          0
+  --jax-device   0
+
+Options:
+  --drive DRIVE              KITTI-360 drive id.
+  --config PATH              Pipeline config path.
+  --output-root PATH         Parent output root for left/ and stereo/ runs.
+  --gpu GPU                  GPU id passed to Octree-AnyGS.
+  --jax-device DEVICE        JAX device id for VBGS fitting.
+  --start-at STAGE           First pipeline stage.
+  --stop-after STAGE         Last pipeline stage.
+  --variant {left,stereo,both}
+                              Which training-camera variant to run.
+  --dry-run                  Print commands without executing stages.
+  --continue-on-error         Continue if one variant fails.
+  -h, --help                  Show this help.
+
+Examples:
+  scripts/experiment03-stereo-comparison
+
+  scripts/experiment03-stereo-comparison --dry-run
+
+  scripts/experiment03-stereo-comparison --variant stereo -- --render-max-views 5
+USAGE
+}
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+drive="2013_05_28_drive_0004_sync"
+config="configs/pipeline/portainer.yaml"
+output_root="outputs/experiments/experiment03-stereo-comparison"
+gpu="0"
+jax_device="0"
+start_at="prepare"
+stop_after="bundle"
+variant="both"
+dry_run=false
+continue_on_error=false
+extra_args=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --drive)
+      drive="${2:?--drive requires a value}"
+      shift 2
+      ;;
+    --config)
+      config="${2:?--config requires a value}"
+      shift 2
+      ;;
+    --output-root)
+      output_root="${2:?--output-root requires a value}"
+      shift 2
+      ;;
+    --gpu)
+      gpu="${2:?--gpu requires a value}"
+      shift 2
+      ;;
+    --jax-device)
+      jax_device="${2:?--jax-device requires a value}"
+      shift 2
+      ;;
+    --start-at)
+      start_at="${2:?--start-at requires a value}"
+      shift 2
+      ;;
+    --stop-after)
+      stop_after="${2:?--stop-after requires a value}"
+      shift 2
+      ;;
+    --variant)
+      variant="${2:?--variant requires one of left, stereo, both}"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --continue-on-error)
+      continue_on_error=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_args=("$@")
+      break
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "${variant}" in
+  left)
+    variants=(left)
+    ;;
+  stereo)
+    variants=(stereo)
+    ;;
+  both)
+    variants=(left stereo)
+    ;;
+  *)
+    echo "--variant must be one of: left, stereo, both" >&2
+    exit 2
+    ;;
+esac
+
+run_variant() {
+  local training_cameras="$1"
+  local variant_output_root="${output_root}/${training_cameras}"
+  local -a cmd=(
+    scripts/run_pipeline.sh
+    --config "${config}"
+    --drive "${drive}"
+    --gpu "${gpu}"
+    --jax-device "${jax_device}"
+    --training-cameras "${training_cameras}"
+    --start-at "${start_at}"
+    --stop-after "${stop_after}"
+    --run-output-root "${variant_output_root}"
+  )
+
+  cmd+=("${extra_args[@]}")
+
+  echo
+  echo "=== Experiment 03: ${drive} :: training-cameras=${training_cameras} ==="
+  printf '+'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
+
+  if [ "${dry_run}" = "true" ]; then
+    return 0
+  fi
+
+  "${cmd[@]}"
+}
+
+echo "Experiment 03 stereo RGB training comparison"
+echo "Drive       : ${drive}"
+echo "Config      : ${config}"
+echo "Output root : ${output_root}"
+echo "Stages      : ${start_at} -> ${stop_after}"
+echo "GPU/JAX     : ${gpu} / ${jax_device}"
+
+failures=()
+for training_cameras in "${variants[@]}"; do
+  if ! run_variant "${training_cameras}"; then
+    failures+=("${training_cameras}")
+    if [ "${continue_on_error}" != "true" ]; then
+      exit 1
+    fi
+  fi
+done
+
+if [ "${#failures[@]}" -gt 0 ]; then
+  echo
+  echo "Experiment 03 completed with failures: ${failures[*]}" >&2
+  exit 1
+fi
+
+echo
+echo "Experiment 03 complete."
+for training_cameras in "${variants[@]}"; do
+  echo "${training_cameras} bundle: ${output_root}/${training_cameras}/${drive}"
+done
+echo
+echo "Check metadata:"
+for training_cameras in "${variants[@]}"; do
+  echo "  cat ${output_root}/${training_cameras}/${drive}/prepared/metadata.json"
+done
