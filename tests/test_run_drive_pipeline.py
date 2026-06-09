@@ -169,6 +169,44 @@ def test_config_default_sets_gaussian_type():
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
 
 
+def test_kitti360_prepare_forwards_training_cameras():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--training-cameras",
+            "stereo",
+        ]
+    )
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    assert prepare_step.command[:2] == ("python", "scripts/prepare_kitti360_colmap.py")
+    training_index = prepare_step.command.index("--training-cameras")
+    assert prepare_step.command[training_index + 1] == "stereo"
+
+
+def test_config_default_sets_training_cameras(tmp_path):
+    config_path = tmp_path / "pipeline_config.yaml"
+    config_path.write_text(
+        """
+pipeline:
+  drive: drive_sync
+prepare:
+  training_cameras: stereo
+""",
+        encoding="utf-8",
+    )
+
+    defaults = load_config_defaults(config_path)
+    parser = build_parser(defaults)
+    args = parser.parse_args([])
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    training_index = prepare_step.command.index("--training-cameras")
+    assert prepare_step.command[training_index + 1] == "stereo"
+
+
 def test_config_default_enables_google_drive_upload(tmp_path):
     config_path = tmp_path / "pipeline_config.yaml"
     config_path.write_text(
@@ -274,16 +312,25 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
             "/data/ncore",
             "--camera-id",
             "camera_front_wide_120fov,camera_front_tele_30fov",
+            "--training-cameras",
+            "stereo",
             "--point-source",
             "lidar",
         ]
     )
     by_name = {step.name: step for step in build_steps(args)}
 
-    assert by_name["prepare"].command[:2] == ("python", "scripts/prepare_nvidia_ncore_colmap.py")
+    assert by_name["prepare"].command[:2] == (
+        "python",
+        "scripts/prepare_nvidia_ncore_colmap.py",
+    )
     assert "--scene-id" in by_name["prepare"].command
-    assert by_name["prepare"].command[by_name["prepare"].command.index("--scene-id") + 1] == "clip_001"
+    assert (
+        by_name["prepare"].command[by_name["prepare"].command.index("--scene-id") + 1]
+        == "clip_001"
+    )
     assert "--ncore-root" in by_name["prepare"].command
+    assert "--training-cameras" not in by_name["prepare"].command
 
     point_step = by_name["stereo"]
     assert point_step.command[:2] == ("python", "scripts/export_points_world.py")

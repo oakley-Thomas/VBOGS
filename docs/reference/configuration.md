@@ -53,6 +53,9 @@ train:
   resolution: 4
   iterations: 30000
 
+prepare:
+  training_cameras: left
+
 fit:
   jax_device: 0
 ```
@@ -74,6 +77,10 @@ scripts/run_pipeline.sh \
 | `train.base_layer` | `9` | `10` |
 | `train.visible_threshold` | `0.02` | `0.01` |
 | `bucket.max_points` | `10000000` | `0` |
+
+For KITTI-360, set `prepare.training_cameras: stereo` to train Octree-AnyGS
+from both `image_00` and `image_01` RGB frames. The default `left` preserves
+the legacy left-camera-only prepared dataset.
 
 The dev profile is meant to finish on smaller local hardware. The Portainer
 profile is the higher-quality server path.

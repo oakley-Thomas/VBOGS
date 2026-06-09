@@ -23,7 +23,9 @@ Default path: `/data/COLMAP/<scene-id>/`
 ```text
 /data/COLMAP/<scene-id>/
   images/
-    *.png
+    *.png                       # KITTI-360 default left-camera layout
+    image_00/*.png              # KITTI-360 optional stereo RGB layout
+    image_01/*.png
   sparse/0/
     cameras.txt
     images.txt

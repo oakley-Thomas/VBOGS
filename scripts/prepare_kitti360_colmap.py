@@ -6,7 +6,7 @@ This script adapts the local KITTI-360 perspective stereo layout into the
 `images/` + `sparse/0/` structure that Octree-AnyGS expects for `data_format:
 colmap`. It writes:
 
-- `images/*.png` as symlinks or copies to the rectified left-camera images
+- `images/*.png` as symlinks or copies to the rectified left-camera images by default
 - `sparse/0/cameras.txt`
 - `sparse/0/images.txt`
 - `sparse/0/points3D.ply`
@@ -38,20 +38,66 @@ from vbogs.data_layout import resolve_kitti360_path
 
 
 @dataclass(frozen=True)
-class StereoCalibration:
+class PinholeCalibration:
     width: int
     height: int
     fx: float
     fy: float
     cx: float
     cy: float
+
+
+@dataclass(frozen=True)
+class StereoCalibration:
+    left: PinholeCalibration
+    right: PinholeCalibration
+    right_center_in_left: np.ndarray
     baseline_m: float
+
+    @property
+    def width(self) -> int:
+        return self.left.width
+
+    @property
+    def height(self) -> int:
+        return self.left.height
+
+    @property
+    def fx(self) -> float:
+        return self.left.fx
+
+    @property
+    def fy(self) -> float:
+        return self.left.fy
+
+    @property
+    def cx(self) -> float:
+        return self.left.cx
+
+    @property
+    def cy(self) -> float:
+        return self.left.cy
+
+
+@dataclass(frozen=True)
+class ColmapCamera:
+    camera_id: int
+    label: str
+    calibration: PinholeCalibration
 
 
 @dataclass(frozen=True)
 class FramePose:
     frame_id: int
     c2w: np.ndarray  # (4, 4)
+
+
+@dataclass(frozen=True)
+class ColmapImage:
+    image_id: int
+    camera_id: int
+    image_name: str
+    c2w: np.ndarray
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,6 +148,16 @@ def parse_args() -> argparse.Namespace:
         choices=("symlink", "copy"),
         default="symlink",
         help="Whether to symlink or copy image files into the dataset.",
+    )
+    parser.add_argument(
+        "--training-cameras",
+        choices=("left", "stereo"),
+        default="left",
+        help=(
+            "RGB cameras written for Octree-AnyGS training. `left` preserves the "
+            "legacy image_00-only layout; `stereo` adds image_01 as a second "
+            "posed camera."
+        ),
     )
     parser.add_argument(
         "--seed-mode",
@@ -166,6 +222,23 @@ def resolve_input_layout(args: argparse.Namespace) -> None:
     args.calibration_dir = resolve_kitti360_path(args.calibration_dir, kind="calibration")
 
 
+def camera_from_projection(projection: np.ndarray, size: Sequence[float]) -> PinholeCalibration:
+    return PinholeCalibration(
+        width=int(size[0]),
+        height=int(size[1]),
+        fx=float(projection[0, 0]),
+        fy=float(projection[1, 1]),
+        cx=float(projection[0, 2]),
+        cy=float(projection[1, 2]),
+    )
+
+
+def camera_center_from_projection(projection: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(projection[:, :3], dtype=np.float64)
+    offset = np.asarray(projection[:, 3], dtype=np.float64)
+    return -np.linalg.solve(matrix, offset)
+
+
 def parse_perspective_file(path: Path) -> StereoCalibration:
     entries: Dict[str, List[float]] = {}
     with path.open("r", encoding="utf-8") as handle:
@@ -182,19 +255,18 @@ def parse_perspective_file(path: Path) -> StereoCalibration:
 
     p0 = np.asarray(entries["P_rect_00"], dtype=np.float64).reshape(3, 4)
     p1 = np.asarray(entries["P_rect_01"], dtype=np.float64).reshape(3, 4)
-    size = entries["S_rect_00"]
-    fx = float(p0[0, 0])
-    fy = float(p0[1, 1])
-    cx = float(p0[0, 2])
-    cy = float(p0[1, 2])
-    baseline = abs(float(p1[0, 3]) / fx)
+    left_size = entries["S_rect_00"]
+    right_size = entries.get("S_rect_01", left_size)
+    left = camera_from_projection(p0, left_size)
+    right = camera_from_projection(p1, right_size)
+    left_center = camera_center_from_projection(p0)
+    right_center = camera_center_from_projection(p1)
+    right_center_in_left = right_center - left_center
+    baseline = abs(float(right_center_in_left[0]))
     return StereoCalibration(
-        width=int(size[0]),
-        height=int(size[1]),
-        fx=fx,
-        fy=fy,
-        cx=cx,
-        cy=cy,
+        left=left,
+        right=right,
+        right_center_in_left=right_center_in_left.astype(np.float64),
         baseline_m=baseline,
     )
 
@@ -251,6 +323,18 @@ def materialize_image(src: Path, dst: Path, copy_mode: str) -> None:
         shutil.copy2(src, dst)
     else:
         os.symlink(src.resolve(), dst)
+
+
+def translation_matrix(offset: np.ndarray) -> np.ndarray:
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, 3] = np.asarray(offset, dtype=np.float64).reshape(3)
+    return transform
+
+
+def right_camera_c2w(left_c2w: np.ndarray, calibration: StereoCalibration) -> np.ndarray:
+    return np.asarray(left_c2w, dtype=np.float64).reshape(4, 4) @ translation_matrix(
+        calibration.right_center_in_left
+    )
 
 
 def build_matcher(args: argparse.Namespace) -> cv2.StereoSGBM:
@@ -443,47 +527,139 @@ def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
     ply.write(path)
 
 
-def write_cameras_txt(path: Path, calibration: StereoCalibration) -> None:
+def write_cameras_txt(path: Path, cameras: Sequence[ColmapCamera]) -> None:
     header = [
         "# Camera list with one line of data per camera:",
         "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]",
-        "# Number of cameras: 1",
+        f"# Number of cameras: {len(cameras)}",
     ]
-    camera_line = (
-        f"1 PINHOLE {calibration.width} {calibration.height} "
-        f"{calibration.fx:.8f} {calibration.fy:.8f} {calibration.cx:.8f} {calibration.cy:.8f}"
-    )
-    path.write_text("\n".join(header + [camera_line, ""]) + "\n", encoding="utf-8")
+    lines = header.copy()
+    for camera in cameras:
+        calibration = camera.calibration
+        lines.append(
+            f"{camera.camera_id} PINHOLE {calibration.width} {calibration.height} "
+            f"{calibration.fx:.8f} {calibration.fy:.8f} "
+            f"{calibration.cx:.8f} {calibration.cy:.8f}"
+        )
+    path.write_text("\n".join(lines + [""]) + "\n", encoding="utf-8")
 
 
-def write_images_txt(
-    path: Path,
-    frames: Sequence[Tuple[int, Path, Path, FramePose]],
-    output_image_names: Dict[int, str],
-) -> None:
+def write_images_txt(path: Path, images: Sequence[ColmapImage]) -> None:
     lines = [
         "# Image list with two lines of data per image:",
         "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME",
         "#   POINTS2D[] as (X, Y, POINT3D_ID)",
-        f"# Number of images: {len(frames)}",
+        f"# Number of images: {len(images)}",
     ]
-    for image_id, (frame_id, _left, _right, pose) in enumerate(frames, start=1):
-        c2w = pose.c2w
+    for image in images:
+        c2w = np.asarray(image.c2w, dtype=np.float64).reshape(4, 4)
         r_wc = c2w[:3, :3]
         t_wc = c2w[:3, 3]
         r_cw = r_wc.T
         t_cw = -r_cw @ t_wc
         qvec = rotmat_to_qvec(r_cw)
-        image_name = output_image_names[frame_id]
         lines.append(
-            f"{image_id} "
+            f"{image.image_id} "
             f"{qvec[0]:.12f} {qvec[1]:.12f} {qvec[2]:.12f} {qvec[3]:.12f} "
             f"{t_cw[0]:.12f} {t_cw[1]:.12f} {t_cw[2]:.12f} "
-            f"1 {image_name}"
+            f"{image.camera_id} {image.image_name}"
         )
         # One dummy feature observation is enough for the text parser path.
         lines.append("0.0 0.0 -1")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def selected_training_cameras(
+    calibration: StereoCalibration,
+    training_cameras: str,
+) -> list[ColmapCamera]:
+    cameras = [
+        ColmapCamera(camera_id=1, label="image_00", calibration=calibration.left)
+    ]
+    if training_cameras == "stereo":
+        cameras.append(
+            ColmapCamera(camera_id=2, label="image_01", calibration=calibration.right)
+        )
+    return cameras
+
+
+def matrix_for_metadata(matrix: np.ndarray) -> list[list[float]]:
+    return [
+        [float(value) for value in row]
+        for row in np.asarray(matrix, dtype=np.float64).reshape(4, 4)
+    ]
+
+
+def calibration_for_metadata(
+    calibration: PinholeCalibration,
+    camera_id: int,
+) -> dict[str, float | int]:
+    return {
+        "camera_id": int(camera_id),
+        "width": int(calibration.width),
+        "height": int(calibration.height),
+        "fx": float(calibration.fx),
+        "fy": float(calibration.fy),
+        "cx": float(calibration.cx),
+        "cy": float(calibration.cy),
+    }
+
+
+def materialize_training_images(
+    *,
+    frames: Sequence[Tuple[int, Path, Path, FramePose]],
+    calibration: StereoCalibration,
+    training_cameras: str,
+    images_out: Path,
+    copy_mode: str,
+) -> tuple[list[ColmapImage], list[dict]]:
+    colmap_images: list[ColmapImage] = []
+    frame_records: list[dict] = []
+    image_id = 1
+
+    for frame_id, left_path, right_path, pose in frames:
+        output_name = f"{frame_id:010d}.png"
+        frame_images: list[dict] = []
+
+        camera_specs: list[tuple[str, int, Path, str, np.ndarray]]
+        if training_cameras == "stereo":
+            camera_specs = [
+                ("image_00", 1, left_path, f"image_00/{output_name}", pose.c2w),
+                (
+                    "image_01",
+                    2,
+                    right_path,
+                    f"image_01/{output_name}",
+                    right_camera_c2w(pose.c2w, calibration),
+                ),
+            ]
+        else:
+            camera_specs = [("image_00", 1, left_path, output_name, pose.c2w)]
+
+        for camera_label, camera_id, src_path, image_name, c2w in camera_specs:
+            materialize_image(src_path, images_out / image_name, copy_mode)
+            colmap_images.append(
+                ColmapImage(
+                    image_id=image_id,
+                    camera_id=camera_id,
+                    image_name=image_name,
+                    c2w=c2w,
+                )
+            )
+            frame_images.append(
+                {
+                    "camera": camera_label,
+                    "camera_id": camera_id,
+                    "image_name": image_name,
+                    "source_path": str(src_path),
+                    "c2w": matrix_for_metadata(c2w),
+                }
+            )
+            image_id += 1
+
+        frame_records.append({"frame_id": frame_id, "images": frame_images})
+
+    return colmap_images, frame_records
 
 
 def prepare_dataset(args: argparse.Namespace) -> Path:
@@ -519,30 +695,43 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
     images_out.mkdir(parents=True, exist_ok=True)
     sparse_out.mkdir(parents=True, exist_ok=True)
 
-    output_image_names: Dict[int, str] = {}
-    for _, left_path, _right_path, _pose in frames:
-        frame_id = int(left_path.stem)
-        output_name = f"{frame_id:010d}.png"
-        materialize_image(left_path, images_out / output_name, args.copy_mode)
-        output_image_names[frame_id] = output_name
+    training_cameras = getattr(args, "training_cameras", "left")
+    cameras = selected_training_cameras(calibration, training_cameras)
+    colmap_images, frame_records = materialize_training_images(
+        frames=frames,
+        calibration=calibration,
+        training_cameras=training_cameras,
+        images_out=images_out,
+        copy_mode=args.copy_mode,
+    )
 
     if args.seed_mode == "stereo":
         points_xyz, points_rgb = build_sparse_points_from_stereo(frames, calibration, args)
     else:
         points_xyz, points_rgb = build_random_points(frames, args)
 
-    write_cameras_txt(sparse_out / "cameras.txt", calibration)
-    write_images_txt(sparse_out / "images.txt", frames, output_image_names)
+    write_cameras_txt(sparse_out / "cameras.txt", cameras)
+    write_images_txt(sparse_out / "images.txt", colmap_images)
     write_ply(sparse_out / "points3D.ply", points_xyz, points_rgb)
 
+    camera_intrinsics = {
+        camera.label: calibration_for_metadata(camera.calibration, camera.camera_id)
+        for camera in cameras
+    }
     metadata = {
         "drive": args.drive,
         "num_frames": len(frames),
+        "num_images": len(colmap_images),
+        "training_cameras": training_cameras,
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
         "copy_mode": args.copy_mode,
         "seed_mode": args.seed_mode,
         "stereo_max_points": int(points_xyz.shape[0]),
+        "camera_intrinsics": camera_intrinsics,
+        "right_camera_center_in_left": [
+            float(value) for value in calibration.right_center_in_left
+        ],
         "intrinsics": {
             "width": calibration.width,
             "height": calibration.height,
@@ -553,6 +742,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
             "baseline_m": calibration.baseline_m,
         },
         "selected_frames": [frame_id for frame_id, _, _, _ in frames],
+        "frame_records": frame_records,
     }
     (dataset_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
