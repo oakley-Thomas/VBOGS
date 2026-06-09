@@ -37,7 +37,43 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 
 VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset. Follow the instructions [here](data.md).
 
+## NVIDIA NCore Test Run
 
+From inside `vbogs-pipeline`, use the downloaded clip UUID as `--scene-id` and
+select the NCore dataset adapter:
+
+```bash
+scripts/run_pipeline.sh \
+  --config configs/pipeline/nvidia_ncore_dev.yaml \
+  --dataset-name nvidia_ncore \
+  --scene-id 00b769dd-b4fa-4d88-ba4e-e6a230ff0c66 \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after render \
+  --frame-step 2 \
+  --max-frames 30 \
+  --resolution 4 \
+  --iterations 7000 \
+  --max-points-per-frame 50000 \
+  --render-max-views 2
+```
+
+For a full NCore run:
+
+```bash
+scripts/run_pipeline.sh \
+  --config configs/pipeline/nvidia_ncore_dev.yaml \
+  --dataset-name nvidia_ncore \
+  --scene-id 00b769dd-b4fa-4d88-ba4e-e6a230ff0c66 \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after bundle
+```
+
+`--drive` by itself is the KITTI-360 path. If the run header says
+`Dataset: kitti360`, stop and rerun with `--dataset-name nvidia_ncore`.
 
 ## KITTI-360 Test Run
 
@@ -101,5 +137,3 @@ From ```vbogs-pipeline``` get the filebrowser credentials, you may need to refre
 ```bash
 python scripts/get_filebrowser_login.py --reset-password
 ```
-
-
