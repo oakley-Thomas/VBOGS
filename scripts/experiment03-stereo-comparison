@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/experiment03-stereo-comparison [OPTIONS] [-- RUN_PIPELINE_ARGS...]
+Usage: scripts/experiment03-stereo-comparison [OPTIONS] [KITTI_360_CLIP] [-- RUN_PIPELINE_ARGS...]
 
 Run Experiment 03: KITTI-360 drive 004 left-only vs stereo RGB
 Octree-AnyGS training comparison.
@@ -15,7 +15,7 @@ container. It launches two full high-quality pipeline runs by default:
   2. left+right stereo RGB training
 
 Defaults:
-  --drive        2013_05_28_drive_0004_sync
+  --clip        2013_05_28_drive_0004_sync
   --config       configs/pipeline/portainer.yaml
   --output-root  outputs/experiments/experiment03-stereo-comparison
   --start-at     prepare
@@ -24,7 +24,8 @@ Defaults:
   --jax-device   0
 
 Options:
-  --drive DRIVE              KITTI-360 drive id.
+  --clip CLIP                KITTI-360 clip/drive id.
+  --drive DRIVE              Alias for --clip.
   --config PATH              Pipeline config path.
   --output-root PATH         Parent output root for left/ and stereo/ runs.
   --gpu GPU                  GPU id passed to Octree-AnyGS.
@@ -41,6 +42,10 @@ Examples:
   scripts/experiment03-stereo-comparison
 
   scripts/experiment03-stereo-comparison --dry-run
+
+  scripts/experiment03-stereo-comparison 2013_05_28_drive_0008_sync
+
+  scripts/experiment03-stereo-comparison --clip 2013_05_28_drive_0008_sync
 
   scripts/experiment03-stereo-comparison --variant stereo -- --render-max-views 5
 USAGE
@@ -61,11 +66,12 @@ variant="both"
 dry_run=false
 continue_on_error=false
 extra_args=()
+positional_clip_seen=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --drive)
-      drive="${2:?--drive requires a value}"
+    --clip | --drive)
+      drive="${2:?$1 requires a value}"
       shift 2
       ;;
     --config)
@@ -113,10 +119,20 @@ while [ "$#" -gt 0 ]; do
       extra_args=("$@")
       break
       ;;
-    *)
+    -*)
       echo "Unknown option: $1" >&2
       usage >&2
       exit 2
+      ;;
+    *)
+      if [ "${positional_clip_seen}" = "true" ]; then
+        echo "Only one positional KITTI-360 clip may be provided." >&2
+        usage >&2
+        exit 2
+      fi
+      drive="$1"
+      positional_clip_seen=true
+      shift
       ;;
   esac
 done

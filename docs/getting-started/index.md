@@ -105,6 +105,13 @@ scripts/run_pipeline.sh \
   --stop-after bundle
 ```
 
+## Experiment Guides
+
+Experiment-specific runbooks live under the docs' Experiments section:
+
+- [Experiment 02: 3D Baseline Drive Sweep](../experiments/experiment02.md)
+- [Experiment 03: Stereo Training Comparison](../experiments/experiment03.md)
+
 ## Realtime Navigation and Visualization
 
 Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Map

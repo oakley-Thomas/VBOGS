@@ -8,6 +8,7 @@ from scripts.export_points_world import (
     unproject_rectified_to_world,
 )
 from scripts.prepare_nvidia_ncore_colmap import prepare_dataset_from_loader
+from vbogs.ncore_adapter import parse_id_list
 
 
 class FakeModelParameters:
@@ -112,15 +113,46 @@ def test_prepare_ncore_colmap_writes_multi_camera_metadata(tmp_path):
 
     prepared = prepare_dataset_from_loader(args, FakeLoader())
     dataset_dir = prepared.dataset_dir
+    image_names = colmap_image_names(dataset_dir / "sparse" / "0" / "images.txt")
+    image_basenames = [name.rsplit("/", maxsplit=1)[-1] for name in image_names]
 
-    assert (dataset_dir / "images" / "cam_a" / "0000000000_0000000000.png").exists()
+    assert (dataset_dir / "images" / "cam_a" / "cam_a_0000000000_0000000000.png").exists()
     assert (dataset_dir / "sparse" / "0" / "cameras.txt").read_text().count("PINHOLE") == 2
-    assert "cam_b/0000000001_0000000001.png" in (
-        dataset_dir / "sparse" / "0" / "images.txt"
-    ).read_text()
+    assert "cam_b/cam_b_0000000001_0000000001.png" in image_names
+    assert len(image_names) == 4
+    assert len(set(image_basenames)) == 4
     assert prepared.metadata["dataset"] == "nvidia_ncore"
     assert prepared.metadata["camera_ids"] == ["cam_a", "cam_b"]
+    assert prepared.metadata["primary_camera_id"] == "cam_a"
+    assert prepared.metadata["num_frames"] == 2
+    assert prepared.metadata["num_images"] == 4
+    assert set(prepared.metadata["intrinsics"]) == {"cam_a", "cam_b"}
     assert len(prepared.metadata["frame_records"]) == 2
+    for record in prepared.metadata["frame_records"]:
+        assert record["primary_camera_id"] == "cam_a"
+        assert set(record["cameras"]) == {"cam_a", "cam_b"}
+        assert record["cameras"]["cam_a"]["image_name"].startswith("cam_a/cam_a_")
+        assert record["cameras"]["cam_b"]["image_name"].startswith("cam_b/cam_b_")
+
+
+def colmap_image_names(path):
+    names = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        if len(tokens) >= 10:
+            names.append(tokens[9])
+    return names
+
+
+def test_ncore_camera_id_parser_preserves_order_and_deduplicates():
+    assert parse_id_list(["cam_a,cam_b", "cam_a"], ("default_cam",)) == [
+        "cam_a",
+        "cam_b",
+    ]
+    assert parse_id_list(None, ("cam_a", "cam_a", "cam_b")) == ["cam_a", "cam_b"]
 
 
 def test_lidar_export_transforms_points_and_preserves_contract(tmp_path):

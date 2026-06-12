@@ -44,14 +44,14 @@ class ColmapImage:
 
 def parse_id_list(values: Sequence[str] | str | None, default: Sequence[str]) -> list[str]:
     if values is None:
-        return list(default)
+        values = default
     if isinstance(values, str):
         values = [values]
     parsed: list[str] = []
     for value in values:
         for token in str(value).split(","):
             token = token.strip()
-            if token:
+            if token and token not in parsed:
                 parsed.append(token)
     return parsed or list(default)
 

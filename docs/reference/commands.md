@@ -163,7 +163,7 @@ Prepare NVIDIA NCore into COLMAP layout:
 ```bash
 python scripts/prepare_nvidia_ncore_colmap.py \
   --scene-id <clip-id> \
-  --camera-id camera_front_wide_120fov \
+  --camera-id camera_front_wide_120fov,camera_front_tele_30fov \
   --frame-step 2 \
   --max-frames 200
 ```

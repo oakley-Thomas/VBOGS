@@ -82,6 +82,10 @@ For KITTI-360, set `prepare.training_cameras: stereo` to train Octree-AnyGS
 from both `image_00` and `image_01` RGB frames. The default `left` preserves
 the legacy left-camera-only prepared dataset.
 
+For NVIDIA NCore, set `dataset.camera_ids` to an ordered list of camera sensors.
+The first camera drives frame selection, and secondary cameras are matched by
+nearest timestamp during COLMAP preparation.
+
 The dev profile is meant to finish on smaller local hardware. The Portainer
 profile is the higher-quality server path.
 

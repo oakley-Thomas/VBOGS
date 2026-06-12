@@ -31,6 +31,10 @@ def service_block(compose_text: str, service: str) -> str:
     return match.group("block")
 
 
+def flag_values(command: tuple[str, ...], flag: str) -> list[str]:
+    return [command[index + 1] for index, value in enumerate(command) if value == flag]
+
+
 def test_run_output_root_routes_v1_stage_outputs():
     parser = build_parser({})
     args = parser.parse_args(
@@ -331,13 +335,32 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
     )
     assert "--ncore-root" in by_name["prepare"].command
     assert "--training-cameras" not in by_name["prepare"].command
+    assert flag_values(by_name["prepare"].command, "--camera-id") == [
+        "camera_front_wide_120fov,camera_front_tele_30fov"
+    ]
 
     point_step = by_name["stereo"]
     assert point_step.command[:2] == ("python", "scripts/export_points_world.py")
     assert point_step.command[point_step.command.index("--dataset-name") + 1] == "nvidia_ncore"
     assert point_step.command[point_step.command.index("--scene-id") + 1] == "clip_001"
     assert point_step.command[point_step.command.index("--point-source") + 1] == "lidar"
+    assert flag_values(point_step.command, "--camera-id") == [
+        "camera_front_wide_120fov,camera_front_tele_30fov"
+    ]
     assert "data/m4/clip_001/U.npy" in by_name["render"].command
+
+
+def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
+    defaults = load_config_defaults(REPO_ROOT / "configs/pipeline/nvidia_ncore_dev.yaml")
+    parser = build_parser(defaults)
+    args = parser.parse_args(["--scene-id", "clip_001", "--point-source", "lidar"])
+    by_name = {step.name: step for step in build_steps(args)}
+
+    expected = ["camera_front_wide_120fov", "camera_front_tele_30fov"]
+    assert args.dataset_name == "nvidia_ncore"
+    assert args.camera_ids == expected
+    assert flag_values(by_name["prepare"].command, "--camera-id") == expected
+    assert flag_values(by_name["stereo"].command, "--camera-id") == expected
 
 
 def test_environment_pipeline_configs_are_loadable():

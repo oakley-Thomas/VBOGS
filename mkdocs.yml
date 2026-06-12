@@ -25,6 +25,9 @@ nav:
       - Deployment: getting-started/deployment.md
       - Data Setup: getting-started/data.md
       - Environments: getting-started/environments.md
+  - Experiments:
+      - 3D Baseline Drive Sweep: experiments/experiment02.md
+      - Stereo Training Comparison: experiments/experiment03.md
 
 plugins:
   - search
