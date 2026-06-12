@@ -112,7 +112,7 @@ The compose stack reads these frequently used variables:
 | `VBOGS_FILEBROWSER_HOST_BIND` | File Browser host bind address, default `0.0.0.0` |
 | `VBOGS_FILEBROWSER_HOST_PORT` | File Browser host HTTP port, default `8088` |
 | `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath for File Browser |
-| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID overrides for File Browser database/config volumes |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID overrides for File Browser database/config volumes; defaults to `0` so `/outputs` uploads work with root-owned Docker volumes |
 
 Pull-only and Portainer stacks share a `vbogs-repo` volume mounted at
 `/workspace/VBOGS`. Run `vbogs-bootstrap-repo` once after stack creation so the

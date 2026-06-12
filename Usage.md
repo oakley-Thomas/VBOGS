@@ -52,7 +52,8 @@ http://localhost:8088
 ```
 
 Read the first-boot `admin` password from `docker compose ... logs
-vbogs-filebrowser`. The useful roots are `/project` and `/outputs`.
+vbogs-filebrowser`. The useful roots are `/project` and `/outputs`; uploads to
+`/outputs` write through to the shared output volume.
 
 ## Run a Full Drive
 

@@ -179,9 +179,10 @@ viewer should bind to a different interface or host port.
 ## File Browser Access
 
 The compose stack includes a `vbogs-filebrowser` sidecar using the
-`filebrowser/filebrowser` image. It provides browser-based, read-only access to
-the shared project and artifact volumes in both local Docker Compose and
-Portainer deployments.
+`filebrowser/filebrowser` image. It provides browser-based access to the shared
+project and artifact volumes in both local Docker Compose and Portainer
+deployments. The `/outputs` mount is writable for uploads; the other shared
+project, data, generated-config, COLMAP, and Octree-AnyGS mounts are read-only.
 
 The default URL is:
 
@@ -197,11 +198,12 @@ Relevant stack variables:
 | `VBOGS_FILEBROWSER_HOST_BIND` | Host bind address, default `0.0.0.0`. |
 | `VBOGS_FILEBROWSER_HOST_PORT` | Host HTTP port, default `8088`. |
 | `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath. |
-| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. Defaults to `0` so File Browser can upload into root-owned output volumes. |
 
 On first boot, read the generated `admin` password from the
 `vbogs-filebrowser` logs. The mounted paths are `/project`, `/outputs`,
-`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`.
+`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`; uploads are
+intended for `/outputs`.
 
 ## KITTI-360 Inputs
 

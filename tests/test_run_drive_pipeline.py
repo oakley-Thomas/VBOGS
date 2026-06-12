@@ -551,12 +551,11 @@ def test_vbgs_render_service_publishes_viewer_port():
 
 
 def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
-    filebrowser_targets = [
+    read_only_filebrowser_targets = [
         "/srv/project",
         "/srv/data",
         "/srv/data/KITTI-360",
         "/srv/data/NVIDIA-PhysicalAI-AV-NCore",
-        "/srv/outputs",
         "/srv/generated_configs",
         "/srv/COLMAP",
         "/srv/OCTREE-ANYGS",
@@ -577,9 +576,12 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
         assert "FB_DISABLE_EXEC" in filebrowser
         assert "vbogs-filebrowser-database" in filebrowser
         assert "vbogs-filebrowser-config" in filebrowser
-        for target in filebrowser_targets:
-            assert f"target: {target}" in filebrowser
-        assert filebrowser.count("read_only: true") >= len(filebrowser_targets)
+        assert "VBOGS_FILEBROWSER_PUID:-0" in filebrowser
+        assert "VBOGS_FILEBROWSER_PGID:-0" in filebrowser
+        for target in read_only_filebrowser_targets:
+            assert f"target: {target}\n        read_only: true" in filebrowser
+        assert "target: /srv/outputs" in filebrowser
+        assert "target: /srv/outputs\n        read_only: true" not in filebrowser
 
 
 def test_portainer_compose_uses_portainer_config():
