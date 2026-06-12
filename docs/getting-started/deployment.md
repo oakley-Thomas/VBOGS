@@ -36,3 +36,9 @@ docker login
 bash scripts/push_stack_images.sh <dockerhub-username> <version>
 ```
 
+## Update git stack
+```bash
+cd /workspace/VBOGS
+python scripts/update_stack_git_ref.py <branch-name>
+```
+
