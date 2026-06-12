@@ -50,12 +50,18 @@ def test_export_local_viewer_run_copies_renderable_layout_and_archive(tmp_path):
         },
     )
 
+    raw_images = tmp_path / "raw_images"
+    raw_images.mkdir()
+    (raw_images / "000000.png").write_bytes(b"raw-png")
     colmap_scene = tmp_path / "COLMAP" / drive
     (colmap_scene / "images").mkdir(parents=True)
-    (colmap_scene / "images" / "000000.png").write_bytes(b"png")
+    (colmap_scene / "images" / "000000.png").symlink_to(raw_images / "000000.png")
     (colmap_scene / "sparse" / "0").mkdir(parents=True)
     (colmap_scene / "sparse" / "0" / "cameras.txt").write_text("camera\n", encoding="utf-8")
-    (colmap_scene / "sparse" / "0" / "images.txt").write_text("image\n", encoding="utf-8")
+    (colmap_scene / "sparse" / "0" / "images.txt").write_text(
+        "1 1 0 0 0 0 0 0 1 000000.png\n0.0 0.0 -1\n",
+        encoding="utf-8",
+    )
     (colmap_scene / "sparse" / "0" / "points3D.ply").write_bytes(b"ply\n")
     (colmap_scene / "metadata.json").write_text("{}", encoding="utf-8")
 
@@ -85,6 +91,9 @@ def test_export_local_viewer_run_copies_renderable_layout_and_archive(tmp_path):
     assert (output_dir / "model" / "original_config.yaml").is_file()
     assert (output_dir / "model" / "point_cloud" / "iteration_7" / "point_cloud_anchor.ply").is_file()
     assert (output_dir / "prepared" / "sparse" / "0" / "images.txt").is_file()
+    assert (output_dir / "prepared" / "images" / "000000.png").is_file()
+    assert not (output_dir / "prepared" / "images" / "000000.png").is_symlink()
+    assert (output_dir / "prepared" / "images" / "000000.png").read_bytes() == b"raw-png"
     assert (output_dir / "uncertainty" / "U.npy").is_file()
     assert (output_dir / "VIEWER_COMMANDS.md").is_file()
     assert archive_path.is_file()
@@ -93,6 +102,8 @@ def test_export_local_viewer_run_copies_renderable_layout_and_archive(tmp_path):
     assert patched_cfg["model_params"]["source_path"] == "../prepared"
     assert manifest["iteration"] == 7
     assert manifest["local_viewer"]["config_source_path"] == "../prepared"
+    assert manifest["prepared_images"]["image_count"] == 1
+    assert manifest["prepared_images"]["materialized"] is True
 
     saved_manifest = json.loads((output_dir / "local_viewer_manifest.json").read_text(encoding="utf-8"))
     assert saved_manifest["archive_path"] == str(archive_path.resolve())
@@ -100,6 +111,9 @@ def test_export_local_viewer_run_copies_renderable_layout_and_archive(tmp_path):
     with zipfile.ZipFile(archive_path) as archive:
         names = set(archive.namelist())
     assert f"{drive}/model/config.yaml" in names
+    assert f"{drive}/prepared/images/000000.png" in names
     assert f"{drive}/prepared/sparse/0/cameras.txt" in names
     assert f"{drive}/uncertainty/U.npy" in names
     assert f"{drive}/local_viewer_manifest.json" in names
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.read(f"{drive}/prepared/images/000000.png") == b"raw-png"

@@ -237,12 +237,65 @@ def copy_file(source: Path, destination: Path, *, required: bool, copied: list[d
     copied.append({"source": str(source), "destination": str(destination.resolve())})
 
 
-def copy_tree(source: Path, destination: Path, *, copied: list[dict[str, str]]) -> None:
+def copy_tree(
+    source: Path,
+    destination: Path,
+    *,
+    copied: list[dict[str, str]],
+    dereference_symlinks: bool = False,
+) -> None:
     source = source.resolve()
     if not source.is_dir():
         raise FileNotFoundError(f"Required directory not found: {source}")
-    shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
-    copied.append({"source": str(source), "destination": str(destination.resolve())})
+    shutil.copytree(source, destination, symlinks=not dereference_symlinks, dirs_exist_ok=True)
+    copied.append(
+        {
+            "source": str(source),
+            "destination": str(destination.resolve()),
+            "symlinks": "dereferenced" if dereference_symlinks else "preserved",
+        }
+    )
+
+
+def read_colmap_image_names(path: Path) -> list[str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"COLMAP images.txt not found: {path}")
+
+    names: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 10:
+            names.append(parts[9])
+    if not names:
+        raise ValueError(f"No image entries found in {path}")
+    return names
+
+
+def validate_materialized_colmap_images(prepared_path: Path) -> dict[str, Any]:
+    image_names = read_colmap_image_names(prepared_path / "sparse" / "0" / "images.txt")
+    image_root = prepared_path / "images"
+    missing = [name for name in image_names if not (image_root / name).is_file()]
+    symlinked = [name for name in image_names if (image_root / name).is_symlink()]
+
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = "" if len(missing) <= 5 else f", ... ({len(missing)} missing)"
+        raise FileNotFoundError(f"Prepared image files are missing under {image_root}: {preview}{suffix}")
+    if symlinked:
+        preview = ", ".join(symlinked[:5])
+        suffix = "" if len(symlinked) <= 5 else f", ... ({len(symlinked)} symlinks)"
+        raise ValueError(
+            f"Local-viewer exports must contain real image files, not symlinks: {preview}{suffix}"
+        )
+
+    return {
+        "image_count": len(image_names),
+        "image_root": str(image_root.resolve()),
+        "materialized": True,
+    }
 
 
 def default_output_dir(drive: str, output_dir: Path | None) -> Path:
@@ -347,7 +400,8 @@ def export_local_viewer_run(
     prepared_dest = output_dir / "prepared"
     uncertainty_dest = output_dir / "uncertainty"
 
-    copy_tree(source_colmap_path, prepared_dest, copied=copied)
+    copy_tree(source_colmap_path, prepared_dest, copied=copied, dereference_symlinks=True)
+    prepared_images = validate_materialized_colmap_images(prepared_dest)
     copy_file(source_model_path / "config.yaml", model_dest / "original_config.yaml", required=True, copied=copied)
 
     patched_cfg = dict(cfg)
@@ -393,6 +447,7 @@ def export_local_viewer_run(
             "u_path": display_path(uncertainty_dest / "U.npy"),
             "config_source_path": "../prepared",
         },
+        "prepared_images": prepared_images,
         "copied_artifacts": copied,
     }
     if resolved_archive_path is not None:

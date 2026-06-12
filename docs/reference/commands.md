@@ -284,7 +284,9 @@ python scripts/export_local_viewer_run.py \
 
 This writes `outputs/local_viewer_exports/<drive>/` and
 `outputs/local_viewer_exports/<drive>-local-viewer.zip`. After extracting the
-zip locally, run the command in its `VIEWER_COMMANDS.md`.
+zip locally, run the command in its `VIEWER_COMMANDS.md`. The export includes
+real prepared image files, so it is larger than the curated results bundle but
+portable for the viewer.
 
 ## Online ROS2 Loop
 

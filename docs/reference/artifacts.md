@@ -152,7 +152,7 @@ model/
   original_config.yaml
   point_cloud/iteration_<N>/
 prepared/
-  images/
+  images/                       # real image files materialized from prepared-data symlinks
   sparse/0/
 uncertainty/
   U.npy
@@ -169,7 +169,8 @@ outputs/local_viewer_exports/<drive>-local-viewer.zip
 Create it with `scripts/export_local_viewer_run.py` when you need to download a
 server run and open it in `scripts/view_octree_anygs.py` locally. Unlike the
 curated bundle, this package includes the Octree-AnyGS checkpoint and prepared
-COLMAP camera/image tree needed for rendering.
+COLMAP camera/image tree needed for rendering. Prepared image symlinks are
+dereferenced during export so the zip can be extracted on another machine.
 
 ## Generated Configs
 

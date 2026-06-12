@@ -119,7 +119,7 @@ Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Ma
 Enter the render server container
 ```bash
 # Enter the container
-./dc_bash vbogs-vbgs-render
+./dc_bash.sh vbogs-vbgs-render
 
 # Start the render server
 python scripts/view_octree_anygs.py \
