@@ -30,7 +30,7 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 
 # To enter another container pass it as an argument
 # Example:
-# ./dc_bash.sh vbogs-jax
+# ./dc_bash.sh vbogs-vbgs-render
 ```
 
 ## Downloading the Datasets
@@ -125,6 +125,15 @@ Enter the render server container
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
   --resolution 1
+
+# Start the render server (server trained scene)
+python /workspace/VBOGS/scripts/view_octree_anygs.py \
+  --model-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/model \
+  --u-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/uncertainty/U.npy \
+  --iteration 90000 \
+  --resolution 2 \
+  --port 8070 \
+  --octree-root /workspace/VBOGS/Octree-AnyGS
 ```
 
 In a browser visit: 
@@ -144,3 +153,5 @@ From ```vbogs-pipeline``` get the filebrowser credentials, you may need to refre
 ```bash
 python scripts/get_filebrowser_login.py --reset-password
 ```
+
+
