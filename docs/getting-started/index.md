@@ -136,8 +136,73 @@ python /workspace/VBOGS/scripts/view_octree_anygs.py \
   --octree-root /workspace/VBOGS/Octree-AnyGS
 ```
 
-In a browser visit: 
-```http://localhost:8071```
+In a browser visit:
+
+```text
+http://localhost:8071
+```
+
+### Query the render server API
+
+The same server exposes REST endpoints for programmatic rendering. From the
+host machine, use `http://localhost:8071`; from inside the container, use
+`http://localhost:8070`.
+
+Inspect the loaded scene and available camera IDs:
+
+```bash
+curl http://localhost:8071/api/metadata
+curl http://localhost:8071/api/cameras
+```
+
+Render an RGB JPEG for a camera already known to the viewer:
+
+```bash
+curl -X POST http://localhost:8071/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "rgb-example",
+    "camera_id": "test:0",
+    "layer": "rgb",
+    "quality": 90
+  }'
+```
+
+Render an uncertainty heatmap JPEG from the same camera:
+
+```bash
+curl -X POST http://localhost:8071/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "uncertainty-example",
+    "camera_id": "test:0",
+    "layer": "uncertainty",
+    "quality": 90
+  }'
+```
+
+`/api/render` returns JSON with `metadata` and a `jpeg_base64` field. Decode
+that field to bytes to save the image as a `.jpg`.
+
+Query the uncertainty score for a camera pose:
+
+```bash
+curl -X POST http://localhost:8071/api/rendered-anchors \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "score-example",
+    "camera_id": "test:0",
+    "max_anchors": 25
+  }'
+```
+
+The score response includes `uncertainty_image_sum`, `alpha_sum`, and
+`alpha_normalized_uncertainty`, where the normalized score is the value used for
+NBV ranking. Add `"pose": "x y z yaw pitch roll"` to either POST body to query
+a custom pose instead of the saved camera pose.
+
+See the full [render server API reference](../running/realtime-viewer.md) for
+all layers, pose formats, response fields, and capture helpers.
 
 
 ## Browse Files and Artifacts
@@ -153,5 +218,3 @@ From ```vbogs-pipeline``` get the filebrowser credentials, you may need to refre
 ```bash
 python scripts/get_filebrowser_login.py --reset-password
 ```
-
-

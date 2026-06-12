@@ -10,6 +10,7 @@ representation, with VBGS, a per-anchor Bayesian uncertainty head.
 | Build containers and run test commands | [Quickstart](getting-started/index.md) |
 | Download KITTI-360 data | [Data Setup](getting-started/data.md) |
 | Understand the Docker services | [Environments](getting-started/environments.md) |
+| Query the render server for RGB, uncertainty, and scores | [Render Server API](running/realtime-viewer.md) |
 
 ## Core Mental Model
 
