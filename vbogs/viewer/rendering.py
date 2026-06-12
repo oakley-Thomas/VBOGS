@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 from PIL import Image
 
+from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
 from vbogs.viewer.camera import ViewerCamera, camera_to_c2w
 from vbogs.viewer.pose import pose_to_c2w, request_payload_to_c2w
@@ -317,8 +317,7 @@ class OctreeRenderSession:
         from scene import Scene
         from utils.general_utils import parse_cfg, safe_state
 
-        with (self.model_path / "config.yaml").open("r", encoding="utf-8") as handle:
-            cfg = yaml.load(handle, Loader=yaml.FullLoader)
+        cfg = load_octree_config_for_model(self.model_path)
         dataset, opt, pipe = parse_cfg(cfg)
         if self.resolution is not None:
             dataset.resolution = self.resolution

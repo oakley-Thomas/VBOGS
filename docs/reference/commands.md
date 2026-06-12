@@ -274,6 +274,18 @@ python scripts/bundle_run_outputs.py \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
 
+Export a renderable local-viewer package:
+
+```bash
+python scripts/export_local_viewer_run.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --model-path /data/OCTREE-ANYGS/2013_05_28_drive_0007_sync/<run>
+```
+
+This writes `outputs/local_viewer_exports/<drive>/` and
+`outputs/local_viewer_exports/<drive>-local-viewer.zip`. After extracting the
+zip locally, run the command in its `VIEWER_COMMANDS.md`.
+
 ## Online ROS2 Loop
 
 Build the online state bundle after M7 validation:
