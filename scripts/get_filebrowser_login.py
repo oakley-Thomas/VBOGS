@@ -230,6 +230,36 @@ def published_ports(container: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
+def container_ip_addresses_from_inspect(inspected: dict) -> list[str]:
+    network_settings = inspected.get("NetworkSettings", {})
+    if not isinstance(network_settings, dict):
+        return []
+
+    ip_addresses: list[str] = []
+
+    def add_ip(value: object) -> None:
+        if isinstance(value, str) and value and value not in ip_addresses:
+            ip_addresses.append(value)
+
+    networks = network_settings.get("Networks", {})
+    if isinstance(networks, dict):
+        for network in networks.values():
+            if isinstance(network, dict):
+                add_ip(network.get("IPAddress"))
+                add_ip(network.get("GlobalIPv6Address"))
+
+    add_ip(network_settings.get("IPAddress"))
+    add_ip(network_settings.get("GlobalIPv6Address"))
+    return ip_addresses
+
+
+def container_ip_addresses(container: str) -> list[str]:
+    try:
+        return container_ip_addresses_from_inspect(inspect_container(container))
+    except RuntimeError:
+        return []
+
+
 def generate_password() -> str:
     return secrets.token_urlsafe(24)
 
@@ -336,11 +366,15 @@ def format_login(
     container: str,
     ports: Sequence[str],
     output_format: str,
+    ip_addresses: Sequence[str] = (),
 ) -> str:
+    primary_ip = ip_addresses[0] if ip_addresses else ""
     if output_format == "json":
         return json.dumps(
             {
                 "container": container,
+                "container_ip": primary_ip,
+                "container_ips": list(ip_addresses),
                 "username": login.username,
                 "password": login.password,
                 "published_ports": list(ports),
@@ -354,6 +388,12 @@ def format_login(
             f"FILEBROWSER_USERNAME={shlex.quote(login.username)}",
             f"FILEBROWSER_PASSWORD={shlex.quote(login.password)}",
         ]
+        if primary_ip:
+            lines.append(f"FILEBROWSER_CONTAINER_IP={shlex.quote(primary_ip)}")
+        if len(ip_addresses) > 1:
+            lines.append(
+                f"FILEBROWSER_CONTAINER_IPS={shlex.quote(' '.join(ip_addresses))}"
+            )
         if ports:
             lines.append(f"FILEBROWSER_PUBLISHED_PORTS={shlex.quote(' '.join(ports))}")
         return "\n".join(lines)
@@ -364,6 +404,9 @@ def format_login(
         f"username: {login.username}",
         f"password: {login.password}",
     ]
+    if primary_ip:
+        label = "container ip" if len(ip_addresses) == 1 else "container ips"
+        lines.append(f"{label}: {', '.join(ip_addresses)}")
     if ports:
         lines.append("published ports: " + ", ".join(ports))
     return "\n".join(lines)
@@ -394,6 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     container=display_container,
                     ports=published_ports(container),
                     output_format=args.format,
+                    ip_addresses=container_ip_addresses(container),
                 )
             )
             return 0
@@ -424,6 +468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 container=display_container,
                 ports=published_ports(container),
                 output_format=args.format,
+                ip_addresses=container_ip_addresses(container),
             )
         )
         return 0

@@ -135,16 +135,39 @@ above:
 - `matrix` plus optional `pose_convention`
 - `position` plus `yaw_pitch_roll_deg`
 
-### Render Image
+Available `/api/render` layers:
 
-Render one arbitrary pose:
+- `rgb`: upstream Octree-AnyGS RGB render
+- `uncertainty`: visual uncertainty heatmap JPEG
+- `alpha`: visibility/opacity image
+- `side_by_side`: RGB next to uncertainty heatmap
+
+The image endpoint returns JPEGs for inspection and client display. Use
+`/api/rendered-anchors` when you need numeric uncertainty totals or NBV scores.
+
+### Render RGB or Uncertainty Images
+
+Render an RGB image:
 
 ```bash
 curl -X POST http://localhost:8071/api/render \
   -H 'Content-Type: application/json' \
   -d '{
     "camera_id": "test:0",
-    "layer": "side_by_side",
+    "layer": "rgb",
+    "pose": "0 0 2 0 0 0",
+    "quality": 85
+  }'
+```
+
+Render an uncertainty heatmap image:
+
+```bash
+curl -X POST http://localhost:8071/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "camera_id": "test:0",
+    "layer": "uncertainty",
     "pose": "0 0 2 0 0 0",
     "quality": 85
   }'
@@ -154,21 +177,22 @@ The API returns JSON with render metadata and a base64-encoded JPEG:
 
 ```json
 {
-  "metadata": {"camera_id": "test:0", "mode": "side_by_side"},
+  "metadata": {"camera_id": "test:0", "mode": "rgb"},
   "jpeg_base64": "..."
 }
 ```
 
-### Query Rendered Anchors
+### Query Uncertainty Score
 
-Query rendered anchors and their uncertainty values:
+Query rendered anchors, integrated uncertainty, and the alpha-normalized score:
 
 ```bash
 curl -X POST http://localhost:8071/api/rendered-anchors \
   -H 'Content-Type: application/json' \
   -d '{
     "camera_id": "test:0",
-    "pose": "0 0 2 0 0 0"
+    "pose": "0 0 2 0 0 0",
+    "max_anchors": 25
   }'
 ```
 
@@ -179,6 +203,12 @@ The response includes:
 - `total_anchor_uncertainty`: sum of the full rendered anchor set's `U` values
 - `uncertainty_image_sum`: integrated rendered uncertainty image value
 - `alpha_sum` and `alpha_normalized_uncertainty`
+
+The NBV-style score is:
+
+```text
+alpha_normalized_uncertainty = uncertainty_image_sum / max(alpha_sum, 1e-8)
+```
 
 Use `max_anchors` in the request body to limit how many anchor rows are returned
 while still computing totals over the full rendered-anchor set.

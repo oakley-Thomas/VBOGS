@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vbogs.io import save_json
+from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
 from vbogs.viewer import pose as pose_utils
 
@@ -257,14 +258,11 @@ def resolve_output_dir(drive: str, output_dir: Path | None) -> Path:
 
 
 def load_octree_scene(model_path: Path, iteration: int, octree_root: Path, ape_code: int, quiet: bool):
-    import yaml
-
     add_octree_to_path(octree_root)
     from scene import Scene
     from utils.general_utils import parse_cfg, safe_state
 
-    with (model_path / "config.yaml").open("r", encoding="utf-8") as handle:
-        cfg = yaml.load(handle, Loader=yaml.FullLoader)
+    cfg = load_octree_config_for_model(model_path)
     dataset, opt, pipe = parse_cfg(cfg)
     dataset.model_path = str(model_path)
 

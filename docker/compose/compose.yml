@@ -215,8 +215,8 @@ services:
       FB_DATABASE: /database/filebrowser.db
       FB_BASEURL: ${VBOGS_FILEBROWSER_BASE_URL:-}
       FB_DISABLE_EXEC: "true"
-      PUID: ${VBOGS_FILEBROWSER_PUID:-1000}
-      PGID: ${VBOGS_FILEBROWSER_PGID:-1000}
+      PUID: ${VBOGS_FILEBROWSER_PUID:-0}
+      PGID: ${VBOGS_FILEBROWSER_PGID:-0}
     ports:
       - "${VBOGS_FILEBROWSER_HOST_BIND:-0.0.0.0}:${VBOGS_FILEBROWSER_HOST_PORT:-8088}:80"
     volumes:
@@ -240,7 +240,6 @@ services:
         read_only: true
       - <<: *vbogs-outputs-mount
         target: /srv/outputs
-        read_only: true
       - <<: *vbogs-generated-configs-mount
         target: /srv/generated_configs
         read_only: true

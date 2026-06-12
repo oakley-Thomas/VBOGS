@@ -23,7 +23,9 @@ Default path: `/data/COLMAP/<scene-id>/`
 ```text
 /data/COLMAP/<scene-id>/
   images/
-    *.png
+    *.png                       # KITTI-360 default left-camera layout
+    image_00/*.png              # KITTI-360 optional stereo RGB layout
+    image_01/*.png
   sparse/0/
     cameras.txt
     images.txt
@@ -138,6 +140,37 @@ The final bundle is:
 ```text
 outputs/v1_0/<drive>.zip
 ```
+
+## Local Viewer Export
+
+Stage: manual export
+Default path: `outputs/local_viewer_exports/<drive>/`
+
+```text
+model/
+  config.yaml                  # patched with source_path: ../prepared
+  original_config.yaml
+  point_cloud/iteration_<N>/
+prepared/
+  images/                       # real image files materialized from prepared-data symlinks
+  sparse/0/
+uncertainty/
+  U.npy
+VIEWER_COMMANDS.md
+local_viewer_manifest.json
+```
+
+The final local-viewer archive is:
+
+```text
+outputs/local_viewer_exports/<drive>-local-viewer.zip
+```
+
+Create it with `scripts/export_local_viewer_run.py` when you need to download a
+server run and open it in `scripts/view_octree_anygs.py` locally. Unlike the
+curated bundle, this package includes the Octree-AnyGS checkpoint and prepared
+COLMAP camera/image tree needed for rendering. Prepared image symlinks are
+dereferenced during export so the zip can be extracted on another machine.
 
 ## Generated Configs
 

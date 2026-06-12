@@ -69,6 +69,7 @@ CONFIG_KEY_MAP = {
         "frame_step": "frame_step",
         "max_frames": "max_frames",
         "copy_mode": "copy_mode",
+        "training_cameras": "training_cameras",
         "seed_mode": "seed_mode",
     },
     "train": {
@@ -416,6 +417,16 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--copy-mode",
         choices=("symlink", "copy"),
         default="symlink",
+    )
+    prep_group.add_argument(
+        "--training-cameras",
+        choices=("left", "stereo"),
+        default="left",
+        help=(
+            "KITTI-360 RGB cameras used for Octree-AnyGS training. "
+            "`left` preserves the legacy image_00-only layout; `stereo` adds "
+            "image_01 as a second posed training camera. Ignored by NCore."
+        ),
     )
     prep_group.add_argument(
         "--seed-mode",
@@ -787,6 +798,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             str(args.max_frames),
             "--copy-mode",
             args.copy_mode,
+            "--training-cameras",
+            args.training_cameras,
             "--seed-mode",
             "stereo" if args.seed_mode == "lidar" else args.seed_mode,
             *maybe_path_args(args),

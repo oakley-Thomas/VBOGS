@@ -58,7 +58,7 @@ scripts/run_pipeline.sh \
 | `--scene-id SCENE_ID` | Config: `dataset.scene_id` | Dataset scene/clip id. Defaults to `--drive` for backward compatibility. |
 | `--drive DRIVE` | Config: `pipeline.drive` | Backward-compatible scene id alias. For KITTI-360 this is the drive id. |
 | `--ncore-root NCORE_ROOT` | Config: `dataset.ncore_root` | Root containing converted NVIDIA NCore clips. |
-| `--camera-id CAMERA_ID` | Config: `dataset.camera_ids` | NVIDIA camera id. Repeat or pass comma-separated ids. |
+| `--camera-id CAMERA_ID` | Config: `dataset.camera_ids` | NVIDIA camera id set for training and LiDAR coloring. Repeat or pass comma-separated ids. |
 | `--point-source {stereo,lidar,camera_depth}` | Config: `dataset.point_source` or `points.point_source` | Point source. Defaults to `stereo` for KITTI-360 and `lidar` for NVIDIA NCore. |
 | `--camera-depth-pair LEFT,RIGHT` | Config: `dataset.camera_depth_pair` | NVIDIA camera pair used by `camera_depth`. |
 | `--start-at {prepare,train,stereo,bucket,fit,inspect,uncertainty,map-viz,render,nbv,nbv-viz,bundle}` | `prepare` | First stage to run. |
@@ -179,9 +179,10 @@ viewer should bind to a different interface or host port.
 ## File Browser Access
 
 The compose stack includes a `vbogs-filebrowser` sidecar using the
-`filebrowser/filebrowser` image. It provides browser-based, read-only access to
-the shared project and artifact volumes in both local Docker Compose and
-Portainer deployments.
+`filebrowser/filebrowser` image. It provides browser-based access to the shared
+project and artifact volumes in both local Docker Compose and Portainer
+deployments. The `/outputs` mount is writable for uploads; the other shared
+project, data, generated-config, COLMAP, and Octree-AnyGS mounts are read-only.
 
 The default URL is:
 
@@ -197,11 +198,12 @@ Relevant stack variables:
 | `VBOGS_FILEBROWSER_HOST_BIND` | Host bind address, default `0.0.0.0`. |
 | `VBOGS_FILEBROWSER_HOST_PORT` | Host HTTP port, default `8088`. |
 | `VBOGS_FILEBROWSER_BASE_URL` | Optional reverse-proxy subpath. |
-| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. |
+| `VBOGS_FILEBROWSER_PUID` / `VBOGS_FILEBROWSER_PGID` | Optional UID/GID for the File Browser process and its database/config volumes. Defaults to `0` so File Browser can upload into root-owned output volumes. |
 
 On first boot, read the generated `admin` password from the
 `vbogs-filebrowser` logs. The mounted paths are `/project`, `/outputs`,
-`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`.
+`/data`, `/COLMAP`, `/OCTREE-ANYGS`, and `/generated_configs`; uploads are
+intended for `/outputs`.
 
 ## KITTI-360 Inputs
 
@@ -222,7 +224,7 @@ stack mounts them at `/workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore`.
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--ncore-root NCORE_ROOT` | Auto-detect | Root containing converted NCore clips. |
-| `--camera-id CAMERA_ID` | `camera_front_wide_120fov` | Camera subset used for training and LiDAR coloring. |
+| `--camera-id CAMERA_ID` | `camera_front_wide_120fov` | Camera set used for training and LiDAR coloring. Repeat or pass comma-separated ids; the NCore dev profile uses front-wide plus front-tele by default. |
 | `--ncore-lidar-id LIDAR_ID` | `lidar_top_360fov` | LiDAR sensor used for sparse seeding and LiDAR point export. |
 | `--camera-depth-pair LEFT,RIGHT` | `camera_front_wide_120fov,camera_front_tele_30fov` | Camera pair for camera-depth export. |
 
@@ -238,6 +240,7 @@ dataset under `/data/COLMAP/<scene-id>`. KITTI uses
 | `--frame-step FRAME_STEP` | Config: `1` | Keep every Nth frame from the drive. Higher values are faster and smaller. |
 | `--max-frames MAX_FRAMES` | Config: `1000` | Maximum number of frames to prepare. `0` means no cap. |
 | `--copy-mode {symlink,copy}` | `symlink` | How images are placed in the prepared dataset. `symlink` is faster and saves space when supported. |
+| `--training-cameras {left,stereo}` | `left` | KITTI-360 RGB cameras used for Octree-AnyGS training. `stereo` adds `image_01` as a second posed camera. Ignored by NCore. |
 | `--seed-mode {stereo,lidar,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. `stereo` maps to LiDAR for NVIDIA NCore. |
 
 ## `train`
@@ -404,7 +407,7 @@ The default config file uses section names that map to CLI arguments:
 | --- | --- |
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
-| `prepare` | `frame_step`, `max_frames`, `copy_mode`, `seed_mode` |
+| `prepare` | `frame_step`, `max_frames`, `copy_mode`, `training_cameras`, `seed_mode` |
 | `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |

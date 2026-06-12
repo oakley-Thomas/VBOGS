@@ -1,8 +1,3 @@
-# Portainer build profile for a local Portainer Docker environment. This keeps
-# the Portainer volume layout, but builds VBOGS service images instead of
-# pulling Docker Hub tags. Portainer remote-agent environments may not support
-# compose stack build steps; use portainer-local.yml with prebuilt images there.
-
 x-vbogs-mounts:
   repo: &vbogs-repo-mount
     type: volume
@@ -41,31 +36,9 @@ x-vbogs-mounts:
     source: vbogs-torch-cache
     target: /root/.cache/torch
 
-x-vbogs-builds:
-  torch: &vbogs-torch-build
-    context: ../..
-    dockerfile: docker/torch.Dockerfile
-    args:
-      VBOGS_TORCH_CUDA_ARCH_LIST: ${VBOGS_TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
-      VBOGS_TORCH_MAX_JOBS: ${VBOGS_TORCH_MAX_JOBS:-1}
-  jax: &vbogs-jax-build
-    context: ../..
-    dockerfile: docker/jax.Dockerfile
-  vbgs-render: &vbogs-vbgs-render-build
-    context: ../..
-    dockerfile: docker/vbgs-render.Dockerfile
-    args:
-      VBOGS_RENDER_CUDA_ARCH_LIST: ${VBOGS_RENDER_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0;10.0+PTX;12.0+PTX}
-      VBOGS_RENDER_MAX_JOBS: ${VBOGS_RENDER_MAX_JOBS:-1}
-  pipeline: &vbogs-pipeline-build
-    context: ../..
-    dockerfile: docker/pipeline.Dockerfile
-
 services:
   vbogs-torch:
-    image: ${VBOGS_TORCH_BUILD_IMAGE:-local/vbogs-torch}
-    pull_policy: build
-    build: *vbogs-torch-build
+    image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -91,9 +64,7 @@ services:
     command: sleep infinity
 
   vbogs-jax:
-    image: ${VBOGS_JAX_BUILD_IMAGE:-local/vbogs-jax}
-    pull_policy: build
-    build: *vbogs-jax-build
+    image: ${VBOGS_JAX_IMAGE:-oakleyth/vbogs-jax:latest}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -119,9 +90,7 @@ services:
     command: sleep infinity
 
   vbogs-vbgs-render:
-    image: ${VBOGS_VBGS_RENDER_BUILD_IMAGE:-local/vbogs-vbgs-render}
-    pull_policy: build
-    build: *vbogs-vbgs-render-build
+    image: ${VBOGS_VBGS_RENDER_IMAGE:-oakleyth/vbogs-vbgs-render:latest}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
@@ -147,9 +116,7 @@ services:
     command: sleep infinity
 
   vbogs-pipeline:
-    image: ${VBOGS_PIPELINE_BUILD_IMAGE:-local/vbogs-pipeline}
-    pull_policy: build
-    build: *vbogs-pipeline-build
+    image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
     working_dir: /workspace/VBOGS
     depends_on:
       - vbogs-torch
@@ -216,8 +183,8 @@ services:
       FB_DATABASE: /database/filebrowser.db
       FB_BASEURL: ${VBOGS_FILEBROWSER_BASE_URL:-}
       FB_DISABLE_EXEC: "true"
-      PUID: ${VBOGS_FILEBROWSER_PUID:-1000}
-      PGID: ${VBOGS_FILEBROWSER_PGID:-1000}
+      PUID: ${VBOGS_FILEBROWSER_PUID:-0}
+      PGID: ${VBOGS_FILEBROWSER_PGID:-0}
     ports:
       - "${VBOGS_FILEBROWSER_HOST_BIND:-0.0.0.0}:${VBOGS_FILEBROWSER_HOST_PORT:-8088}:80"
     volumes:
@@ -241,7 +208,6 @@ services:
         read_only: true
       - <<: *vbogs-outputs-mount
         target: /srv/outputs
-        read_only: true
       - <<: *vbogs-generated-configs-mount
         target: /srv/generated_configs
         read_only: true

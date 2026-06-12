@@ -10,6 +10,7 @@ representation, with VBGS, a per-anchor Bayesian uncertainty head.
 | Build containers and run test commands | [Quickstart](getting-started/index.md) |
 | Download KITTI-360 data | [Data Setup](getting-started/data.md) |
 | Understand the Docker services | [Environments](getting-started/environments.md) |
+| Query the render server for RGB, uncertainty, and scores | [Render Server API](running/realtime-viewer.md) |
 
 ## Core Mental Model
 
@@ -21,7 +22,7 @@ kept separate:
 | `vbogs-torch` | Octree-AnyGS, stereo, bucketing, scalar rendering | M2, M3, M4a, M6 |
 | `vbogs-jax` | VBGS posterior fitting and uncertainty reduction | M4b, M5 |
 | `vbogs-pipeline` | Orchestration, packaging, uploads | Full pipeline |
-| `vbogs-filebrowser` | Read-only browser access to project files and artifacts | Operator access |
+| `vbogs-filebrowser` | Browser access to project files and artifacts; `/outputs` is writable for uploads | Operator access |
 
 Data crosses that framework boundary only through `.npz`, `.npy`, `.json`,
 `.yaml`, `.ply`, and image files on disk.

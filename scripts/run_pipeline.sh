@@ -16,6 +16,16 @@ Example:
     --jax-device 0 \
     --start-at prepare \
     --stop-after bundle
+
+NVIDIA NCore example:
+  scripts/run_pipeline.sh \
+    --config configs/pipeline/nvidia_ncore_dev.yaml \
+    --dataset-name nvidia_ncore \
+    --scene-id <clip_uuid> \
+    --gpu 0 \
+    --jax-device 0 \
+    --start-at prepare \
+    --stop-after bundle
 USAGE
 }
 

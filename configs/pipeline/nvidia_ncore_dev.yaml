@@ -8,6 +8,7 @@ dataset:
   ncore_root: null
   camera_ids:
     - camera_front_wide_120fov
+    - camera_front_tele_30fov
   point_source: lidar
   camera_depth_pair: camera_front_wide_120fov,camera_front_tele_30fov
   lidar_id: lidar_top_360fov

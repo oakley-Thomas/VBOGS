@@ -6,42 +6,13 @@ This page explains how to get up and running with the VBOGS pipeline
 
 - NVIDIA GPU and working NVIDIA Container Toolkit for Docker GPU access.
 
-## Build
+## Build the Stack
+By default, ```scripts/build_stack_serial.sh``` will compile against the host machine's CUDA architecture. 
 ```bash
 bash scripts/build_stack_serial.sh
 ```
 
-**IMPORTANT NOTE:** by default, ```scripts/build_stack_serial.sh``` will compile ```gsplat``` against the CUDA architecture on the machine that builds the images. If you intend to deploy on a different CUDA architecture, you need to specify the supported versions using ```--cuda-arch-list```.
-
-```bash
-# Example - supports RTX 5080 (sm_12.0) and RTX Quadro 8000 (sm_7.5)
-bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;12.0'
-```
-
-To rebuild one service:
-```bash
-bash scripts/build_stack_serial.sh vbogs-torch
-bash scripts/build_stack_serial.sh vbogs-jax
-bash scripts/build_stack_serial.sh vbogs-vbgs-render
-bash scripts/build_stack_serial.sh vbogs-pipeline
-```
-Use `--no-cache` to rebuild from scratch
-
-### Publish to Dockerhub (optional)
-To publish the built images to Docker Hub:
-```bash
-docker login
-bash scripts/push_stack_images.sh <dockerhub-username> <version>
-```
-
-If Docker Hub returns a transient registry or auth `500` during a push, rerun
-the failed service and any remaining services:
-
-```bash
-bash scripts/push_stack_images.sh <dockerhub-username> <version> vbogs-vbgs-render vbogs-pipeline
-```
-
-## Running Local Compose Stacks
+## Start the Stack
 
 The dev overlay bind-mounts the local VBOGS code checkout.
 
@@ -59,17 +30,50 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 
 # To enter another container pass it as an argument
 # Example:
-# ./dc_bash.sh vbogs-jax
+# ./dc_bash.sh vbogs-vbgs-render
 ```
-
-## Running Remote Compose Stack
-Coming Soon!
 
 ## Downloading the Datasets
 
 VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset. Follow the instructions [here](data.md).
 
+## NVIDIA NCore Test Run
 
+From inside `vbogs-pipeline`, use the downloaded clip UUID as `--scene-id` and
+select the NCore dataset adapter:
+
+```bash
+scripts/run_pipeline.sh \
+  --config configs/pipeline/nvidia_ncore_dev.yaml \
+  --dataset-name nvidia_ncore \
+  --scene-id 00b769dd-b4fa-4d88-ba4e-e6a230ff0c66 \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after render \
+  --frame-step 2 \
+  --max-frames 30 \
+  --resolution 4 \
+  --iterations 7000 \
+  --max-points-per-frame 50000 \
+  --render-max-views 2
+```
+
+For a full NCore run:
+
+```bash
+scripts/run_pipeline.sh \
+  --config configs/pipeline/nvidia_ncore_dev.yaml \
+  --dataset-name nvidia_ncore \
+  --scene-id 00b769dd-b4fa-4d88-ba4e-e6a230ff0c66 \
+  --gpu 0 \
+  --jax-device 0 \
+  --start-at prepare \
+  --stop-after bundle
+```
+
+`--drive` by itself is the KITTI-360 path. If the run header says
+`Dataset: kitti360`, stop and rerun with `--dataset-name nvidia_ncore`.
 
 ## KITTI-360 Test Run
 
@@ -101,6 +105,13 @@ scripts/run_pipeline.sh \
   --stop-after bundle
 ```
 
+## Experiment Guides
+
+Experiment-specific runbooks live under the docs' Experiments section:
+
+- [Experiment 02: 3D Baseline Drive Sweep](../experiments/experiment02.md)
+- [Experiment 03: Stereo Training Comparison](../experiments/experiment03.md)
+
 ## Realtime Navigation and Visualization
 
 Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Map
@@ -108,16 +119,90 @@ Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Ma
 Enter the render server container
 ```bash
 # Enter the container
-./dc_bash vbogs-vbgs-render
+./dc_bash.sh vbogs-vbgs-render
 
 # Start the render server
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
   --resolution 1
+
+# Start the render server (server trained scene)
+python /workspace/VBOGS/scripts/view_octree_anygs.py \
+  --model-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/model \
+  --u-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/uncertainty/U.npy \
+  --iteration 90000 \
+  --resolution 2 \
+  --port 8070 \
+  --octree-root /workspace/VBOGS/Octree-AnyGS
 ```
 
-In a browser visit: 
-```http://localhost:8071```
+In a browser visit:
+
+```text
+http://localhost:8071
+```
+
+### Query the render server API
+
+The same server exposes REST endpoints for programmatic rendering. From the
+host machine, use `http://localhost:8071`; from inside the container, use
+`http://localhost:8070`.
+
+Inspect the loaded scene and available camera IDs:
+
+```bash
+curl http://localhost:8071/api/metadata
+curl http://localhost:8071/api/cameras
+```
+
+Render an RGB JPEG for a camera already known to the viewer:
+
+```bash
+curl -X POST http://localhost:8071/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "rgb-example",
+    "camera_id": "test:0",
+    "layer": "rgb",
+    "quality": 90
+  }'
+```
+
+Render an uncertainty heatmap JPEG from the same camera:
+
+```bash
+curl -X POST http://localhost:8071/api/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "uncertainty-example",
+    "camera_id": "test:0",
+    "layer": "uncertainty",
+    "quality": 90
+  }'
+```
+
+`/api/render` returns JSON with `metadata` and a `jpeg_base64` field. Decode
+that field to bytes to save the image as a `.jpg`.
+
+Query the uncertainty score for a camera pose:
+
+```bash
+curl -X POST http://localhost:8071/api/rendered-anchors \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_id": "score-example",
+    "camera_id": "test:0",
+    "max_anchors": 25
+  }'
+```
+
+The score response includes `uncertainty_image_sum`, `alpha_sum`, and
+`alpha_normalized_uncertainty`, where the normalized score is the value used for
+NBV ranking. Add `"pose": "x y z yaw pitch roll"` to either POST body to query
+a custom pose instead of the saved camera pose.
+
+See the full [render server API reference](../running/realtime-viewer.md) for
+all layers, pose formats, response fields, and capture helpers.
 
 
 ## Browse Files and Artifacts
@@ -128,7 +213,7 @@ Open the web-based file browser
 http://localhost:8088
 ```
 
-From ```vbogs-pipeline``` get the filebrowser credentials
+From ```vbogs-pipeline``` get the filebrowser credentials, you may need to refresh the page after running the following command
 
 ```bash
 python scripts/get_filebrowser_login.py --reset-password

@@ -1,5 +1,8 @@
+import json
+
 from scripts.get_filebrowser_login import (
     FilebrowserLogin,
+    container_ip_addresses_from_inspect,
     find_filebrowser_login,
     format_login,
     generate_password,
@@ -36,6 +39,7 @@ def test_format_shell_quotes_secret_values():
     output = format_login(
         FilebrowserLogin(username="admin", password="pass with spaces"),
         container="vbogs-filebrowser-1",
+        ip_addresses=["172.22.0.5"],
         ports=["0.0.0.0:8088"],
         output_format="shell",
     )
@@ -43,7 +47,22 @@ def test_format_shell_quotes_secret_values():
     assert "FILEBROWSER_CONTAINER=vbogs-filebrowser-1" in output
     assert "FILEBROWSER_USERNAME=admin" in output
     assert "FILEBROWSER_PASSWORD='pass with spaces'" in output
+    assert "FILEBROWSER_CONTAINER_IP=172.22.0.5" in output
     assert "FILEBROWSER_PUBLISHED_PORTS=0.0.0.0:8088" in output
+
+
+def test_format_json_includes_container_ip():
+    output = format_login(
+        FilebrowserLogin(username="admin", password="pass"),
+        container="vbogs-filebrowser-1",
+        ip_addresses=["172.22.0.5", "fd00::5"],
+        ports=["0.0.0.0:8088"],
+        output_format="json",
+    )
+
+    parsed = json.loads(output)
+    assert parsed["container_ip"] == "172.22.0.5"
+    assert parsed["container_ips"] == ["172.22.0.5", "fd00::5"]
 
 
 def test_generate_password_is_shell_friendly():
@@ -81,4 +100,28 @@ def test_mount_args_for_cli_uses_database_and_config_mounts():
         "type=volume,source=stack_vbogs-filebrowser-config,target=/config",
         "--mount",
         "type=volume,source=stack_vbogs-filebrowser-database,target=/database",
+    ]
+
+
+def test_container_ip_addresses_from_inspect_reads_docker_networks():
+    inspected = {
+        "NetworkSettings": {
+            "IPAddress": "",
+            "Networks": {
+                "stack_default": {
+                    "IPAddress": "172.22.0.5",
+                    "GlobalIPv6Address": "",
+                },
+                "shared": {
+                    "IPAddress": "172.23.0.8",
+                    "GlobalIPv6Address": "fd00::8",
+                },
+            },
+        }
+    }
+
+    assert container_ip_addresses_from_inspect(inspected) == [
+        "172.22.0.5",
+        "172.23.0.8",
+        "fd00::8",
     ]

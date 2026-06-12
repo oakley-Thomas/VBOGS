@@ -14,12 +14,12 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 import torchvision
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
 
 DEFAULT_OCTREE_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
@@ -167,8 +167,7 @@ def load_scene(
     from scene import Scene
     from utils.general_utils import parse_cfg, safe_state
 
-    with (model_path / "config.yaml").open("r", encoding="utf-8") as handle:
-        cfg = yaml.load(handle, Loader=yaml.FullLoader)
+    cfg = load_octree_config_for_model(model_path)
     dataset, opt, pipe = parse_cfg(cfg)
     if resolution is not None:
         if resolution == 0:

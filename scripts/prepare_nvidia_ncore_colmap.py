@@ -204,7 +204,11 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
     camera_ids = parse_id_list(args.camera_ids, DEFAULT_CAMERA_IDS)
     missing = [camera_id for camera_id in camera_ids if camera_id not in loader.camera_ids]
     if missing:
-        raise KeyError(f"NCore sequence is missing requested cameras: {', '.join(missing)}")
+        available = ", ".join(str(camera_id) for camera_id in loader.camera_ids)
+        raise KeyError(
+            "NCore sequence is missing requested cameras: "
+            f"{', '.join(missing)}. Available cameras: {available}"
+        )
 
     cameras_by_id = {camera_id: loader.get_camera_sensor(camera_id) for camera_id in camera_ids}
     primary_camera_id = camera_ids[0]
@@ -246,7 +250,10 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
                     )
                 )
 
-            image_name = f"{camera_id}/{int(primary_index):010d}_{int(frame_index):010d}.png"
+            image_name = (
+                f"{camera_id}/"
+                f"{camera_id}_{int(primary_index):010d}_{int(frame_index):010d}.png"
+            )
             write_image(images_out / image_name, image_rgb)
             c2w = get_sensor_c2w(sensor, frame_index)
             colmap_images.append(

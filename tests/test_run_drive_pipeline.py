@@ -31,6 +31,10 @@ def service_block(compose_text: str, service: str) -> str:
     return match.group("block")
 
 
+def flag_values(command: tuple[str, ...], flag: str) -> list[str]:
+    return [command[index + 1] for index, value in enumerate(command) if value == flag]
+
+
 def test_run_output_root_routes_v1_stage_outputs():
     parser = build_parser({})
     args = parser.parse_args(
@@ -169,6 +173,44 @@ def test_config_default_sets_gaussian_type():
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
 
 
+def test_kitti360_prepare_forwards_training_cameras():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--training-cameras",
+            "stereo",
+        ]
+    )
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    assert prepare_step.command[:2] == ("python", "scripts/prepare_kitti360_colmap.py")
+    training_index = prepare_step.command.index("--training-cameras")
+    assert prepare_step.command[training_index + 1] == "stereo"
+
+
+def test_config_default_sets_training_cameras(tmp_path):
+    config_path = tmp_path / "pipeline_config.yaml"
+    config_path.write_text(
+        """
+pipeline:
+  drive: drive_sync
+prepare:
+  training_cameras: stereo
+""",
+        encoding="utf-8",
+    )
+
+    defaults = load_config_defaults(config_path)
+    parser = build_parser(defaults)
+    args = parser.parse_args([])
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    training_index = prepare_step.command.index("--training-cameras")
+    assert prepare_step.command[training_index + 1] == "stereo"
+
+
 def test_config_default_enables_google_drive_upload(tmp_path):
     config_path = tmp_path / "pipeline_config.yaml"
     config_path.write_text(
@@ -274,23 +316,51 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
             "/data/ncore",
             "--camera-id",
             "camera_front_wide_120fov,camera_front_tele_30fov",
+            "--training-cameras",
+            "stereo",
             "--point-source",
             "lidar",
         ]
     )
     by_name = {step.name: step for step in build_steps(args)}
 
-    assert by_name["prepare"].command[:2] == ("python", "scripts/prepare_nvidia_ncore_colmap.py")
+    assert by_name["prepare"].command[:2] == (
+        "python",
+        "scripts/prepare_nvidia_ncore_colmap.py",
+    )
     assert "--scene-id" in by_name["prepare"].command
-    assert by_name["prepare"].command[by_name["prepare"].command.index("--scene-id") + 1] == "clip_001"
+    assert (
+        by_name["prepare"].command[by_name["prepare"].command.index("--scene-id") + 1]
+        == "clip_001"
+    )
     assert "--ncore-root" in by_name["prepare"].command
+    assert "--training-cameras" not in by_name["prepare"].command
+    assert flag_values(by_name["prepare"].command, "--camera-id") == [
+        "camera_front_wide_120fov,camera_front_tele_30fov"
+    ]
 
     point_step = by_name["stereo"]
     assert point_step.command[:2] == ("python", "scripts/export_points_world.py")
     assert point_step.command[point_step.command.index("--dataset-name") + 1] == "nvidia_ncore"
     assert point_step.command[point_step.command.index("--scene-id") + 1] == "clip_001"
     assert point_step.command[point_step.command.index("--point-source") + 1] == "lidar"
+    assert flag_values(point_step.command, "--camera-id") == [
+        "camera_front_wide_120fov,camera_front_tele_30fov"
+    ]
     assert "data/m4/clip_001/U.npy" in by_name["render"].command
+
+
+def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
+    defaults = load_config_defaults(REPO_ROOT / "configs/pipeline/nvidia_ncore_dev.yaml")
+    parser = build_parser(defaults)
+    args = parser.parse_args(["--scene-id", "clip_001", "--point-source", "lidar"])
+    by_name = {step.name: step for step in build_steps(args)}
+
+    expected = ["camera_front_wide_120fov", "camera_front_tele_30fov"]
+    assert args.dataset_name == "nvidia_ncore"
+    assert args.camera_ids == expected
+    assert flag_values(by_name["prepare"].command, "--camera-id") == expected
+    assert flag_values(by_name["stereo"].command, "--camera-id") == expected
 
 
 def test_environment_pipeline_configs_are_loadable():
@@ -426,7 +496,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -441,7 +511,7 @@ def test_pipeline_compose_mounts_match_shared_stack_volumes():
 def test_stack_compose_files_only_bind_docker_socket_for_pipeline():
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -466,7 +536,7 @@ def test_vbgs_render_service_publishes_viewer_port():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -481,12 +551,11 @@ def test_vbgs_render_service_publishes_viewer_port():
 
 
 def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
-    filebrowser_targets = [
+    read_only_filebrowser_targets = [
         "/srv/project",
         "/srv/data",
         "/srv/data/KITTI-360",
         "/srv/data/NVIDIA-PhysicalAI-AV-NCore",
-        "/srv/outputs",
         "/srv/generated_configs",
         "/srv/COLMAP",
         "/srv/OCTREE-ANYGS",
@@ -494,7 +563,7 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
 
     for compose_name in (
         "docker/compose/compose.yml",
-        "docker/compose/portainer.yml",
+        "docker/compose/deploy.yml",
         "docker/compose/portainer-build.yml",
         "docker/compose/portainer-local.yml",
     ):
@@ -507,13 +576,16 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
         assert "FB_DISABLE_EXEC" in filebrowser
         assert "vbogs-filebrowser-database" in filebrowser
         assert "vbogs-filebrowser-config" in filebrowser
-        for target in filebrowser_targets:
-            assert f"target: {target}" in filebrowser
-        assert filebrowser.count("read_only: true") >= len(filebrowser_targets)
+        assert "VBOGS_FILEBROWSER_PUID:-0" in filebrowser
+        assert "VBOGS_FILEBROWSER_PGID:-0" in filebrowser
+        for target in read_only_filebrowser_targets:
+            assert f"target: {target}\n        read_only: true" in filebrowser
+        assert "target: /srv/outputs" in filebrowser
+        assert "target: /srv/outputs\n        read_only: true" not in filebrowser
 
 
 def test_portainer_compose_uses_portainer_config():
-    portainer_compose = (REPO_ROOT / "docker/compose/portainer.yml").read_text(
+    portainer_compose = (REPO_ROOT / "docker/compose/deploy.yml").read_text(
         encoding="utf-8"
     )
     portainer_build_compose = (

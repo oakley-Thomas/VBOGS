@@ -163,7 +163,7 @@ Prepare NVIDIA NCore into COLMAP layout:
 ```bash
 python scripts/prepare_nvidia_ncore_colmap.py \
   --scene-id <clip-id> \
-  --camera-id camera_front_wide_120fov \
+  --camera-id camera_front_wide_120fov,camera_front_tele_30fov \
   --frame-step 2 \
   --max-frames 200
 ```
@@ -273,6 +273,20 @@ python scripts/bundle_run_outputs.py \
   --drive 2013_05_28_drive_0007_sync \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
+
+Export a renderable local-viewer package:
+
+```bash
+python scripts/export_local_viewer_run.py \
+  --drive 2013_05_28_drive_0007_sync \
+  --model-path /data/OCTREE-ANYGS/2013_05_28_drive_0007_sync/<run>
+```
+
+This writes `outputs/local_viewer_exports/<drive>/` and
+`outputs/local_viewer_exports/<drive>-local-viewer.zip`. After extracting the
+zip locally, run the command in its `VIEWER_COMMANDS.md`. The export includes
+real prepared image files, so it is larger than the curated results bundle but
+portable for the viewer.
 
 ## Online ROS2 Loop
 

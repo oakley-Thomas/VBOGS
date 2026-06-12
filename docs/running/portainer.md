@@ -1,13 +1,13 @@
 # Portainer, Uploads, and File Browser
 
-Use `configs/pipeline/portainer.yaml` with `docker/compose/portainer.yml` for
+Use `configs/pipeline/portainer.yaml` with `docker/compose/deploy.yml` for
 server deployment. The Portainer profile uses compose-managed Docker volumes
 for datasets, intermediate artifacts, and curated outputs. None of those
 volumes are marked `external`.
 
 ## Image Build Choices
 
-For normal Portainer deployment, use `docker/compose/portainer.yml`. It has no
+For normal Portainer deployment, use `docker/compose/deploy.yml`. It has no
 `build:` directives and pulls published images.
 
 If Portainer is attached to the same local Docker environment that runs the
@@ -34,7 +34,7 @@ That compose file uses `pull_policy: never`, so Portainer relies on the cached
 
 If you only have the Portainer web UI, use one of these paths:
 
-1. Use `docker/compose/portainer.yml` and pull the published registry images.
+1. Use `docker/compose/deploy.yml` and pull the published registry images.
 2. Or build each image from Portainer's **Images > Build a new image** page,
    then deploy `docker/compose/portainer-local.yml`.
 
@@ -152,10 +152,12 @@ behind your normal VPN, firewall, or TLS reverse proxy.
 
 ## File Browser Artifact Access
 
-The Portainer compose files include `vbogs-filebrowser`, a read-only
+The Portainer compose files include `vbogs-filebrowser`, a
 [File Browser](https://filebrowser.org/installation) sidecar for project files
 and generated artifacts. It serves the same stack volumes as the pipeline
-containers without mounting the Docker socket.
+containers without mounting the Docker socket. The `/outputs` mount is writable
+for uploads; the project, data, generated-config, COLMAP, and Octree-AnyGS
+mounts are read-only.
 
 The host port defaults to `8088`:
 
@@ -181,17 +183,17 @@ docker compose --project-directory . \
   logs vbogs-filebrowser
 ```
 
-Useful read-only paths:
+Useful paths:
 
 | Path | Contents |
 | --- | --- |
-| `/project` | VBOGS checkout. In local dev this is the live bind-mounted repo; in Portainer this is the shared bootstrapped repo volume. |
-| `/outputs` | Curated bundles such as `outputs/v1_0/<drive>.zip` and diagnostics. |
-| `/data` | VBOGS data volume, including `KITTI-360` and NVIDIA NCore mounts. |
-| `/COLMAP` | Prepared COLMAP-style scene inputs. |
-| `/OCTREE-ANYGS` | Octree-AnyGS checkpoints and training outputs. |
-| `/generated_configs` | Generated pipeline and Octree-AnyGS configs. |
+| `/project` | Read-only VBOGS checkout. In local dev this is the live bind-mounted repo; in Portainer this is the shared bootstrapped repo volume. |
+| `/outputs` | Writable curated bundles such as `outputs/v1_0/<drive>.zip` and diagnostics. |
+| `/data` | Read-only VBOGS data volume, including `KITTI-360` and NVIDIA NCore mounts. |
+| `/COLMAP` | Read-only prepared COLMAP-style scene inputs. |
+| `/OCTREE-ANYGS` | Read-only Octree-AnyGS checkpoints and training outputs. |
+| `/generated_configs` | Read-only generated pipeline and Octree-AnyGS configs. |
 
-If the service is exposed outside a trusted network, put it behind your normal
-VPN, firewall, or TLS reverse proxy. Set `VBOGS_FILEBROWSER_BASE_URL` when the
-proxy serves it from a subpath.
+Because this service can modify the shared output volume, expose it only on
+trusted networks or put it behind your normal VPN, firewall, or TLS reverse
+proxy. Set `VBOGS_FILEBROWSER_BASE_URL` when the proxy serves it from a subpath.

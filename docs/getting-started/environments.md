@@ -12,7 +12,7 @@ The normal path is Docker Compose:
 | `vbogs-torch` | PyTorch/CUDA plus Octree-AnyGS | preparation, training, stereo, bucketing, rendering, NBV scoring |
 | `vbogs-jax` | JAX/CUDA plus VBGS | anchor fitting and uncertainty computation |
 | `vbogs-pipeline` | lightweight orchestration image | running stage commands in sibling containers, bundling, uploads |
-| `vbogs-filebrowser` | File Browser sidecar | read-only browser access to project files and artifacts |
+| `vbogs-filebrowser` | File Browser sidecar | browser access to project files and artifacts; `/outputs` is writable for uploads |
 
 Build with:
 

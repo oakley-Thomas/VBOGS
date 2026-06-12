@@ -12,7 +12,10 @@ exclude_docs: |
   reference/**
   references/**
   requirements.txt
-  running/**
+  running/docker-pipeline.md
+  running/full-drive.md
+  running/portainer.md
+  running/validation.md
 
 theme:
   name: readthedocs
@@ -22,8 +25,13 @@ nav:
   - Home: index.md
   - Getting Started:
       - Quickstart: getting-started/index.md
+      - Deployment: getting-started/deployment.md
       - Data Setup: getting-started/data.md
       - Environments: getting-started/environments.md
+      - Render Server API: running/realtime-viewer.md
+  - Experiments:
+      - 3D Baseline Drive Sweep: experiments/experiment02.md
+      - Stereo Training Comparison: experiments/experiment03.md
 
 plugins:
   - search
