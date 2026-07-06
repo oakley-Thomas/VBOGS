@@ -188,11 +188,19 @@ Useful paths:
 | Path | Contents |
 | --- | --- |
 | `/project` | Read-only VBOGS checkout. In local dev this is the live bind-mounted repo; in Portainer this is the shared bootstrapped repo volume. |
-| `/outputs` | Writable curated bundles such as `outputs/v1_0/<drive>.zip` and diagnostics. |
+| `/outputs` | Writable run outputs such as `v1_0/<scene-id>.zip`, `v1_0/<scene-id>-local-viewer.zip`, and diagnostics. |
 | `/data` | Read-only VBOGS data volume, including `KITTI-360` and NVIDIA NCore mounts. |
 | `/COLMAP` | Read-only prepared COLMAP-style scene inputs. |
 | `/OCTREE-ANYGS` | Read-only Octree-AnyGS checkpoints and training outputs. |
 | `/generated_configs` | Read-only generated pipeline and Octree-AnyGS configs. |
+
+After a run reaches `bundle`, download one of these from `/outputs`:
+
+| File Browser path | Use |
+| --- | --- |
+| `/outputs/v1_0/<scene-id>.zip` | Compact diagnostics and manifests. |
+| `/outputs/v1_0/<scene-id>-local-viewer.zip` | Portable package for local rendering, browser viewing, and uncertainty API queries. |
+| `/outputs/v1_0/<scene-id>/local_viewer/` | Browsable form of the same local viewer export. |
 
 Because this service can modify the shared output volume, expose it only on
 trusted networks or put it behind your normal VPN, firewall, or TLS reverse

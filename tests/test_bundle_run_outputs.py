@@ -1,9 +1,15 @@
 import json
 import zipfile
+from pathlib import Path
 
 import numpy as np
 
 from scripts.bundle_run_outputs import bundle_run_outputs
+
+
+def write_text(path: Path, text: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def write_json(path, payload):
@@ -53,6 +59,10 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
         map_viz_output_dir=run_output_dir / "pointclouds" / "anchors",
         render_output_dir=run_output_dir / "views",
         nbv_output_dir=run_output_dir / "nbv",
+        viewer_export_iteration=-1,
+        viewer_export_output_dir=None,
+        viewer_export_archive_path=None,
+        skip_local_viewer_export=True,
     )
 
     assert (run_output_dir / "pointclouds" / "stereo" / "points_world.npz").exists()
@@ -114,7 +124,90 @@ def test_bundle_run_outputs_records_optional_missing_ply(tmp_path):
         map_viz_output_dir=None,
         render_output_dir=None,
         nbv_output_dir=None,
+        viewer_export_iteration=-1,
+        viewer_export_output_dir=None,
+        viewer_export_archive_path=None,
+        skip_local_viewer_export=True,
     )
 
     assert any(path.endswith("points_world.ply") for path in manifest["missing_optional_artifacts"])
     assert any(path.endswith("uncertainty_histogram.png") for path in manifest["missing_optional_artifacts"])
+
+
+def test_bundle_writes_local_viewer_export_manifest_and_separate_archives(tmp_path):
+    scene = "scene_001"
+    points_root = tmp_path / "data" / "points_world"
+    bucket_root = tmp_path / "data" / "m4" / scene
+    colmap_root = tmp_path / "COLMAP"
+    octree_root = tmp_path / "OCTREE-ANYGS"
+    run_output_dir = tmp_path / "outputs" / "v1_0" / scene
+    model_path = octree_root / scene / "run_a"
+
+    write_text(points_root / scene / "points_world.npz", "npz")
+    write_text(points_root / scene / "points_world.ply", "ply")
+    write_json(
+        points_root / scene / "points_world_metadata.json",
+        {"dataset": "nvidia_ncore", "point_source": "lidar", "num_frames": 2, "num_points": 10},
+    )
+
+    for name in ("U.npy", "uncertainty_components.npz"):
+        write_text(bucket_root / name, name)
+    write_json(bucket_root / "uncertainty_metadata.json", {"scene": scene})
+
+    write_json(
+        colmap_root / scene / "metadata.json",
+        {"num_frames": 1, "selected_frames": [100]},
+    )
+    write_text(colmap_root / scene / "images" / "000001.png", "image")
+    write_text(
+        colmap_root / scene / "sparse" / "0" / "images.txt",
+        "1 1 0 0 0 0 0 0 1 000001.png\n",
+    )
+
+    write_text(
+        model_path / "config.yaml",
+        "model_params:\n  model_config:\n    kwargs:\n      gs_attr: explicit\n",
+    )
+    write_text(model_path / "point_cloud" / "iteration_42" / "point_cloud_anchor.ply", "ply")
+
+    manifest = bundle_run_outputs(
+        drive=scene,
+        run_output_dir=run_output_dir,
+        points_root=points_root,
+        bucket_root=bucket_root,
+        colmap_root=colmap_root,
+        octree_output_root=octree_root,
+        model_path=model_path,
+        map_viz_output_dir=None,
+        render_output_dir=None,
+        nbv_output_dir=None,
+        viewer_export_iteration=42,
+        viewer_export_output_dir=None,
+        viewer_export_archive_path=None,
+        skip_local_viewer_export=False,
+    )
+
+    run_manifest = json.loads((run_output_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    local_viewer = run_manifest["local_viewer_export"]
+
+    assert manifest["archive"]["path"] == str((run_output_dir.parent / f"{scene}.zip").resolve())
+    assert local_viewer["output_dir"] == str((run_output_dir / "local_viewer").resolve())
+    assert local_viewer["archive_path"] == str((run_output_dir.parent / f"{scene}-local-viewer.zip").resolve())
+    assert local_viewer["viewer_commands"] == str((run_output_dir / "local_viewer" / "VIEWER_COMMANDS.md").resolve())
+    assert local_viewer["source_paths"]["octree_model_path"] == str(model_path.resolve())
+    assert local_viewer["iteration"] == 42
+
+    assert Path(manifest["archive"]["path"]).is_file()
+    assert Path(local_viewer["archive_path"]).is_file()
+    assert (run_output_dir / "local_viewer" / "model" / "config.yaml").is_file()
+    assert (run_output_dir / "local_viewer" / "uncertainty" / "U.npy").is_file()
+
+    with zipfile.ZipFile(manifest["archive"]["path"]) as archive:
+        names = set(archive.namelist())
+    assert f"{scene}/run_manifest.json" in names
+    assert not any(name.startswith(f"{scene}/local_viewer/") for name in names)
+
+    with zipfile.ZipFile(local_viewer["archive_path"]) as archive:
+        names = set(archive.namelist())
+    assert "local_viewer/VIEWER_COMMANDS.md" in names
+    assert "local_viewer/model/config.yaml" in names

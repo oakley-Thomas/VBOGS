@@ -7,12 +7,19 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.export_local_viewer_run import export_local_viewer_run
+
 DEFAULT_RUN_ROOT = REPO_ROOT / "outputs" / "v1_0"
 DEFAULT_POINTS_ROOT = REPO_ROOT / "data" / "points_world"
 DEFAULT_BUCKET_ROOT = REPO_ROOT / "data" / "m4"
@@ -80,6 +87,29 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory containing NBV scores and diagnostics.",
+    )
+    parser.add_argument(
+        "--viewer-export-iteration",
+        type=int,
+        default=-1,
+        help="Checkpoint iteration to include in the local viewer export. -1 selects latest.",
+    )
+    parser.add_argument(
+        "--viewer-export-output-dir",
+        type=Path,
+        default=None,
+        help="Local viewer export directory. Defaults to `<run-output-dir>/local_viewer`.",
+    )
+    parser.add_argument(
+        "--viewer-export-archive-path",
+        type=Path,
+        default=None,
+        help="Local viewer zip path. Defaults to `<run-output-dir.parent>/<scene>-local-viewer.zip`.",
+    )
+    parser.add_argument(
+        "--skip-local-viewer-export",
+        action="store_true",
+        help="Skip creating the portable local viewer export during bundle.",
     )
     return parser.parse_args()
 
@@ -200,20 +230,39 @@ def default_archive_path(run_output_dir: Path) -> Path:
     return run_output_dir.parent / f"{run_output_dir.name}.zip"
 
 
-def archive_run_output_dir(run_output_dir: Path) -> Path:
+def default_viewer_export_output_dir(run_output_dir: Path, output_dir: Path | None) -> Path:
+    if output_dir is not None:
+        return output_dir.resolve()
+    return (run_output_dir / "local_viewer").resolve()
+
+
+def default_viewer_export_archive_path(run_output_dir: Path, archive_path: Path | None) -> Path:
+    if archive_path is not None:
+        return archive_path.resolve()
+    return run_output_dir.parent / f"{run_output_dir.name}-local-viewer.zip"
+
+
+def archive_run_output_dir(
+    run_output_dir: Path,
+    *,
+    exclude_top_dirs: tuple[str, ...] = (),
+) -> Path:
     run_output_dir = run_output_dir.resolve()
     if not run_output_dir.is_dir():
         raise NotADirectoryError(f"Run output directory not found: {run_output_dir}")
 
     archive_path = default_archive_path(run_output_dir)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    created_path = shutil.make_archive(
-        str(archive_path.with_suffix("")),
-        "zip",
-        root_dir=run_output_dir.parent,
-        base_dir=run_output_dir.name,
-    )
-    return Path(created_path).resolve()
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(run_output_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            relative_to_run = path.relative_to(run_output_dir)
+            if relative_to_run.parts and relative_to_run.parts[0] in exclude_top_dirs:
+                continue
+            archive_name = Path(run_output_dir.name) / relative_to_run
+            archive.write(path, archive_name.as_posix())
+    return archive_path.resolve()
 
 
 def bundle_run_outputs(
@@ -228,6 +277,10 @@ def bundle_run_outputs(
     map_viz_output_dir: Path | None,
     render_output_dir: Path | None,
     nbv_output_dir: Path | None,
+    viewer_export_iteration: int,
+    viewer_export_output_dir: Path | None,
+    viewer_export_archive_path: Path | None,
+    skip_local_viewer_export: bool,
 ) -> dict[str, Any]:
     run_output_dir = run_output_dir.resolve()
     points_dir = resolve_drive_dir(points_root, drive)
@@ -311,6 +364,45 @@ def bundle_run_outputs(
         missing_optional=missing_optional,
     )
 
+    local_viewer_export: dict[str, Any] | None = None
+    if not skip_local_viewer_export:
+        viewer_output_dir = default_viewer_export_output_dir(run_output_dir, viewer_export_output_dir)
+        viewer_archive_path = default_viewer_export_archive_path(run_output_dir, viewer_export_archive_path)
+        viewer_manifest = export_local_viewer_run(
+            drive=drive,
+            model_path=resolved_model_path,
+            octree_output_root=octree_output_root,
+            colmap_root=colmap_root,
+            colmap_path=colmap_drive_dir,
+            bucket_root=bucket_root,
+            u_path=bucket_root / "U.npy",
+            iteration=viewer_export_iteration,
+            output_dir=viewer_output_dir,
+            archive_path=viewer_archive_path,
+            write_archive=True,
+            overwrite=True,
+        )
+        local_viewer_export = {
+            "output_dir": viewer_manifest["output_dir"],
+            "archive_path": viewer_manifest.get("archive_path"),
+            "viewer_commands": str((viewer_output_dir / "VIEWER_COMMANDS.md").resolve()),
+            "manifest": str((viewer_output_dir / "local_viewer_manifest.json").resolve()),
+            "iteration": viewer_manifest["iteration"],
+            "model_path": str((viewer_output_dir / "model").resolve()),
+            "uncertainty_path": str((viewer_output_dir / "uncertainty" / "U.npy").resolve()),
+            "source_paths": viewer_manifest["source_paths"],
+        }
+
+    bundle_note = (
+        "Bulky Octree-AnyGS checkpoints and full VBGS posterior files remain "
+        "in their native data paths; source paths are recorded above."
+    )
+    if local_viewer_export is not None:
+        bundle_note += (
+            " The portable local viewer export is archived separately and "
+            "excluded from the diagnostics zip."
+        )
+
     points_summary = summarize_stereo(points_dir / "points_world_metadata.json")
     manifest = {
         "drive": drive,
@@ -337,14 +429,14 @@ def bundle_run_outputs(
         },
         "copied_artifacts": copied,
         "missing_optional_artifacts": missing_optional,
-        "curated_bundle_note": (
-            "Bulky Octree-AnyGS checkpoints and full VBGS posterior files remain "
-            "in their native data paths; source paths are recorded above."
-        ),
+        "curated_bundle_note": bundle_note,
     }
+    if local_viewer_export is not None:
+        manifest["local_viewer_export"] = local_viewer_export
     write_json(run_output_dir / "run_manifest.json", manifest)
-    archive_path = archive_run_output_dir(run_output_dir)
+    archive_path = archive_run_output_dir(run_output_dir, exclude_top_dirs=("local_viewer",))
     manifest["archive"]["path"] = str(archive_path)
+    write_json(run_output_dir / "run_manifest.json", manifest)
     return manifest
 
 
@@ -363,9 +455,15 @@ def main() -> None:
         map_viz_output_dir=args.map_viz_output_dir,
         render_output_dir=args.render_output_dir,
         nbv_output_dir=args.nbv_output_dir,
+        viewer_export_iteration=args.viewer_export_iteration,
+        viewer_export_output_dir=args.viewer_export_output_dir,
+        viewer_export_archive_path=args.viewer_export_archive_path,
+        skip_local_viewer_export=args.skip_local_viewer_export,
     )
     print(f"Wrote {run_output_dir / 'run_manifest.json'}")
     print(f"Wrote {manifest['archive']['path']}")
+    if "local_viewer_export" in manifest:
+        print(f"Wrote {manifest['local_viewer_export']['archive_path']}")
     print(
         "Bundle summary: "
         f"{len(manifest['copied_artifacts'])} copied, "

@@ -127,19 +127,10 @@ Enter the render server container
 # Enter the container
 ./dc_bash.sh vbogs-vbgs-render
 
-# Start the render server
+# Start the render server for a scene available in the stack volumes
 python scripts/view_octree_anygs.py \
   --drive 2013_05_28_drive_0004_sync \
   --resolution 1
-
-# Start the render server (server trained scene)
-python /workspace/VBOGS/scripts/view_octree_anygs.py \
-  --model-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/model \
-  --u-path /workspace/VBOGS/outputs/2013_05_28_drive_0004_sync/uncertainty/U.npy \
-  --iteration 90000 \
-  --resolution 2 \
-  --port 8070 \
-  --octree-root /workspace/VBOGS/Octree-AnyGS
 ```
 
 In a browser visit:
@@ -147,6 +138,21 @@ In a browser visit:
 ```text
 http://localhost:8071
 ```
+
+When a pipeline run reaches `bundle`, it also writes a portable local viewer
+package:
+
+```text
+outputs/v1_0/<scene-id>/local_viewer/
+outputs/v1_0/<scene-id>-local-viewer.zip
+```
+
+Download the `*-local-viewer.zip` file from File Browser, extract it on a
+machine with a checked-out VBOGS repo, then follow the generated
+`VIEWER_COMMANDS.md` inside the extracted `local_viewer` folder. That package
+contains the Octree-AnyGS checkpoint, prepared camera/image tree, and
+`uncertainty/U.npy` needed to render locally and query uncertainty through the
+viewer API.
 
 ### Query the render server API
 

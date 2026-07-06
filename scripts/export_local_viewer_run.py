@@ -314,10 +314,16 @@ def viewer_commands(output_dir: Path, iteration: int) -> str:
     export_var = display_path(output_dir)
     return f"""# VBOGS local viewer commands
 
-Run these from the VBOGS repo root after extracting this export folder.
+This folder is a portable local viewer export. Download the matching
+`*-local-viewer.zip`, extract it on a machine with a checked-out VBOGS repo,
+and point `EXPORT_DIR` at the extracted `local_viewer` folder.
 
 ```bash
+cd /path/to/VBOGS
 EXPORT_DIR={export_var}
+
+# If you are already inside the extracted local_viewer folder, use:
+# EXPORT_DIR="$PWD"
 
 python scripts/view_octree_anygs.py \\
   --model-path "${{EXPORT_DIR}}/model" \\
@@ -326,9 +332,31 @@ python scripts/view_octree_anygs.py \\
   --resolution 4
 ```
 
+Open the browser viewer at:
+
+```text
+http://localhost:8070
+```
+
+Query the loaded scene and available cameras:
+
+```bash
+curl http://localhost:8070/api/metadata
+curl http://localhost:8070/api/cameras
+```
+
+Query rendered uncertainty totals for a saved camera:
+
+```bash
+curl -X POST http://localhost:8070/api/rendered-anchors \\
+  -H 'Content-Type: application/json' \\
+  -d '{{"camera_id":"test:0","max_anchors":25}}'
+```
+
 For one-off PNG diagnostics:
 
 ```bash
+cd /path/to/VBOGS
 EXPORT_DIR={export_var}
 
 python scripts/render_uncertainty_views.py \\
