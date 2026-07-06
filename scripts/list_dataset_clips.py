@@ -42,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-root", type=Path, default=None, help="KITTI-360 image root override.")
     parser.add_argument("--poses-root", type=Path, default=None, help="KITTI-360 poses root override.")
     parser.add_argument("--calibration-dir", type=Path, default=None, help="KITTI-360 calibration dir override.")
+    parser.add_argument("--colmap-root", type=Path, default=None, help="Prepared COLMAP root override.")
+    parser.add_argument("--octree-output-root", type=Path, default=None, help="Octree-AnyGS output root override.")
+    parser.add_argument("--points-root", type=Path, default=None, help="World point-cloud artifact root override.")
+    parser.add_argument("--bucket-root", type=Path, default=None, help="M4/M5 bucket artifact root override.")
+    parser.add_argument("--outputs-root", type=Path, default=None, help="Curated/diagnostic outputs root override.")
+    parser.add_argument("--m6-root", type=Path, default=None, help="M6 NBV artifact root override.")
     return parser.parse_args()
 
 
@@ -53,6 +59,12 @@ def main() -> None:
         raw_root=args.raw_root,
         poses_root=args.poses_root,
         calibration_dir=args.calibration_dir,
+        colmap_root=args.colmap_root,
+        octree_output_root=args.octree_output_root,
+        points_root=args.points_root,
+        bucket_root=args.bucket_root,
+        outputs_root=args.outputs_root,
+        m6_root=args.m6_root,
     )
     if args.ready_only:
         clips = [clip for clip in clips if clip.ready]
