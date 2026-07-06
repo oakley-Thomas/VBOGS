@@ -113,6 +113,20 @@ python scripts/download_nvidia_ncore_dataset.py \
   --dry-run
 ```
 
+To see which clips have already been downloaded locally and which ones are
+ready for the default NCore pipeline profile:
+
+```bash
+python scripts/list_dataset_clips.py --dataset-name nvidia_ncore --ready-only --commands
+```
+
+Drop `--ready-only` to include partial downloads and see which components are
+missing:
+
+```bash
+python scripts/list_dataset_clips.py --dataset-name nvidia_ncore
+```
+
 After download, run the NCore pipeline profile by passing the same clip id:
 
 ```bash

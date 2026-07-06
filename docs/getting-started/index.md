@@ -42,6 +42,12 @@ VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset
 From inside `vbogs-pipeline`, use the downloaded clip UUID as `--scene-id` and
 select the NCore dataset adapter:
 
+List downloaded clips first if you do not remember which UUIDs are available:
+
+```bash
+python scripts/list_dataset_clips.py --dataset-name nvidia_ncore --ready-only --commands
+```
+
 ```bash
 scripts/run_pipeline.sh \
   --config configs/pipeline/nvidia_ncore_dev.yaml \

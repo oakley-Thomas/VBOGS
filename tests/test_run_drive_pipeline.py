@@ -553,7 +553,6 @@ def test_vbgs_render_service_publishes_viewer_port():
 def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
     read_only_filebrowser_targets = [
         "/srv/project",
-        "/srv/data",
         "/srv/data/KITTI-360",
         "/srv/data/NVIDIA-PhysicalAI-AV-NCore",
         "/srv/generated_configs",
@@ -578,6 +577,7 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
         assert "vbogs-filebrowser-config" in filebrowser
         assert "VBOGS_FILEBROWSER_PUID:-0" in filebrowser
         assert "VBOGS_FILEBROWSER_PGID:-0" in filebrowser
+        assert "type: tmpfs\n        target: /srv/data" in filebrowser
         for target in read_only_filebrowser_targets:
             assert f"target: {target}\n        read_only: true" in filebrowser
         assert "target: /srv/outputs" in filebrowser
