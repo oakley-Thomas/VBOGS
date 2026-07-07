@@ -71,7 +71,7 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     assert (run_output_dir / "prepared" / "metadata.json").exists()
     assert (run_output_dir / "octree" / "config.yaml").exists()
     assert (run_output_dir / "run_manifest.json").exists()
-    archive_path = run_output_dir.parent / f"{drive}.zip"
+    archive_path = run_output_dir / f"{drive}.zip"
     assert archive_path.exists()
 
     saved_manifest = json.loads((run_output_dir / "run_manifest.json").read_text(encoding="utf-8"))
@@ -134,7 +134,7 @@ def test_bundle_run_outputs_records_optional_missing_ply(tmp_path):
     assert any(path.endswith("uncertainty_histogram.png") for path in manifest["missing_optional_artifacts"])
 
 
-def test_bundle_writes_local_viewer_export_manifest_and_separate_archives(tmp_path):
+def test_bundle_writes_single_renderable_archive_with_local_viewer_export(tmp_path):
     scene = "scene_001"
     points_root = tmp_path / "data" / "points_world"
     bucket_root = tmp_path / "data" / "m4" / scene
@@ -190,24 +190,24 @@ def test_bundle_writes_local_viewer_export_manifest_and_separate_archives(tmp_pa
     run_manifest = json.loads((run_output_dir / "run_manifest.json").read_text(encoding="utf-8"))
     local_viewer = run_manifest["local_viewer_export"]
 
-    assert manifest["archive"]["path"] == str((run_output_dir.parent / f"{scene}.zip").resolve())
+    assert manifest["archive"]["path"] == str((run_output_dir / f"{scene}.zip").resolve())
     assert local_viewer["output_dir"] == str((run_output_dir / "local_viewer").resolve())
-    assert local_viewer["archive_path"] == str((run_output_dir.parent / f"{scene}-local-viewer.zip").resolve())
+    assert "archive_path" not in local_viewer
     assert local_viewer["viewer_commands"] == str((run_output_dir / "local_viewer" / "VIEWER_COMMANDS.md").resolve())
     assert local_viewer["source_paths"]["octree_model_path"] == str(model_path.resolve())
     assert local_viewer["iteration"] == 42
 
     assert Path(manifest["archive"]["path"]).is_file()
-    assert Path(local_viewer["archive_path"]).is_file()
+    assert not (run_output_dir.parent / f"{scene}-local-viewer.zip").exists()
     assert (run_output_dir / "local_viewer" / "model" / "config.yaml").is_file()
     assert (run_output_dir / "local_viewer" / "uncertainty" / "U.npy").is_file()
 
     with zipfile.ZipFile(manifest["archive"]["path"]) as archive:
         names = set(archive.namelist())
     assert f"{scene}/run_manifest.json" in names
-    assert not any(name.startswith(f"{scene}/local_viewer/") for name in names)
-
-    with zipfile.ZipFile(local_viewer["archive_path"]) as archive:
-        names = set(archive.namelist())
-    assert "local_viewer/VIEWER_COMMANDS.md" in names
-    assert "local_viewer/model/config.yaml" in names
+    assert f"{scene}/local_viewer/VIEWER_COMMANDS.md" in names
+    assert f"{scene}/local_viewer/model/config.yaml" in names
+    assert f"{scene}/local_viewer/model/point_cloud/iteration_42/point_cloud_anchor.ply" in names
+    assert f"{scene}/local_viewer/prepared/images/000001.png" in names
+    assert f"{scene}/local_viewer/uncertainty/U.npy" in names
+    assert f"{scene}/{scene}.zip" not in names

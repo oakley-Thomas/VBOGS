@@ -37,8 +37,7 @@ With `--run-output-root outputs/v1_0`, curated outputs land at:
 
 ```text
 outputs/v1_0/<scene-id>/
-outputs/v1_0/<scene-id>.zip
-outputs/v1_0/<scene-id>-local-viewer.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
 The bundle includes:
@@ -53,11 +52,11 @@ The bundle includes:
   prepared camera/image tree, uncertainty array, and `VIEWER_COMMANDS.md`;
 - `run_manifest.json`.
 
-Download `outputs/v1_0/<scene-id>.zip` for compact diagnostics. Download
-`outputs/v1_0/<scene-id>-local-viewer.zip` when you want to extract the run on
-another machine with a checked-out VBOGS repo and use the realtime browser
-viewer or REST API locally. Full posterior artifacts remain in their native
-data paths and are referenced by path in the manifest.
+Download `outputs/v1_0/<scene-id>/<scene-id>.zip` when you want compact
+diagnostics or when you want to extract the run on another machine with a
+checked-out VBOGS repo and use the realtime browser viewer or REST API locally.
+Full posterior artifacts remain in their native data paths and are referenced
+by path in the manifest.
 
 ## Important Runtime Knobs
 

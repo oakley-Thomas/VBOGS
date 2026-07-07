@@ -352,7 +352,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=False,
         help=(
             "Upload the final curated run zip after all selected stages succeed. "
-            "The default source is `<run-output-root>/<drive>.zip`."
+            "The default source is `<run-output-root>/<drive>/<drive>.zip`."
         ),
     )
     upload_group.add_argument(

@@ -122,6 +122,10 @@ Experiment-specific runbooks live under the docs' Experiments section:
 
 Navigate the Octree-AnyGS representation and visualize the Uncertainty Anchor Map
 
+For a step-by-step workflow that downloads a completed server run, extracts the
+portable viewer package locally, starts the render container, and queries
+uncertainty scores, use [Download and View Artifacts](local-artifact-viewing.md).
+
 Enter the render server container
 ```bash
 # Enter the container
@@ -140,19 +144,18 @@ http://localhost:8071
 ```
 
 When a pipeline run reaches `bundle`, it also writes a portable local viewer
-package:
+package inside the scene bundle:
 
 ```text
 outputs/v1_0/<scene-id>/local_viewer/
-outputs/v1_0/<scene-id>-local-viewer.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
-Download the `*-local-viewer.zip` file from File Browser, extract it on a
-machine with a checked-out VBOGS repo, then follow the generated
-`VIEWER_COMMANDS.md` inside the extracted `local_viewer` folder. That package
-contains the Octree-AnyGS checkpoint, prepared camera/image tree, and
-`uncertainty/U.npy` needed to render locally and query uncertainty through the
-viewer API.
+Download the scene zip from File Browser, extract it on a machine with a
+checked-out VBOGS repo, then follow the generated `VIEWER_COMMANDS.md` inside
+the extracted `<scene-id>/local_viewer` folder. That package contains the
+Octree-AnyGS checkpoint, prepared camera/image tree, and `uncertainty/U.npy`
+needed to render locally and query uncertainty through the viewer API.
 
 ### Query the render server API
 

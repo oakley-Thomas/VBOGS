@@ -104,7 +104,10 @@ def parse_args() -> argparse.Namespace:
         "--viewer-export-archive-path",
         type=Path,
         default=None,
-        help="Local viewer zip path. Defaults to `<run-output-dir.parent>/<scene>-local-viewer.zip`.",
+        help=(
+            "Deprecated for bundle mode. The local viewer export is now included "
+            "inside the single run zip."
+        ),
     )
     parser.add_argument(
         "--skip-local-viewer-export",
@@ -227,7 +230,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def default_archive_path(run_output_dir: Path) -> Path:
     run_output_dir = run_output_dir.resolve()
-    return run_output_dir.parent / f"{run_output_dir.name}.zip"
+    return run_output_dir / f"{run_output_dir.name}.zip"
 
 
 def default_viewer_export_output_dir(run_output_dir: Path, output_dir: Path | None) -> Path:
@@ -236,17 +239,7 @@ def default_viewer_export_output_dir(run_output_dir: Path, output_dir: Path | No
     return (run_output_dir / "local_viewer").resolve()
 
 
-def default_viewer_export_archive_path(run_output_dir: Path, archive_path: Path | None) -> Path:
-    if archive_path is not None:
-        return archive_path.resolve()
-    return run_output_dir.parent / f"{run_output_dir.name}-local-viewer.zip"
-
-
-def archive_run_output_dir(
-    run_output_dir: Path,
-    *,
-    exclude_top_dirs: tuple[str, ...] = (),
-) -> Path:
+def archive_run_output_dir(run_output_dir: Path) -> Path:
     run_output_dir = run_output_dir.resolve()
     if not run_output_dir.is_dir():
         raise NotADirectoryError(f"Run output directory not found: {run_output_dir}")
@@ -257,9 +250,9 @@ def archive_run_output_dir(
         for path in sorted(run_output_dir.rglob("*")):
             if not path.is_file():
                 continue
-            relative_to_run = path.relative_to(run_output_dir)
-            if relative_to_run.parts and relative_to_run.parts[0] in exclude_top_dirs:
+            if path.resolve() == archive_path:
                 continue
+            relative_to_run = path.relative_to(run_output_dir)
             archive_name = Path(run_output_dir.name) / relative_to_run
             archive.write(path, archive_name.as_posix())
     return archive_path.resolve()
@@ -367,7 +360,6 @@ def bundle_run_outputs(
     local_viewer_export: dict[str, Any] | None = None
     if not skip_local_viewer_export:
         viewer_output_dir = default_viewer_export_output_dir(run_output_dir, viewer_export_output_dir)
-        viewer_archive_path = default_viewer_export_archive_path(run_output_dir, viewer_export_archive_path)
         viewer_manifest = export_local_viewer_run(
             drive=drive,
             model_path=resolved_model_path,
@@ -378,13 +370,12 @@ def bundle_run_outputs(
             u_path=bucket_root / "U.npy",
             iteration=viewer_export_iteration,
             output_dir=viewer_output_dir,
-            archive_path=viewer_archive_path,
-            write_archive=True,
+            archive_path=viewer_export_archive_path,
+            write_archive=False,
             overwrite=True,
         )
         local_viewer_export = {
             "output_dir": viewer_manifest["output_dir"],
-            "archive_path": viewer_manifest.get("archive_path"),
             "viewer_commands": str((viewer_output_dir / "VIEWER_COMMANDS.md").resolve()),
             "manifest": str((viewer_output_dir / "local_viewer_manifest.json").resolve()),
             "iteration": viewer_manifest["iteration"],
@@ -399,8 +390,14 @@ def bundle_run_outputs(
     )
     if local_viewer_export is not None:
         bundle_note += (
-            " The portable local viewer export is archived separately and "
-            "excluded from the diagnostics zip."
+            " The portable local viewer export is included under local_viewer/ "
+            "inside the run zip, so the primary archive is renderable on a "
+            "development machine."
+        )
+    else:
+        bundle_note += (
+            " The portable local viewer export was skipped, so the run zip is "
+            "diagnostics-only and is not sufficient for local rendering."
         )
 
     points_summary = summarize_stereo(points_dir / "points_world_metadata.json")
@@ -434,7 +431,7 @@ def bundle_run_outputs(
     if local_viewer_export is not None:
         manifest["local_viewer_export"] = local_viewer_export
     write_json(run_output_dir / "run_manifest.json", manifest)
-    archive_path = archive_run_output_dir(run_output_dir, exclude_top_dirs=("local_viewer",))
+    archive_path = archive_run_output_dir(run_output_dir)
     manifest["archive"]["path"] = str(archive_path)
     write_json(run_output_dir / "run_manifest.json", manifest)
     return manifest
@@ -462,8 +459,6 @@ def main() -> None:
     )
     print(f"Wrote {run_output_dir / 'run_manifest.json'}")
     print(f"Wrote {manifest['archive']['path']}")
-    if "local_viewer_export" in manifest:
-        print(f"Wrote {manifest['local_viewer_export']['archive_path']}")
     print(
         "Bundle summary: "
         f"{len(manifest['copied_artifacts'])} copied, "

@@ -274,11 +274,12 @@ python scripts/bundle_run_outputs.py \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
 
-The bundle step also writes a renderable local-viewer package by default:
+The bundle step also writes a renderable local-viewer package by default and
+includes it in the single scene zip:
 
 ```text
 outputs/v1_0/2013_05_28_drive_0007_sync/local_viewer/
-outputs/v1_0/2013_05_28_drive_0007_sync-local-viewer.zip
+outputs/v1_0/2013_05_28_drive_0007_sync/2013_05_28_drive_0007_sync.zip
 ```
 
 Use `--skip-local-viewer-export` to skip that package. You can still export one
@@ -291,8 +292,8 @@ python scripts/export_local_viewer_run.py \
 ```
 
 After extracting the zip locally, run the command in its `VIEWER_COMMANDS.md`.
-The export includes real prepared image files, so it is larger than the
-diagnostics bundle but portable for the viewer.
+The export includes real prepared image files, so the scene zip is larger but
+portable for the viewer.
 
 ## Online ROS2 Loop
 

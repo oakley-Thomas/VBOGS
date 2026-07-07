@@ -21,7 +21,7 @@ def test_upload_defaults_to_curated_zip_from_config_defaults():
     assert build_rclone_command(args) == [
         "rclone",
         "copyto",
-        "outputs/v1_0/drive_sync.zip",
+        "outputs/v1_0/drive_sync/drive_sync.zip",
         "vbogs_gdrive:drive_sync.zip",
     ]
 

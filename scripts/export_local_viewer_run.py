@@ -314,9 +314,10 @@ def viewer_commands(output_dir: Path, iteration: int) -> str:
     export_var = display_path(output_dir)
     return f"""# VBOGS local viewer commands
 
-This folder is a portable local viewer export. Download the matching
-`*-local-viewer.zip`, extract it on a machine with a checked-out VBOGS repo,
-and point `EXPORT_DIR` at the extracted `local_viewer` folder.
+This folder is a portable local viewer export. It may come from the unified
+run bundle at `<scene-id>/<scene-id>.zip` or from a standalone local-viewer
+export. Extract the archive on a machine with a checked-out VBOGS repo, and
+point `EXPORT_DIR` at the extracted `local_viewer` folder.
 
 ```bash
 cd /path/to/VBOGS

@@ -136,10 +136,10 @@ local_viewer/
 run_manifest.json
 ```
 
-The diagnostics bundle is:
+The renderable scene bundle is:
 
 ```text
-outputs/v1_0/<scene-id>.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
 ## Local Viewer Export
@@ -161,19 +161,17 @@ VIEWER_COMMANDS.md
 local_viewer_manifest.json
 ```
 
-The final local-viewer archive is:
+The bundle-stage archive that includes this local viewer export is:
 
 ```text
-outputs/v1_0/<scene-id>-local-viewer.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
-Download `outputs/v1_0/<scene-id>-local-viewer.zip` when you need to open a
-server run in `scripts/view_octree_anygs.py` locally. Unlike the diagnostics
-bundle, this package includes the Octree-AnyGS checkpoint and prepared COLMAP
-camera/image tree needed for rendering. Prepared image symlinks are
+Download `outputs/v1_0/<scene-id>/<scene-id>.zip` when you need to open a
+server run in `scripts/view_octree_anygs.py` locally. The zip includes the
+Octree-AnyGS checkpoint and prepared COLMAP camera/image tree needed for
+rendering under `<scene-id>/local_viewer/`. Prepared image symlinks are
 dereferenced during export so the zip can be extracted on another machine.
-The diagnostics zip excludes `local_viewer/` to avoid duplicating the large
-portable renderer package.
 
 ## Generated Configs
 

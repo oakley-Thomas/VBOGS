@@ -96,7 +96,7 @@ Pass `--upload-google-drive` to `scripts/run_pipeline.sh` or set
 selected stages succeed. By default the source is:
 
 ```text
-outputs/v1_0/<drive>.zip
+outputs/v1_0/<drive>/<drive>.zip
 ```
 
 Config example:
@@ -386,11 +386,10 @@ uncertainty/alpha arrays into PNG diagnostics under `<nbv-output-dir>/viz`.
 Runs `scripts/bundle_run_outputs.py` in `vbogs-torch`. It copies curated,
 user-facing artifacts into `outputs/v1_0/<drive>` and writes
 `run_manifest.json`, then zips that output folder to
-`outputs/v1_0/<drive>.zip`. It also creates a portable local viewer export at
-`outputs/v1_0/<drive>/local_viewer/` and
-`outputs/v1_0/<drive>-local-viewer.zip` unless
-`--skip-local-viewer-export` is set. Full VBGS posterior artifacts remain in
-their native data paths and are referenced by path.
+`outputs/v1_0/<drive>/<drive>.zip`. It also creates a portable local viewer
+export at `outputs/v1_0/<drive>/local_viewer/` and includes it in that same
+zip unless `--skip-local-viewer-export` is set. Full VBGS posterior artifacts
+remain in their native data paths and are referenced by path.
 
 Bundled outputs include:
 
