@@ -75,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start without U.npy and expose only the RGB layer.",
     )
+    parser.add_argument(
+        "--load-source-images",
+        action="store_true",
+        help=(
+            "Use the original Octree-AnyGS camera loader, including source image "
+            "tensors. The default viewer path skips those tensors to reduce RAM/VRAM."
+        ),
+    )
     return parser
 
 
@@ -117,6 +125,7 @@ def main(argv: list[str] | None = None) -> None:
         vmax=args.vmax,
         force_all_levels=args.force_all_levels,
         rgb_only=args.rgb_only,
+        load_source_images=args.load_source_images,
         jpeg_quality=args.jpeg_quality,
         max_fps=args.max_fps,
         initial_c2w=initial_c2w,

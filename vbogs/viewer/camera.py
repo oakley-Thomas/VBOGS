@@ -27,6 +27,20 @@ def coerce_c2w(value: Any) -> np.ndarray:
     return matrix
 
 
+def _viewer_resolution(width: int, height: int, resolution_scale: float, resolution_arg: int | float) -> tuple[int, int]:
+    if resolution_arg in (1, 2, 4, 8):
+        return (
+            round(width / (float(resolution_scale) * float(resolution_arg))),
+            round(height / (float(resolution_scale) * float(resolution_arg))),
+        )
+    if resolution_arg == -1:
+        global_down = width / 1600 if width > 1600 else 1.0
+    else:
+        global_down = width / float(resolution_arg)
+    scale = float(global_down) * float(resolution_scale)
+    return int(width / scale), int(height / scale)
+
+
 def _fallback_projection_matrix(znear: float, zfar: float, fovx: float, fovy: float) -> np.ndarray:
     tan_half_x = math.tan(float(fovx) * 0.5)
     tan_half_y = math.tan(float(fovy) * 0.5)
@@ -136,3 +150,66 @@ class ViewerCamera:
             zfar=float(getattr(source_cam, "zfar", 100.0)),
             device=device,
         )
+
+
+class LightweightSceneCamera:
+    """Octree-AnyGS-compatible camera without source image tensors.
+
+    The realtime viewer renders from the trained Gaussian model and only needs
+    camera pose, intrinsics, and output dimensions. Loading every source image
+    into CUDA, as Octree-AnyGS does for training/eval cameras, is unnecessary
+    and can exhaust local RAM/VRAM on large exported runs.
+    """
+
+    def __init__(
+        self,
+        cam_info: Any,
+        *,
+        uid: int,
+        resolution_scale: float,
+        resolution_arg: int | float,
+        device: str = "cuda",
+    ) -> None:
+        import torch
+        from utils.graphics_utils import getProjectionMatrix, getWorld2View2
+
+        self.uid = int(uid)
+        self.colmap_id = int(getattr(cam_info, "uid"))
+        self.R = cam_info.R
+        self.T = cam_info.T
+        self.FoVx = float(cam_info.FovX)
+        self.FoVy = float(cam_info.FovY)
+        self.image_name = str(cam_info.image_name)
+        self.image_path = str(cam_info.image_path)
+        self.resolution_scale = float(resolution_scale)
+        self.znear = 0.01
+        self.zfar = 100.0
+        self.trans = np.array([0.0, 0.0, 0.0])
+        self.scale = 1.0
+
+        orig_w = int(cam_info.width)
+        orig_h = int(cam_info.height)
+        width, height = _viewer_resolution(orig_w, orig_h, self.resolution_scale, resolution_arg)
+        self.image_width = int(width)
+        self.image_height = int(height)
+        self.cx = float(cam_info.CX) * self.image_width / float(orig_w)
+        self.cy = float(cam_info.CY) * self.image_height / float(orig_h)
+        self.fx = self.image_width / (2.0 * math.tan(self.FoVx * 0.5))
+        self.fy = self.image_height / (2.0 * math.tan(self.FoVy * 0.5))
+
+        self.world_view_transform = torch.tensor(
+            getWorld2View2(self.R, self.T, self.trans, self.scale),
+            dtype=torch.float32,
+            device=device,
+        ).transpose(0, 1)
+        self.projection_matrix = getProjectionMatrix(
+            znear=self.znear,
+            zfar=self.zfar,
+            fovX=self.FoVx,
+            fovY=self.FoVy,
+        ).transpose(0, 1).to(device)
+        self.full_proj_transform = (
+            self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))
+        ).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        self.c2w = self.world_view_transform.transpose(0, 1).inverse()
