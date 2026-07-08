@@ -175,13 +175,17 @@ def lightweight_camera_list_from_cam_infos(
     args: Any,
     background: Any,
 ) -> list[Any]:
+    # Octree-AnyGS applies args.data_device only to image payloads; camera
+    # matrices always live on CUDA (scene/cameras.py). Lightweight cameras
+    # carry no image data, so a config trained with data_device=cpu must not
+    # pull the pose tensors onto the CPU.
     return [
         LightweightSceneCamera(
             cam_info,
             uid=index,
             resolution_scale=resolution_scale,
             resolution_arg=args.resolution,
-            device=args.data_device,
+            device="cuda",
         )
         for index, cam_info in enumerate(cam_infos)
     ]
