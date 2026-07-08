@@ -33,6 +33,7 @@ nav:
   - Experiments:
       - 3D Baseline Drive Sweep: experiments/experiment02.md
       - Stereo Training Comparison: experiments/experiment03.md
+      - Camera-Count Comparison: experiments/experiment04.md
 
 plugins:
   - search

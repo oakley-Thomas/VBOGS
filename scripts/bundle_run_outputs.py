@@ -362,6 +362,14 @@ def bundle_run_outputs(
         copied=copied,
         missing_optional=missing_optional,
     )
+    for name in ("results.json", "per_view.json"):
+        copy_file(
+            resolved_model_path / name,
+            run_output_dir / "octree" / name,
+            required=False,
+            copied=copied,
+            missing_optional=missing_optional,
+        )
 
     local_viewer_export: dict[str, Any] | None = None
     if not skip_local_viewer_export:

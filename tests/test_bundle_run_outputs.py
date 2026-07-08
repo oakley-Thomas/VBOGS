@@ -47,6 +47,8 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     model_path = tmp_path / "OCTREE-ANYGS" / drive / "2026-05-08_00:00:00"
     model_path.mkdir(parents=True)
     (model_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    write_json(model_path / "results.json", {"ours_30000": {"PSNR": 25.0}})
+    write_json(model_path / "per_view.json", {"ours_30000": {"PSNR": {"00000.png": 25.0}}})
     write_text(run_output_dir / "views" / "train" / "side_by_side" / "000001.png", "png")
 
     manifest = bundle_run_outputs(
@@ -71,6 +73,8 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     assert (run_output_dir / "uncertainty" / "U.npy").exists()
     assert (run_output_dir / "prepared" / "metadata.json").exists()
     assert (run_output_dir / "octree" / "config.yaml").exists()
+    assert (run_output_dir / "octree" / "results.json").exists()
+    assert (run_output_dir / "octree" / "per_view.json").exists()
     assert (run_output_dir / "run_manifest.json").exists()
     archive_path = run_output_dir / f"{drive}.zip"
     assert archive_path.exists()
@@ -135,6 +139,8 @@ def test_bundle_run_outputs_records_optional_missing_ply(tmp_path):
 
     assert any(path.endswith("points_world.ply") for path in manifest["missing_optional_artifacts"])
     assert any(path.endswith("uncertainty_histogram.png") for path in manifest["missing_optional_artifacts"])
+    assert any(path.endswith("results.json") for path in manifest["missing_optional_artifacts"])
+    assert any(path.endswith("per_view.json") for path in manifest["missing_optional_artifacts"])
 
 
 def test_bundle_writes_single_renderable_archive_with_local_viewer_export(tmp_path):
