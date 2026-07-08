@@ -127,7 +127,6 @@ Default curated path: `outputs/v1_0/<scene-id>/`
 pointclouds/
   stereo/
   anchors/
-views/
 nbv/
 uncertainty/
 prepared/
@@ -142,6 +141,10 @@ The renderable scene bundle is:
 outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
+Rendered diagnostic images may exist on the run host under
+`outputs/v1_0/<scene-id>/views/`, but the bundle archive excludes that
+top-level directory to keep downloads compact.
+
 ## Local Viewer Export
 
 Stage: `bundle` by default, or manual export with `scripts/export_local_viewer_run.py`  
@@ -153,7 +156,6 @@ model/
   original_config.yaml
   point_cloud/iteration_<N>/
 prepared/
-  images/                       # real image files materialized from prepared-data symlinks
   sparse/0/
 uncertainty/
   U.npy
@@ -169,9 +171,11 @@ outputs/v1_0/<scene-id>/<scene-id>.zip
 
 Download `outputs/v1_0/<scene-id>/<scene-id>.zip` when you need to open a
 server run in `scripts/view_octree_anygs.py` locally. The zip includes the
-Octree-AnyGS checkpoint and prepared COLMAP camera/image tree needed for
-rendering under `<scene-id>/local_viewer/`. Prepared image symlinks are
-dereferenced during export so the zip can be extracted on another machine.
+Octree-AnyGS checkpoint and prepared COLMAP camera metadata needed for
+rendering under `<scene-id>/local_viewer/`. Prepared source images are omitted
+by default because the repo-owned viewer uses metadata-only camera loading. Use
+`scripts/export_local_viewer_run.py --include-prepared-images` only when a
+source-image loader explicitly needs them.
 
 ## Generated Configs
 

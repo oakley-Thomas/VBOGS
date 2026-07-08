@@ -154,7 +154,7 @@ outputs/v1_0/<scene-id>/<scene-id>.zip
 Download the scene zip from File Browser, extract it on a machine with a
 checked-out VBOGS repo, then follow the generated `VIEWER_COMMANDS.md` inside
 the extracted `<scene-id>/local_viewer` folder. That package contains the
-Octree-AnyGS checkpoint, prepared camera/image tree, and `uncertainty/U.npy`
+Octree-AnyGS checkpoint, prepared camera metadata, and `uncertainty/U.npy`
 needed to render locally and query uncertainty through the viewer API.
 
 ### Query the render server API

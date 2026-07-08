@@ -47,6 +47,7 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     model_path = tmp_path / "OCTREE-ANYGS" / drive / "2026-05-08_00:00:00"
     model_path.mkdir(parents=True)
     (model_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    write_text(run_output_dir / "views" / "train" / "side_by_side" / "000001.png", "png")
 
     manifest = bundle_run_outputs(
         drive=drive,
@@ -77,6 +78,7 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
     saved_manifest = json.loads((run_output_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert saved_manifest["drive"] == drive
     assert saved_manifest["archive"]["path"] == str(archive_path.resolve())
+    assert saved_manifest["archive"]["excluded_top_level_dirs"] == ["views"]
     assert saved_manifest["frame_counts"]["num_frames"] == 1000
     assert saved_manifest["frame_counts"]["selected_frame_count"] == 1000
     assert saved_manifest["stereo"]["num_points"] == 2
@@ -89,6 +91,7 @@ def test_bundle_run_outputs_copies_curated_artifacts_and_manifest(tmp_path):
         names = set(archive.namelist())
     assert f"{drive}/run_manifest.json" in names
     assert f"{drive}/pointclouds/stereo/points_world.npz" in names
+    assert f"{drive}/views/train/side_by_side/000001.png" not in names
 
 
 def test_bundle_run_outputs_records_optional_missing_ply(tmp_path):
@@ -208,6 +211,7 @@ def test_bundle_writes_single_renderable_archive_with_local_viewer_export(tmp_pa
     assert f"{scene}/local_viewer/VIEWER_COMMANDS.md" in names
     assert f"{scene}/local_viewer/model/config.yaml" in names
     assert f"{scene}/local_viewer/model/point_cloud/iteration_42/point_cloud_anchor.ply" in names
-    assert f"{scene}/local_viewer/prepared/images/000001.png" in names
+    assert f"{scene}/local_viewer/prepared/images/000001.png" not in names
+    assert f"{scene}/local_viewer/prepared/sparse/0/images.txt" in names
     assert f"{scene}/local_viewer/uncertainty/U.npy" in names
     assert f"{scene}/{scene}.zip" not in names

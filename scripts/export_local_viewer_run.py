@@ -92,6 +92,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Replace an existing export directory/archive.",
     )
+    parser.add_argument(
+        "--include-prepared-images",
+        action="store_true",
+        help=(
+            "Copy real files into prepared/images. This is only needed for "
+            "--load-source-images or original Octree-AnyGS evaluation-style loaders."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -295,7 +303,52 @@ def validate_materialized_colmap_images(prepared_path: Path) -> dict[str, Any]:
         "image_count": len(image_names),
         "image_root": str(image_root.resolve()),
         "materialized": True,
+        "images_copied": True,
     }
+
+
+def summarize_colmap_images_without_copy(source_colmap_path: Path, prepared_path: Path) -> dict[str, Any]:
+    image_names = read_colmap_image_names(source_colmap_path / "sparse" / "0" / "images.txt")
+    return {
+        "image_count": len(image_names),
+        "image_root": str((prepared_path / "images").resolve()),
+        "materialized": False,
+        "images_copied": False,
+    }
+
+
+def copy_prepared_colmap_for_viewer(
+    source_colmap_path: Path,
+    prepared_dest: Path,
+    *,
+    include_images: bool,
+    copied: list[dict[str, str]],
+) -> dict[str, Any]:
+    if include_images:
+        copy_tree(source_colmap_path, prepared_dest, copied=copied, dereference_symlinks=True)
+        return validate_materialized_colmap_images(prepared_dest)
+
+    source_colmap_path = source_colmap_path.resolve()
+    if not source_colmap_path.is_dir():
+        raise FileNotFoundError(f"Required directory not found: {source_colmap_path}")
+    prepared_dest.mkdir(parents=True, exist_ok=True)
+    for child in sorted(source_colmap_path.iterdir()):
+        if child.name == "images":
+            continue
+        destination = prepared_dest / child.name
+        if child.is_dir():
+            copy_tree(child, destination, copied=copied)
+        elif child.is_file():
+            copy_file(child, destination, required=True, copied=copied)
+
+    copied.append(
+        {
+            "source": str((source_colmap_path / "images").resolve()),
+            "destination": str((prepared_dest / "images").resolve()),
+            "skipped": "prepared images omitted for metadata-only viewer loading",
+        }
+    )
+    return summarize_colmap_images_without_copy(source_colmap_path, prepared_dest)
 
 
 def default_output_dir(drive: str, output_dir: Path | None) -> Path:
@@ -367,6 +420,10 @@ python scripts/render_uncertainty_views.py \\
   --split both \\
   --output-dir "${{EXPORT_DIR}}/rendered_views"
 ```
+
+This export omits prepared source images by default. The viewer and diagnostic
+render command above use metadata-only camera loading, so they only require the
+COLMAP camera files under `prepared/sparse/0`.
 """
 
 
@@ -405,6 +462,7 @@ def export_local_viewer_run(
     archive_path: Path | None,
     write_archive: bool,
     overwrite: bool,
+    include_prepared_images: bool = False,
 ) -> dict[str, Any]:
     output_dir = default_output_dir(drive, output_dir)
     if output_dir.exists():
@@ -429,8 +487,12 @@ def export_local_viewer_run(
     prepared_dest = output_dir / "prepared"
     uncertainty_dest = output_dir / "uncertainty"
 
-    copy_tree(source_colmap_path, prepared_dest, copied=copied, dereference_symlinks=True)
-    prepared_images = validate_materialized_colmap_images(prepared_dest)
+    prepared_images = copy_prepared_colmap_for_viewer(
+        source_colmap_path,
+        prepared_dest,
+        include_images=include_prepared_images,
+        copied=copied,
+    )
     copy_file(source_model_path / "config.yaml", model_dest / "original_config.yaml", required=True, copied=copied)
 
     patched_cfg = dict(cfg)
@@ -504,6 +566,7 @@ def main() -> None:
             archive_path=args.archive_path,
             write_archive=not args.no_archive,
             overwrite=args.overwrite,
+            include_prepared_images=args.include_prepared_images,
         )
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         raise SystemExit(f"error: {exc}") from exc

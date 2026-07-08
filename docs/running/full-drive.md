@@ -45,12 +45,14 @@ The bundle includes:
 - prepared-data metadata and generated Octree-AnyGS config;
 - stereo point-cloud sidecars;
 - colored anchor uncertainty PLY files;
-- RGB and uncertainty render diagnostics;
 - NBV score files and visualizations;
 - `uncertainty/U.npy`, uncertainty metadata, and histogram when present;
 - `local_viewer/`, a portable local-render export with the model checkpoint,
-  prepared camera/image tree, uncertainty array, and `VIEWER_COMMANDS.md`;
+  prepared camera metadata, uncertainty array, and `VIEWER_COMMANDS.md`;
 - `run_manifest.json`.
+
+Rendered RGB/uncertainty diagnostics may remain on the run host under
+`outputs/v1_0/<scene-id>/views/`, but the bundle zip excludes that directory.
 
 Download `outputs/v1_0/<scene-id>/<scene-id>.zip` when you want compact
 diagnostics or when you want to extract the run on another machine with a

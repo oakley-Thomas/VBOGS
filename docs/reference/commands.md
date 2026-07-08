@@ -292,8 +292,9 @@ python scripts/export_local_viewer_run.py \
 ```
 
 After extracting the zip locally, run the command in its `VIEWER_COMMANDS.md`.
-The export includes real prepared image files, so the scene zip is larger but
-portable for the viewer.
+The export omits prepared source images by default. The repo-owned viewer and
+diagnostic render command use metadata-only cameras; pass
+`--include-prepared-images` only if you need a loader that opens source images.
 
 ## Online ROS2 Loop
 

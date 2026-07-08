@@ -19,7 +19,7 @@ outputs/v1_0/<scene-id>/<scene-id>.zip
 The zip includes static diagnostics and `local_viewer/`, which contains:
 
 - `model/`: Octree-AnyGS checkpoint and patched config
-- `prepared/`: COLMAP-style camera and image tree with real image files
+- `prepared/`: COLMAP-style camera metadata without source image files
 - `uncertainty/U.npy`: per-anchor uncertainty values
 - `VIEWER_COMMANDS.md`: generated commands for the exported run
 - `local_viewer_manifest.json`: source paths and export metadata

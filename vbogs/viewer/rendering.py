@@ -146,8 +146,6 @@ def read_colmap_cameras_metadata_only(
             raise ValueError(f"Unsupported COLMAP camera model for viewer: {intr.model}")
 
         image_path = os.path.join(images_folder, extr.name)
-        if not os.path.exists(image_path):
-            continue
         cam_infos.append(
             CameraInfo(
                 uid=intr.id,
@@ -162,7 +160,7 @@ def read_colmap_cameras_metadata_only(
                 depth=None,
                 depth_params=None,
                 image_path=image_path,
-                image_name=os.path.basename(image_path).split(".")[0],
+                image_name=os.path.basename(extr.name).split(".")[0],
                 width=width,
                 height=height,
             )

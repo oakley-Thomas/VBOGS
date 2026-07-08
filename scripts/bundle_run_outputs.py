@@ -25,6 +25,7 @@ DEFAULT_POINTS_ROOT = REPO_ROOT / "data" / "points_world"
 DEFAULT_BUCKET_ROOT = REPO_ROOT / "data" / "m4"
 DEFAULT_COLMAP_ROOT = Path("/data/COLMAP")
 DEFAULT_OCTREE_ROOT = Path("/data/OCTREE-ANYGS")
+ARCHIVE_EXCLUDED_TOP_LEVEL_DIRS = frozenset({"views"})
 
 
 def parse_args() -> argparse.Namespace:
@@ -253,6 +254,11 @@ def archive_run_output_dir(run_output_dir: Path) -> Path:
             if path.resolve() == archive_path:
                 continue
             relative_to_run = path.relative_to(run_output_dir)
+            if (
+                relative_to_run.parts
+                and relative_to_run.parts[0] in ARCHIVE_EXCLUDED_TOP_LEVEL_DIRS
+            ):
+                continue
             archive_name = Path(run_output_dir.name) / relative_to_run
             archive.write(path, archive_name.as_posix())
     return archive_path.resolve()
@@ -409,6 +415,7 @@ def bundle_run_outputs(
             "format": "zip",
             "path": str(default_archive_path(run_output_dir)),
             "base_dir": run_output_dir.name,
+            "excluded_top_level_dirs": sorted(ARCHIVE_EXCLUDED_TOP_LEVEL_DIRS),
         },
         "frame_counts": summarize_prepared(prepared_metadata),
         "stereo": points_summary,
