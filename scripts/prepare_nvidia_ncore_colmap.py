@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.data_layout import resolve_nvidia_ncore_root
 from vbogs.ncore_adapter import (
+    DEFAULT_CAMERA_DEPTH_PAIR,
     DEFAULT_CAMERA_IDS,
     DEFAULT_LIDAR_ID,
     ColmapImage,
@@ -37,9 +38,11 @@ from vbogs.ncore_adapter import (
     json_ready_matrix,
     load_ncore_sequence_loader,
     parse_id_list,
+    rectify_camera_pair,
     save_metadata,
     selected_frame_indices,
     transform_points,
+    unproject_rectified_to_world,
     write_cameras_txt,
     write_images_txt,
     write_image,
@@ -100,12 +103,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed-mode",
-        choices=("lidar", "random"),
+        choices=("lidar", "stereo", "random"),
         default="lidar",
         help="How to bootstrap sparse points for Octree-AnyGS ingest.",
     )
     parser.add_argument("--seed-max-points", type=int, default=60000)
     parser.add_argument("--max-points-per-lidar-frame", type=int, default=5000)
+    parser.add_argument(
+        "--seed-stereo-pair",
+        default=",".join(DEFAULT_CAMERA_DEPTH_PAIR),
+        help="Comma-separated left,right NCore camera ids for `--seed-mode stereo`.",
+    )
+    parser.add_argument("--max-points-per-stereo-frame", type=int, default=5000)
+    parser.add_argument("--seed-pixel-step", type=int, default=8)
+    parser.add_argument("--num-disparities", type=int, default=128)
+    parser.add_argument("--block-size", type=int, default=5)
+    parser.add_argument("--min-disparity", type=float, default=2.0)
+    parser.add_argument("--max-depth-m", type=float, default=80.0)
     parser.add_argument("--random-seed", type=int, default=0)
     return parser.parse_args()
 
@@ -175,6 +189,113 @@ def build_sparse_seed_from_lidar(
     return xyz, rgb, {
         "seed_lidar_id": lidar_id,
         "seed_lidar_frames": frame_indices,
+        "seed_point_count": int(xyz.shape[0]),
+    }
+
+
+def build_sparse_seed_from_stereo(
+    *,
+    loader: Any,
+    pair: Sequence[str],
+    frame_step: int,
+    max_frames: int,
+    seed_max_points: int,
+    max_points_per_frame: int,
+    pixel_step: int,
+    num_disparities: int,
+    block_size: int,
+    min_disparity: float,
+    max_depth_m: float,
+    random_seed: int,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    import cv2
+
+    if len(pair) != 2:
+        raise ValueError("--seed-stereo-pair must resolve to exactly two camera ids")
+    if num_disparities % 16 != 0:
+        raise ValueError("--num-disparities must be divisible by 16")
+    left_id, right_id = pair
+    left_sensor = loader.get_camera_sensor(left_id)
+    right_sensor = loader.get_camera_sensor(right_id)
+    rng = np.random.default_rng(random_seed)
+    frame_indices = selected_frame_indices(left_sensor, frame_step, max_frames)
+
+    matcher = cv2.StereoSGBM_create(
+        minDisparity=0,
+        numDisparities=num_disparities,
+        blockSize=block_size,
+        P1=8 * 3 * block_size * block_size,
+        P2=32 * 3 * block_size * block_size,
+        disp12MaxDiff=1,
+        uniquenessRatio=10,
+        speckleWindowSize=50,
+        speckleRange=2,
+        preFilterCap=63,
+        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+    )
+
+    all_xyz: list[np.ndarray] = []
+    all_rgb: list[np.ndarray] = []
+    for left_index in frame_indices:
+        timestamp_us = get_frame_timestamp_us(left_sensor, left_index)
+        right_index = closest_frame_index(right_sensor, timestamp_us)
+        left_rgb = get_image_array(left_sensor, left_index)
+        right_rgb = get_image_array(right_sensor, right_index)
+        left_camera = extract_pinhole_camera(
+            camera_id=left_id,
+            camera_model_id=1,
+            model_parameters=left_sensor.model_parameters,
+            image_shape=left_rgb.shape,
+        )
+        right_camera = extract_pinhole_camera(
+            camera_id=right_id,
+            camera_model_id=2,
+            model_parameters=right_sensor.model_parameters,
+            image_shape=right_rgb.shape,
+        )
+        left_c2w = get_sensor_c2w(left_sensor, left_index)
+        right_c2w = get_sensor_c2w(right_sensor, right_index)
+        left_rect, right_rect, p1, p2, r1 = rectify_camera_pair(
+            left_rgb=left_rgb,
+            right_rgb=right_rgb,
+            left_camera=left_camera,
+            right_camera=right_camera,
+            left_c2w=left_c2w,
+            right_c2w=right_c2w,
+        )
+        left_gray = cv2.cvtColor(left_rect, cv2.COLOR_RGB2GRAY)
+        right_gray = cv2.cvtColor(right_rect, cv2.COLOR_RGB2GRAY)
+        disparity = matcher.compute(left_gray, right_gray).astype(np.float32) / 16.0
+        xyz, rgb = unproject_rectified_to_world(
+            disparity=disparity,
+            left_rect_rgb=left_rect,
+            p_left=p1,
+            p_right=p2,
+            r_rect_left=r1,
+            left_c2w=left_c2w,
+            min_disparity=min_disparity,
+            max_depth_m=max_depth_m,
+            pixel_step=pixel_step,
+            max_points_per_frame=max_points_per_frame,
+            rng=rng,
+        )
+        print(f"[stereo-seed] frame {left_index}: kept {xyz.shape[0]} seed points")
+        if xyz.size:
+            all_xyz.append(xyz)
+            all_rgb.append(rgb)
+
+    if not all_xyz:
+        raise RuntimeError("NCore stereo seed export produced no points")
+
+    xyz = np.concatenate(all_xyz, axis=0)
+    rgb = np.concatenate(all_rgb, axis=0)
+    if seed_max_points > 0 and xyz.shape[0] > seed_max_points:
+        keep = rng.choice(xyz.shape[0], size=seed_max_points, replace=False)
+        xyz = xyz[keep]
+        rgb = rgb[keep]
+    return xyz, rgb, {
+        "seed_stereo_pair": [left_id, right_id],
+        "seed_frames": frame_indices,
         "seed_point_count": int(xyz.shape[0]),
     }
 
@@ -281,6 +402,21 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
             max_frames=args.max_frames,
             seed_max_points=args.seed_max_points,
             max_points_per_lidar_frame=args.max_points_per_lidar_frame,
+            random_seed=args.random_seed,
+        )
+    elif args.seed_mode == "stereo":
+        seed_xyz, seed_rgb, seed_metadata = build_sparse_seed_from_stereo(
+            loader=loader,
+            pair=parse_id_list(args.seed_stereo_pair, DEFAULT_CAMERA_DEPTH_PAIR),
+            frame_step=args.frame_step,
+            max_frames=args.max_frames,
+            seed_max_points=args.seed_max_points,
+            max_points_per_frame=args.max_points_per_stereo_frame,
+            pixel_step=args.seed_pixel_step,
+            num_disparities=args.num_disparities,
+            block_size=args.block_size,
+            min_disparity=args.min_disparity,
+            max_depth_m=args.max_depth_m,
             random_seed=args.random_seed,
         )
     else:

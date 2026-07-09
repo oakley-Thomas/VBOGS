@@ -36,6 +36,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.data_layout import resolve_kitti360_path
 
+LIDAR_FALLBACK_GRAY = 160
+
 
 @dataclass(frozen=True)
 class PinholeCalibration:
@@ -53,6 +55,7 @@ class StereoCalibration:
     right: PinholeCalibration
     right_center_in_left: np.ndarray
     baseline_m: float
+    r_rect_00: np.ndarray | None = None
 
     @property
     def width(self) -> int:
@@ -161,9 +164,49 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed-mode",
-        choices=("stereo", "random"),
-        default="stereo",
-        help="How to bootstrap the sparse seed point cloud.",
+        choices=("stereo", "lidar", "random"),
+        default="lidar",
+        help=(
+            "How to bootstrap the sparse seed point cloud. `lidar` (default) uses "
+            "raw velodyne scans; `stereo` uses SGBM depth; `random` samples a box "
+            "around the camera path."
+        ),
+    )
+    parser.add_argument(
+        "--velodyne-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing KITTI-360 raw velodyne scans (data_3d_raw). Defaults "
+            "to auto-detecting the repo layout. Used by `--seed-mode lidar`."
+        ),
+    )
+    parser.add_argument(
+        "--seed-max-points",
+        type=int,
+        default=None,
+        help=(
+            "Cap on total seed points written to points3D.ply. Defaults to "
+            "--stereo-max-points for backward compatibility."
+        ),
+    )
+    parser.add_argument(
+        "--max-points-per-lidar-frame",
+        type=int,
+        default=5000,
+        help="Cap on sampled lidar points per frame before the global cap.",
+    )
+    parser.add_argument(
+        "--lidar-min-range-m",
+        type=float,
+        default=2.5,
+        help="Minimum radial range kept from each velodyne scan (drops ego returns).",
+    )
+    parser.add_argument(
+        "--lidar-max-range-m",
+        type=float,
+        default=80.0,
+        help="Maximum radial range kept from each velodyne scan.",
     )
     parser.add_argument(
         "--stereo-max-points",
@@ -220,6 +263,7 @@ def resolve_input_layout(args: argparse.Namespace) -> None:
     args.raw_root = resolve_kitti360_path(args.raw_root, kind="raw")
     args.poses_root = resolve_kitti360_path(args.poses_root, kind="poses")
     args.calibration_dir = resolve_kitti360_path(args.calibration_dir, kind="calibration")
+    args.velodyne_root = resolve_kitti360_path(args.velodyne_root, kind="velodyne")
 
 
 def camera_from_projection(projection: np.ndarray, size: Sequence[float]) -> PinholeCalibration:
@@ -263,11 +307,18 @@ def parse_perspective_file(path: Path) -> StereoCalibration:
     right_center = camera_center_from_projection(p1)
     right_center_in_left = right_center - left_center
     baseline = abs(float(right_center_in_left[0]))
+    r_rect_values = entries.get("R_rect_00")
+    r_rect_00 = (
+        np.asarray(r_rect_values, dtype=np.float64).reshape(3, 3)
+        if r_rect_values is not None and len(r_rect_values) == 9
+        else None
+    )
     return StereoCalibration(
         left=left,
         right=right,
         right_center_in_left=right_center_in_left.astype(np.float64),
         baseline_m=baseline,
+        r_rect_00=r_rect_00,
     )
 
 
@@ -289,6 +340,29 @@ def parse_cam0_to_world(path: Path) -> Dict[int, FramePose]:
     if not poses:
         raise ValueError(f"No poses found in {path}")
     return poses
+
+
+def parse_cam_to_velo(path: Path) -> np.ndarray:
+    """Parse calib_cam_to_velo.txt (12 floats, 3x4) into a 4x4 cam0->velo transform."""
+
+    values = np.asarray(
+        [float(token) for token in path.read_text(encoding="utf-8").split()],
+        dtype=np.float64,
+    )
+    if values.size != 12:
+        raise ValueError(f"Expected 12 values in {path}, found {values.size}")
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :4] = values.reshape(3, 4)
+    return transform
+
+
+def load_velodyne_scan(path: Path) -> np.ndarray:
+    """Load a raw KITTI-360 velodyne scan as (N, 4) float32 x, y, z, intensity."""
+
+    scan = np.fromfile(path, dtype=np.float32)
+    if scan.size % 4 != 0:
+        raise ValueError(f"Velodyne scan size {scan.size} is not divisible by 4: {path}")
+    return scan.reshape(-1, 4)
 
 
 def rotmat_to_qvec(rot: np.ndarray) -> np.ndarray:
@@ -440,7 +514,7 @@ def build_sparse_points_from_stereo(
     frames: Sequence[Tuple[int, Path, Path, FramePose]],
     calibration: StereoCalibration,
     args: argparse.Namespace,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     import cv2
 
     matcher = build_matcher(args)
@@ -480,26 +554,159 @@ def build_sparse_points_from_stereo(
 
     points = np.concatenate(all_points, axis=0)
     colors = np.concatenate(all_colors, axis=0)
-    if points.shape[0] > args.stereo_max_points:
-        keep = rng.choice(points.shape[0], size=args.stereo_max_points, replace=False)
+    max_points = seed_point_cap(args)
+    if points.shape[0] > max_points:
+        keep = rng.choice(points.shape[0], size=max_points, replace=False)
         points = points[keep]
         colors = colors[keep]
-    return points, colors
+    seed_metadata = {
+        "seed_source": "stereo_sgbm",
+        "seed_point_count": int(points.shape[0]),
+    }
+    return points, colors, seed_metadata
+
+
+def seed_point_cap(args: argparse.Namespace) -> int:
+    if args.seed_max_points is not None:
+        return args.seed_max_points
+    return args.stereo_max_points
+
+
+def sample_lidar_point_colors(
+    points_cam: np.ndarray,
+    image_path: Path,
+    calibration: PinholeCalibration,
+) -> Tuple[np.ndarray, int]:
+    """Sample RGB for rectified-cam0 points by projecting into the left image.
+
+    Points behind the camera, out of view, or without a readable image keep the
+    flat gray fallback color. Returns the colors and how many points were colored.
+    """
+
+    colors = np.full((points_cam.shape[0], 3), LIDAR_FALLBACK_GRAY, dtype=np.uint8)
+    try:
+        import cv2
+    except ImportError:
+        return colors, 0
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return colors, 0
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    z = points_cam[:, 2]
+    in_front = z > 0.1
+    us = np.full(z.shape, -1, dtype=np.int64)
+    vs = np.full(z.shape, -1, dtype=np.int64)
+    us[in_front] = np.round(
+        points_cam[in_front, 0] / z[in_front] * calibration.fx + calibration.cx
+    ).astype(np.int64)
+    vs[in_front] = np.round(
+        points_cam[in_front, 1] / z[in_front] * calibration.fy + calibration.cy
+    ).astype(np.int64)
+    visible = (
+        in_front
+        & (us >= 0)
+        & (us < rgb.shape[1])
+        & (vs >= 0)
+        & (vs < rgb.shape[0])
+    )
+    colors[visible] = rgb[vs[visible], us[visible]]
+    return colors, int(np.count_nonzero(visible))
+
+
+def build_sparse_points_from_lidar(
+    frames: Sequence[Tuple[int, Path, Path, FramePose]],
+    calibration: StereoCalibration,
+    velodyne_dir: Path,
+    velo_to_cam0_rect: np.ndarray,
+    args: argparse.Namespace,
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    rng = np.random.default_rng(args.random_seed)
+    all_points: List[np.ndarray] = []
+    all_colors: List[np.ndarray] = []
+    seed_frames: List[int] = []
+    frames_missing = 0
+    colored_points = 0
+    total_points = 0
+
+    for frame_id, left_path, _right_path, pose in frames:
+        scan_path = velodyne_dir / f"{frame_id:010d}.bin"
+        if not scan_path.exists():
+            frames_missing += 1
+            continue
+        scan = load_velodyne_scan(scan_path)
+        ranges = np.linalg.norm(scan[:, :3], axis=1)
+        in_range = (ranges >= args.lidar_min_range_m) & (ranges <= args.lidar_max_range_m)
+        points_velo = scan[in_range, :3].astype(np.float64)
+        if points_velo.shape[0] == 0:
+            continue
+        if points_velo.shape[0] > args.max_points_per_lidar_frame:
+            sample = rng.choice(
+                points_velo.shape[0], size=args.max_points_per_lidar_frame, replace=False
+            )
+            points_velo = points_velo[sample]
+
+        homogeneous = np.concatenate(
+            [points_velo, np.ones((points_velo.shape[0], 1))], axis=1
+        )
+        points_cam = (velo_to_cam0_rect @ homogeneous.T).T[:, :3]
+        colors, frame_colored = sample_lidar_point_colors(
+            points_cam, left_path, calibration.left
+        )
+        points_cam_h = np.concatenate(
+            [points_cam, np.ones((points_cam.shape[0], 1))], axis=1
+        )
+        points_world = (pose.c2w @ points_cam_h.T).T[:, :3].astype(np.float32)
+
+        all_points.append(points_world)
+        all_colors.append(colors)
+        seed_frames.append(frame_id)
+        colored_points += frame_colored
+        total_points += points_world.shape[0]
+        print(f"[lidar] frame {frame_id:010d}: kept {points_world.shape[0]} seed points")
+
+    if not all_points:
+        raise RuntimeError(
+            f"LiDAR bootstrap found no velodyne scans under {velodyne_dir}. "
+            "Download the drive's data_3d_raw archive or rerun with --seed-mode stereo."
+        )
+
+    points = np.concatenate(all_points, axis=0)
+    colors = np.concatenate(all_colors, axis=0)
+    max_points = seed_point_cap(args)
+    if points.shape[0] > max_points:
+        keep = rng.choice(points.shape[0], size=max_points, replace=False)
+        points = points[keep]
+        colors = colors[keep]
+    seed_metadata = {
+        "seed_source": "velodyne",
+        "seed_frames": seed_frames,
+        "seed_point_count": int(points.shape[0]),
+        "frames_missing_velodyne": frames_missing,
+        "colored_point_fraction": float(colored_points / total_points),
+        "lidar_min_range_m": float(args.lidar_min_range_m),
+        "lidar_max_range_m": float(args.lidar_max_range_m),
+    }
+    return points, colors, seed_metadata
 
 
 def build_random_points(
     frames: Sequence[Tuple[int, Path, Path, FramePose]],
     args: argparse.Namespace,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     rng = np.random.default_rng(args.random_seed)
     camera_centers = np.stack([frame_pose.c2w[:3, 3] for _, _, _, frame_pose in frames], axis=0)
     center_min = camera_centers.min(axis=0)
     center_max = camera_centers.max(axis=0)
     span = np.maximum(center_max - center_min, 1.0)
-    num_points = min(args.stereo_max_points, max(5000, len(frames) * 256))
+    num_points = min(seed_point_cap(args), max(5000, len(frames) * 256))
     points = rng.uniform(center_min - 0.5 * span, center_max + 0.5 * span, size=(num_points, 3))
     colors = rng.integers(0, 255, size=(num_points, 3), dtype=np.uint8)
-    return points.astype(np.float32), colors
+    seed_metadata = {
+        "seed_source": "random",
+        "seed_point_count": int(num_points),
+    }
+    return points.astype(np.float32), colors, seed_metadata
 
 
 def write_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
@@ -706,9 +913,40 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
     )
 
     if args.seed_mode == "stereo":
-        points_xyz, points_rgb = build_sparse_points_from_stereo(frames, calibration, args)
+        points_xyz, points_rgb, seed_metadata = build_sparse_points_from_stereo(
+            frames, calibration, args
+        )
+    elif args.seed_mode == "lidar":
+        cam_to_velo_path = args.calibration_dir / "calib_cam_to_velo.txt"
+        if not cam_to_velo_path.exists():
+            raise FileNotFoundError(
+                f"LiDAR seeding requires {cam_to_velo_path}. Download the KITTI-360 "
+                "calibration archive or rerun with --seed-mode stereo."
+            )
+        if calibration.r_rect_00 is None:
+            raise ValueError(
+                f"LiDAR seeding requires R_rect_00 in {perspective_path}. "
+                "Rerun with --seed-mode stereo if it is unavailable."
+            )
+        velodyne_dir = args.velodyne_root / args.drive / "velodyne_points" / "data"
+        if not velodyne_dir.exists():
+            raise FileNotFoundError(
+                f"Velodyne scan directory not found: {velodyne_dir}. Download the "
+                "drive's data_3d_raw archive or rerun with --seed-mode stereo."
+            )
+        cam0_to_velo = parse_cam_to_velo(cam_to_velo_path)
+        r_rect = np.eye(4, dtype=np.float64)
+        r_rect[:3, :3] = calibration.r_rect_00
+        velo_to_cam0_rect = r_rect @ np.linalg.inv(cam0_to_velo)
+        points_xyz, points_rgb, seed_metadata = build_sparse_points_from_lidar(
+            frames=frames,
+            calibration=calibration,
+            velodyne_dir=velodyne_dir,
+            velo_to_cam0_rect=velo_to_cam0_rect,
+            args=args,
+        )
     else:
-        points_xyz, points_rgb = build_random_points(frames, args)
+        points_xyz, points_rgb, seed_metadata = build_random_points(frames, args)
 
     write_cameras_txt(sparse_out / "cameras.txt", cameras)
     write_images_txt(sparse_out / "images.txt", colmap_images)
@@ -727,6 +965,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         "max_frames": args.max_frames,
         "copy_mode": args.copy_mode,
         "seed_mode": args.seed_mode,
+        "seed_metadata": seed_metadata,
         "stereo_max_points": int(points_xyz.shape[0]),
         "camera_intrinsics": camera_intrinsics,
         "right_camera_center_in_left": [
@@ -744,6 +983,8 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         "selected_frames": [frame_id for frame_id, _, _, _ in frames],
         "frame_records": frame_records,
     }
+    if args.seed_mode == "lidar":
+        metadata["velodyne_root"] = str(args.velodyne_root)
     (dataset_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
     )

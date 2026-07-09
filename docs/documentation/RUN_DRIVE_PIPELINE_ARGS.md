@@ -241,7 +241,11 @@ dataset under `/data/COLMAP/<scene-id>`. KITTI uses
 | `--max-frames MAX_FRAMES` | Config: `1000` | Maximum number of frames to prepare. `0` means no cap. |
 | `--copy-mode {symlink,copy}` | `symlink` | How images are placed in the prepared dataset. `symlink` is faster and saves space when supported. |
 | `--training-cameras {left,stereo}` | `left` | KITTI-360 RGB cameras used for Octree-AnyGS training. `stereo` adds `image_01` as a second posed camera. Ignored by NCore. |
-| `--seed-mode {stereo,lidar,random}` | `stereo` | How the initial point cloud is seeded for Octree-AnyGS ingest. `stereo` maps to LiDAR for NVIDIA NCore. |
+| `--seed-mode {stereo,lidar,random}` | `lidar` | How the initial point cloud is seeded for Octree-AnyGS ingest. `lidar` uses raw velodyne scans on KITTI-360 (needs `data_3d_raw/`) and the NCore LiDAR sensor on NCore; `stereo` is the SGBM bootstrap on both datasets. |
+| `--velodyne-root VELODYNE_ROOT` | Auto-detect | KITTI-360 raw velodyne root (`data_3d_raw`) used by `--seed-mode lidar`. |
+| `--seed-max-points N` | Adapter default (`60000`) | Cap on total seed points written to `points3D.ply`. |
+| `--max-points-per-lidar-frame N` | Adapter default (`5000`) | Cap on sampled LiDAR seed points per frame before the global cap. |
+| `--seed-stereo-pair LEFT,RIGHT` | `camera_front_wide_120fov,camera_front_tele_30fov` | NCore camera pair rectified for `--seed-mode stereo`. Ignored by KITTI-360. |
 
 ## `train`
 
@@ -410,8 +414,8 @@ The default config file uses section names that map to CLI arguments:
 | Config section | Example keys |
 | --- | --- |
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
-| `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
-| `prepare` | `frame_step`, `max_frames`, `copy_mode`, `training_cameras`, `seed_mode` |
+| `inputs` | `raw_root`, `poses_root`, `calibration_dir`, `velodyne_root` |
+| `prepare` | `frame_step`, `max_frames`, `copy_mode`, `training_cameras`, `seed_mode`, `seed_max_points`, `max_points_per_lidar_frame`, `seed_stereo_pair` |
 | `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
 | `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |

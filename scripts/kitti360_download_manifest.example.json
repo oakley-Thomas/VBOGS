@@ -1,0 +1,26 @@
+{
+  "downloads": [
+    {
+      "name": "calibration",
+      "url": "PASTE_KITTI360_CALIBRATION_URL",
+      "expected_paths": ["calibration/perspective.txt", "calibration/calib_cam_to_velo.txt"]
+    },
+    {
+      "name": "poses",
+      "url": "PASTE_KITTI360_POSES_URL",
+      "expected_paths": ["data_poses"]
+    },
+    {
+      "name": "images_2013_05_28_drive_0004_sync",
+      "url": "PASTE_KITTI360_DRIVE_IMAGES_URL",
+      "expected_paths": ["data_2d_raw/2013_05_28_drive_0004_sync"]
+    },
+    {
+      "name": "velodyne_2013_05_28_drive_0004_sync",
+      "url": "PASTE_KITTI360_DRIVE_VELODYNE_URL",
+      "expected_paths": [
+        "data_3d_raw/2013_05_28_drive_0004_sync/velodyne_points/data"
+      ]
+    }
+  ]
+}

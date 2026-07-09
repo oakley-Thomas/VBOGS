@@ -198,6 +198,96 @@ def test_kitti360_prepare_forwards_training_cameras():
     assert prepare_step.command[training_index + 1] == "stereo"
 
 
+def test_kitti360_prepare_defaults_to_lidar_seed_mode():
+    parser = build_parser({})
+    args = parser.parse_args(["--drive", "drive_sync"])
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    seed_index = prepare_step.command.index("--seed-mode")
+    assert prepare_step.command[seed_index + 1] == "lidar"
+
+
+def test_kitti360_prepare_forwards_seed_overrides():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--drive",
+            "drive_sync",
+            "--seed-mode",
+            "stereo",
+            "--velodyne-root",
+            "/data/KITTI-360/data_3d_raw",
+            "--seed-max-points",
+            "123456",
+            "--max-points-per-lidar-frame",
+            "7000",
+        ]
+    )
+    steps = build_steps(args)
+    prepare_step = next(step for step in steps if step.name == "prepare")
+
+    assert flag_values(prepare_step.command, "--seed-mode") == ["stereo"]
+    assert flag_values(prepare_step.command, "--velodyne-root") == [
+        "/data/KITTI-360/data_3d_raw"
+    ]
+    assert flag_values(prepare_step.command, "--seed-max-points") == ["123456"]
+    assert flag_values(prepare_step.command, "--max-points-per-lidar-frame") == ["7000"]
+
+    stereo_step = next(step for step in steps if step.name == "stereo")
+    assert "--velodyne-root" not in stereo_step.command
+    assert "--seed-max-points" not in stereo_step.command
+
+
+def test_ncore_prepare_forwards_seed_mode_verbatim():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip_001",
+            "--seed-mode",
+            "stereo",
+            "--seed-stereo-pair",
+            "cam_left,cam_right",
+        ]
+    )
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    assert prepare_step.command[:2] == ("python", "scripts/prepare_nvidia_ncore_colmap.py")
+    assert flag_values(prepare_step.command, "--seed-mode") == ["stereo"]
+    assert flag_values(prepare_step.command, "--seed-stereo-pair") == [
+        "cam_left,cam_right"
+    ]
+
+
+def test_config_default_sets_seed_mode_and_velodyne_root(tmp_path):
+    config_path = tmp_path / "pipeline_config.yaml"
+    config_path.write_text(
+        """
+pipeline:
+  drive: drive_sync
+inputs:
+  velodyne_root: /data/KITTI-360/data_3d_raw
+prepare:
+  seed_mode: stereo
+  seed_max_points: 90000
+""",
+        encoding="utf-8",
+    )
+
+    defaults = load_config_defaults(config_path)
+    parser = build_parser(defaults)
+    args = parser.parse_args([])
+    prepare_step = next(step for step in build_steps(args) if step.name == "prepare")
+
+    assert flag_values(prepare_step.command, "--seed-mode") == ["stereo"]
+    assert flag_values(prepare_step.command, "--velodyne-root") == [
+        "/data/KITTI-360/data_3d_raw"
+    ]
+    assert flag_values(prepare_step.command, "--seed-max-points") == ["90000"]
+
+
 def test_config_default_sets_training_cameras(tmp_path):
     config_path = tmp_path / "pipeline_config.yaml"
     config_path.write_text(

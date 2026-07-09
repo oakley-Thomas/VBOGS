@@ -1,0 +1,444 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/experiment05-seed-comparison [OPTIONS] [KITTI_360_CLIP] [-- RUN_PIPELINE_ARGS...]
+
+Run Experiment 05: SGBM-seeded vs LiDAR-seeded Octree-AnyGS comparison.
+
+Trains the same scene twice — once with the stereo SGBM sparse seed and once
+with the LiDAR sparse seed — and compares reconstruction quality on the shared
+held-out test views. Works on KITTI-360 drives (raw velodyne seeds) and NVIDIA
+NCore clips (lidar_top_360fov seeds). This script is intended to run from
+inside the Portainer vbogs-pipeline container.
+
+Variants run sequentially and must never run in parallel: each variant
+overwrites /data/COLMAP/<scene> and data/m4/<scene> before its bundle stage
+snapshots the per-variant artifacts.
+
+Fair evaluation contract: both variants use llffhold=8 with the same
+--frame-step and --max-frames (which must be divisible by 8), the same
+cameras, and the same selected frames — only the sparse seed source differs.
+A fairness gate checks the prepared metadata after each variant's prepare
+stage and compares it against the first variant's fingerprint.
+
+Defaults:
+  --dataset      kitti
+  --clip         2013_05_28_drive_0004_sync   (kitti)
+  --config       configs/pipeline/experiment05_kitti_portainer.yaml (kitti)
+                 configs/pipeline/experiment05_ncore_portainer.yaml (ncore)
+  --output-root  outputs/experiments/experiment05-seed-comparison
+  --frame-step   2
+  --max-frames   200
+  --start-at     prepare
+  --stop-after   bundle
+  --gpu          0
+  --jax-device   0
+
+Options:
+  --dataset {kitti,ncore}     Dataset family to run.
+  --clip CLIP                 KITTI-360 clip/drive id.
+  --drive DRIVE               Alias for --clip.
+  --scene-id SCENE            NCore clip id (required with --dataset ncore).
+  --variant {sgbm,lidar,all}  Which seed variant to run.
+  --config PATH               Pipeline config path.
+  --output-root PATH          Parent output root for <dataset>/<scene>/<variant> runs.
+  --frame-step N              Frame step.
+  --max-frames N              Frames per camera; must be divisible by 8.
+  --gpu GPU                   GPU id passed to Octree-AnyGS.
+  --jax-device DEVICE         JAX device id for VBGS fitting.
+  --start-at STAGE            First pipeline stage.
+  --stop-after STAGE          Last pipeline stage.
+  --skip-analysis             Skip the final cross-variant analysis step.
+  --dry-run                   Print commands without executing stages.
+  --continue-on-error         Continue with remaining variants if one fails.
+  -h, --help                  Show this help.
+
+Examples:
+  scripts/experiment05-seed-comparison --dry-run
+
+  scripts/experiment05-seed-comparison 2013_05_28_drive_0008_sync
+
+  scripts/experiment05-seed-comparison \
+    --max-frames 16 -- --iterations 2000 --render-max-views 2
+
+  scripts/experiment05-seed-comparison --dataset ncore --scene-id <clip_uuid>
+
+  scripts/experiment05-seed-comparison --variant lidar
+USAGE
+}
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+dataset="kitti"
+drive="2013_05_28_drive_0004_sync"
+scene_id=""
+variant="all"
+config=""
+output_root="outputs/experiments/experiment05-seed-comparison"
+frame_step="2"
+max_frames="200"
+gpu="0"
+jax_device="0"
+start_at="prepare"
+stop_after="bundle"
+skip_analysis=false
+dry_run=false
+continue_on_error=false
+extra_args=()
+positional_clip_seen=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dataset)
+      dataset="${2:?--dataset requires kitti or ncore}"
+      shift 2
+      ;;
+    --clip | --drive)
+      drive="${2:?$1 requires a value}"
+      shift 2
+      ;;
+    --scene-id)
+      scene_id="${2:?--scene-id requires a value}"
+      shift 2
+      ;;
+    --variant)
+      variant="${2:?--variant requires one of sgbm, lidar, all}"
+      shift 2
+      ;;
+    --config)
+      config="${2:?--config requires a value}"
+      shift 2
+      ;;
+    --output-root)
+      output_root="${2:?--output-root requires a value}"
+      shift 2
+      ;;
+    --frame-step)
+      frame_step="${2:?--frame-step requires a value}"
+      shift 2
+      ;;
+    --max-frames)
+      max_frames="${2:?--max-frames requires a value}"
+      shift 2
+      ;;
+    --gpu)
+      gpu="${2:?--gpu requires a value}"
+      shift 2
+      ;;
+    --jax-device)
+      jax_device="${2:?--jax-device requires a value}"
+      shift 2
+      ;;
+    --start-at)
+      start_at="${2:?--start-at requires a value}"
+      shift 2
+      ;;
+    --stop-after)
+      stop_after="${2:?--stop-after requires a value}"
+      shift 2
+      ;;
+    --skip-analysis)
+      skip_analysis=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --continue-on-error)
+      continue_on_error=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_args=("$@")
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ "${positional_clip_seen}" = "true" ]; then
+        echo "Only one positional KITTI-360 clip may be provided." >&2
+        usage >&2
+        exit 2
+      fi
+      drive="$1"
+      positional_clip_seen=true
+      shift
+      ;;
+  esac
+done
+
+case "${dataset}" in
+  kitti)
+    scene="${drive}"
+    if [ -z "${config}" ]; then
+      config="configs/pipeline/experiment05_kitti_portainer.yaml"
+    fi
+    ;;
+  ncore)
+    if [ -z "${scene_id}" ]; then
+      echo "--scene-id is required with --dataset ncore." >&2
+      usage >&2
+      exit 2
+    fi
+    scene="${scene_id}"
+    if [ -z "${config}" ]; then
+      config="configs/pipeline/experiment05_ncore_portainer.yaml"
+    fi
+    ;;
+  *)
+    echo "--dataset must be kitti or ncore (got ${dataset})." >&2
+    exit 2
+    ;;
+esac
+
+if ! [[ "${max_frames}" =~ ^[0-9]+$ ]] || [ "${max_frames}" -le 0 ] \
+  || [ "$((max_frames % 8))" -ne 0 ]; then
+  echo "--max-frames must be a positive multiple of 8 (got ${max_frames})." >&2
+  echo "The llffhold=8 split only holds out identical test frames across" >&2
+  echo "variants when the per-camera frame count is divisible by 8." >&2
+  exit 2
+fi
+
+case "${variant}" in
+  sgbm)
+    variants=(sgbm)
+    ;;
+  lidar)
+    variants=(lidar)
+    ;;
+  all)
+    variants=(sgbm lidar)
+    ;;
+  *)
+    echo "--variant must be one of: sgbm, lidar, all" >&2
+    exit 2
+    ;;
+esac
+
+experiment_root="${output_root}/${dataset}/${scene}"
+fingerprint_path="${experiment_root}/fairness_fingerprint.json"
+
+resolve_torch_container() {
+  local label_project="${VBOGS_COMPOSE_PROJECT:-}"
+  if [ -z "${label_project}" ] && [ -n "${HOSTNAME:-}" ]; then
+    label_project="$(
+      docker inspect \
+        -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
+        "${HOSTNAME}" 2>/dev/null || true
+    )"
+    if [ "${label_project}" = "<no value>" ]; then
+      label_project=""
+    fi
+  fi
+  local -a filters=(
+    --filter "label=com.docker.compose.service=vbogs-torch"
+    --filter "status=running"
+  )
+  if [ -n "${label_project}" ]; then
+    filters+=(--filter "label=com.docker.compose.project=${label_project}")
+  fi
+  local matches
+  matches="$(docker ps -q "${filters[@]}")"
+  if [ "$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+    echo "Expected exactly one running vbogs-torch container; found:" >&2
+    printf '%s\n' "${matches}" >&2
+    return 1
+  fi
+  printf '%s\n' "${matches}"
+}
+
+seed_mode_for_variant() {
+  local variant_name="$1"
+  if [ "${variant_name}" = "sgbm" ]; then
+    printf 'stereo'
+  else
+    printf 'lidar'
+  fi
+}
+
+run_pipeline_phase() {
+  local variant_output_root="$1"
+  local seed_mode="$2"
+  local phase_start="$3"
+  local phase_stop="$4"
+  local -a cmd=(
+    scripts/run_pipeline.sh
+    --config "${config}"
+  )
+  if [ "${dataset}" = "ncore" ]; then
+    cmd+=(--dataset-name nvidia_ncore --scene-id "${scene_id}")
+  else
+    cmd+=(--drive "${drive}")
+  fi
+  cmd+=(
+    --seed-mode "${seed_mode}"
+    --frame-step "${frame_step}"
+    --max-frames "${max_frames}"
+    --llffhold 8
+    --gpu "${gpu}"
+    --jax-device "${jax_device}"
+    --run-output-root "${variant_output_root}"
+  )
+  cmd+=("${extra_args[@]}")
+  cmd+=(--start-at "${phase_start}" --stop-after "${phase_stop}")
+
+  printf '+'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
+  if [ "${dry_run}" = "true" ]; then
+    return 0
+  fi
+  "${cmd[@]}"
+}
+
+fairness_gate() {
+  local expected_seed_mode="$1"
+  echo "+ fairness gate: /data/COLMAP/${scene}/metadata.json (seed_mode=${expected_seed_mode})"
+  if [ "${dry_run}" = "true" ]; then
+    return 0
+  fi
+  mkdir -p "${experiment_root}"
+  python3 - "${scene}" "${expected_seed_mode}" "${fingerprint_path}" <<'GATE'
+import json
+import sys
+
+scene, expected_seed_mode, fingerprint_path = sys.argv[1:4]
+path = f"/data/COLMAP/{scene}/metadata.json"
+with open(path, "r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+
+num_frames = int(metadata["num_frames"])
+fingerprint = {
+    "selected_frames": metadata["selected_frames"],
+    "frame_step": metadata.get("frame_step"),
+    "max_frames": metadata.get("max_frames"),
+    "cameras": metadata.get("camera_ids") or metadata.get("training_cameras"),
+}
+
+errors = []
+if metadata.get("seed_mode") != expected_seed_mode:
+    errors.append(
+        f"seed_mode={metadata.get('seed_mode')} does not match the expected "
+        f"variant seed mode {expected_seed_mode}."
+    )
+if num_frames % 8 != 0:
+    errors.append(
+        f"num_frames={num_frames} is not divisible by 8; the llffhold=8 test "
+        "split would hold out different frames per variant. Lower --max-frames "
+        "to a multiple of 8 that the scene can supply."
+    )
+
+try:
+    with open(fingerprint_path, "r", encoding="utf-8") as handle:
+        reference = json.load(handle)
+except FileNotFoundError:
+    with open(fingerprint_path, "w", encoding="utf-8") as handle:
+        json.dump(fingerprint, handle, indent=2)
+    reference = fingerprint
+if fingerprint != reference:
+    errors.append(
+        "prepared frames/cameras differ from the first variant's fingerprint "
+        f"({fingerprint_path}); both variants must share everything except the "
+        "seed source. Delete the fingerprint to start a fresh comparison."
+    )
+
+if errors:
+    print(f"Fairness gate FAILED for {path}:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    sys.exit(1)
+seed_points = (metadata.get("seed_metadata") or {}).get("seed_point_count")
+print(
+    f"Fairness gate OK: {num_frames} frames, seed_mode={expected_seed_mode}, "
+    f"seed_points={seed_points}"
+)
+GATE
+}
+
+run_variant() {
+  local variant_name="$1"
+  local seed_mode
+  seed_mode="$(seed_mode_for_variant "${variant_name}")"
+  local variant_output_root="${experiment_root}/${variant_name}"
+
+  echo
+  echo "=== Experiment 05: ${scene} :: ${variant_name} (seed-mode=${seed_mode}) ==="
+
+  if [ "${start_at}" = "prepare" ]; then
+    run_pipeline_phase "${variant_output_root}" "${seed_mode}" prepare prepare
+    fairness_gate "${seed_mode}"
+    if [ "${stop_after}" = "prepare" ]; then
+      return 0
+    fi
+    run_pipeline_phase "${variant_output_root}" "${seed_mode}" train "${stop_after}"
+  else
+    run_pipeline_phase "${variant_output_root}" "${seed_mode}" "${start_at}" "${stop_after}"
+  fi
+}
+
+echo "Experiment 05 seed-source comparison"
+echo "Dataset      : ${dataset}"
+echo "Scene        : ${scene}"
+echo "Config       : ${config}"
+echo "Output root  : ${experiment_root}"
+echo "Variants     : ${variants[*]}"
+echo "Frames       : step=${frame_step} max=${max_frames} (llffhold=8)"
+echo "Stages       : ${start_at} -> ${stop_after}"
+echo "GPU/JAX      : ${gpu} / ${jax_device}"
+
+failures=()
+for variant_name in "${variants[@]}"; do
+  if ! run_variant "${variant_name}"; then
+    failures+=("${variant_name}")
+    if [ "${continue_on_error}" != "true" ]; then
+      exit 1
+    fi
+  fi
+done
+
+if [ "${#failures[@]}" -gt 0 ]; then
+  echo
+  echo "Experiment 05 completed with failures: ${failures[*]}" >&2
+  exit 1
+fi
+
+if [ "${skip_analysis}" = "false" ]; then
+  analysis_cmd=(
+    python scripts/analyze_experiment05.py
+    --experiment-root "${experiment_root}"
+  )
+  echo
+  if [ "${dry_run}" = "true" ]; then
+    printf '+ docker exec -i -w /workspace/VBOGS <vbogs-torch>'
+    printf ' %q' "${analysis_cmd[@]}"
+    printf '\n'
+  else
+    torch_container="$(resolve_torch_container)"
+    docker exec -i -w /workspace/VBOGS "${torch_container}" "${analysis_cmd[@]}"
+  fi
+fi
+
+echo
+echo "Experiment 05 complete."
+for variant_name in "${variants[@]}"; do
+  echo "${variant_name} bundle: ${experiment_root}/${variant_name}/${scene}"
+done
+echo "Analysis: ${experiment_root}/analysis"
+echo
+echo "Check metadata:"
+for variant_name in "${variants[@]}"; do
+  echo "  cat ${experiment_root}/${variant_name}/${scene}/prepared/metadata.json"
+done

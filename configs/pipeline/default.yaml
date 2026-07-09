@@ -17,13 +17,16 @@ inputs:
   raw_root: null
   poses_root: null
   calibration_dir: null
+  velodyne_root: null
 
 prepare:
   frame_step: 1
   max_frames: 1000
   copy_mode: symlink
   training_cameras: left
-  seed_mode: stereo
+  # `lidar` seeds from raw velodyne (data_3d_raw must be downloaded);
+  # switch to `stereo` for the legacy SGBM bootstrap.
+  seed_mode: lidar
 
 train:
   gpu: "0"

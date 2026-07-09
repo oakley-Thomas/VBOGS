@@ -64,6 +64,7 @@ CONFIG_KEY_MAP = {
         "raw_root": "raw_root",
         "poses_root": "poses_root",
         "calibration_dir": "calibration_dir",
+        "velodyne_root": "velodyne_root",
     },
     "prepare": {
         "frame_step": "frame_step",
@@ -71,6 +72,9 @@ CONFIG_KEY_MAP = {
         "copy_mode": "copy_mode",
         "training_cameras": "training_cameras",
         "seed_mode": "seed_mode",
+        "seed_max_points": "seed_max_points",
+        "max_points_per_lidar_frame": "max_points_per_lidar_frame",
+        "seed_stereo_pair": "seed_stereo_pair",
     },
     "train": {
         "gpu": "gpu",
@@ -414,6 +418,12 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     input_group.add_argument("--raw-root", type=Path, default=None)
     input_group.add_argument("--poses-root", type=Path, default=None)
     input_group.add_argument("--calibration-dir", type=Path, default=None)
+    input_group.add_argument(
+        "--velodyne-root",
+        type=Path,
+        default=None,
+        help="KITTI-360 raw velodyne root (data_3d_raw) used by `--seed-mode lidar`.",
+    )
 
     prep_group = parser.add_argument_group("dataset preparation")
     prep_group.add_argument("--frame-step", type=int, default=10)
@@ -436,7 +446,28 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     prep_group.add_argument(
         "--seed-mode",
         choices=("stereo", "lidar", "random"),
-        default="stereo",
+        default=None,
+        help=(
+            "Sparse seed source for Octree-AnyGS init. Defaults to lidar for "
+            "both datasets; pass `stereo` for the SGBM bootstrap."
+        ),
+    )
+    prep_group.add_argument(
+        "--seed-max-points",
+        type=int,
+        default=None,
+        help="Cap on total seed points written to points3D.ply.",
+    )
+    prep_group.add_argument(
+        "--max-points-per-lidar-frame",
+        type=int,
+        default=None,
+        help="Cap on sampled lidar seed points per frame before the global cap.",
+    )
+    prep_group.add_argument(
+        "--seed-stereo-pair",
+        default=None,
+        help="Comma-separated left,right NCore camera ids for `--seed-mode stereo`.",
     )
 
     train_group = parser.add_argument_group("Octree-AnyGS training")
@@ -745,6 +776,10 @@ def effective_point_source(args: argparse.Namespace) -> str:
     return "stereo" if args.dataset_name == "kitti360" else "lidar"
 
 
+def effective_seed_mode(args: argparse.Namespace) -> str:
+    return str(args.seed_mode) if args.seed_mode else "lidar"
+
+
 def camera_id_args(camera_ids: object | None) -> list[str]:
     if camera_ids is None or camera_ids == "":
         return []
@@ -806,7 +841,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             "--training-cameras",
             args.training_cameras,
             "--seed-mode",
-            "stereo" if args.seed_mode == "lidar" else args.seed_mode,
+            effective_seed_mode(args),
+            *maybe_option("--velodyne-root", args.velodyne_root),
+            *maybe_option("--seed-max-points", args.seed_max_points),
+            *maybe_option("--max-points-per-lidar-frame", args.max_points_per_lidar_frame),
             *maybe_path_args(args),
         )
     else:
@@ -822,9 +860,12 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             "--copy-mode",
             args.copy_mode,
             "--seed-mode",
-            "lidar" if args.seed_mode == "stereo" else args.seed_mode,
+            effective_seed_mode(args),
             "--lidar-id",
             args.ncore_lidar_id,
+            *maybe_option("--seed-max-points", args.seed_max_points),
+            *maybe_option("--max-points-per-lidar-frame", args.max_points_per_lidar_frame),
+            *maybe_option("--seed-stereo-pair", args.seed_stereo_pair),
             *maybe_option("--ncore-root", args.ncore_root),
             *camera_id_args(args.camera_ids),
         )

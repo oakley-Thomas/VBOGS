@@ -2,12 +2,16 @@ import argparse
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from scripts.export_points_world import (
     export_lidar_points_from_loader,
     unproject_rectified_to_world,
 )
-from scripts.prepare_nvidia_ncore_colmap import prepare_dataset_from_loader
+from scripts.prepare_nvidia_ncore_colmap import (
+    build_sparse_seed_from_stereo,
+    prepare_dataset_from_loader,
+)
 from vbogs.ncore_adapter import parse_id_list
 
 
@@ -181,6 +185,88 @@ def test_lidar_export_transforms_points_and_preserves_contract(tmp_path):
     )
     assert payload["rgb"].tolist() == [[10, 20, 30], [40, 50, 60]]
     assert payload["frame_id"].tolist() == [0, 0]
+
+
+def make_stereo_seed_loader():
+    """Two pinhole cameras offset along x viewing a textured plane at 10 m."""
+
+    rng = np.random.default_rng(3)
+    height = width = 64
+    fx = 50.0
+    baseline_m = 1.0
+    depth_m = 10.0
+    disparity_px = int(fx * baseline_m / depth_m)
+
+    left_image = rng.integers(0, 255, size=(height, width, 3), dtype=np.uint8)
+    right_image = np.roll(left_image, -disparity_px, axis=1)
+
+    model_parameters = SimpleNamespace(
+        width=width, height=height, fx=fx, fy=fx, cx=width / 2.0, cy=height / 2.0
+    )
+    left_c2w = np.eye(4, dtype=np.float64)
+    right_c2w = np.eye(4, dtype=np.float64)
+    right_c2w[:3, 3] = [baseline_m, 0.0, 0.0]
+
+    loader = FakeLoader()
+    left_sensor = FakeCameraSensor("cam_left", [left_image], [left_c2w], [100])
+    right_sensor = FakeCameraSensor("cam_right", [right_image], [right_c2w], [100])
+    left_sensor.model_parameters = model_parameters
+    right_sensor.model_parameters = model_parameters
+    loader.cameras = {"cam_left": left_sensor, "cam_right": right_sensor}
+    loader.camera_ids = list(loader.cameras)
+    return loader, depth_m
+
+
+def test_stereo_seed_recovers_plane_depth_and_respects_caps():
+    pytest.importorskip("cv2")
+    loader, depth_m = make_stereo_seed_loader()
+
+    xyz, rgb, seed_metadata = build_sparse_seed_from_stereo(
+        loader=loader,
+        pair=["cam_left", "cam_right"],
+        frame_step=1,
+        max_frames=1,
+        seed_max_points=50,
+        max_points_per_frame=200,
+        pixel_step=1,
+        num_disparities=16,
+        block_size=5,
+        min_disparity=2.0,
+        max_depth_m=80.0,
+        random_seed=0,
+    )
+
+    assert xyz.shape[0] > 0
+    assert xyz.shape[0] <= 50
+    assert rgb.shape == xyz.shape
+    assert seed_metadata["seed_stereo_pair"] == ["cam_left", "cam_right"]
+    assert seed_metadata["seed_frames"] == [0]
+    assert seed_metadata["seed_point_count"] == xyz.shape[0]
+    # The synthetic scene is a fronto-parallel plane at depth_m in front of the
+    # left camera at the origin, so recovered depths should cluster there.
+    median_depth = float(np.median(xyz[:, 2]))
+    assert median_depth == pytest.approx(depth_m, rel=0.2)
+
+
+def test_stereo_seed_rejects_bad_pair():
+    pytest.importorskip("cv2")
+    loader, _depth_m = make_stereo_seed_loader()
+
+    with pytest.raises(ValueError, match="exactly two camera ids"):
+        build_sparse_seed_from_stereo(
+            loader=loader,
+            pair=["cam_left"],
+            frame_step=1,
+            max_frames=1,
+            seed_max_points=50,
+            max_points_per_frame=200,
+            pixel_step=1,
+            num_disparities=16,
+            block_size=5,
+            min_disparity=2.0,
+            max_depth_m=80.0,
+            random_seed=0,
+        )
 
 
 def test_rectified_unprojection_recovers_plane_points():

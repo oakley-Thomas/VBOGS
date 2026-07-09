@@ -337,6 +337,104 @@ def write_images_txt(path: Path, images: Sequence[ColmapImage]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def rectify_camera_pair(
+    *,
+    left_rgb: np.ndarray,
+    right_rgb: np.ndarray,
+    left_camera: PinholeCamera,
+    right_camera: PinholeCamera,
+    left_c2w: np.ndarray,
+    right_c2w: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    import cv2
+
+    image_size = (left_camera.width, left_camera.height)
+    k_left = np.array(
+        [[left_camera.fx, 0.0, left_camera.cx], [0.0, left_camera.fy, left_camera.cy], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    k_right = np.array(
+        [[right_camera.fx, 0.0, right_camera.cx], [0.0, right_camera.fy, right_camera.cy], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    t_left_right = np.linalg.inv(right_c2w) @ left_c2w
+    r_lr = t_left_right[:3, :3]
+    # OpenCV >= 5 requires the translation as a column vector.
+    t_lr = t_left_right[:3, 3].reshape(3, 1)
+    zeros = np.zeros((5, 1), dtype=np.float64)
+    r1, r2, p1, p2, _q, _roi1, _roi2 = cv2.stereoRectify(
+        k_left,
+        zeros,
+        k_right,
+        zeros,
+        image_size,
+        r_lr,
+        t_lr,
+        flags=cv2.CALIB_ZERO_DISPARITY,
+        alpha=0.0,
+    )
+    map1x, map1y = cv2.initUndistortRectifyMap(k_left, zeros, r1, p1, image_size, cv2.CV_32FC1)
+    map2x, map2y = cv2.initUndistortRectifyMap(k_right, zeros, r2, p2, image_size, cv2.CV_32FC1)
+    left_rect = cv2.remap(left_rgb, map1x, map1y, cv2.INTER_LINEAR)
+    right_rect = cv2.remap(right_rgb, map2x, map2y, cv2.INTER_LINEAR)
+    return left_rect, right_rect, p1, p2, r1
+
+
+def unproject_rectified_to_world(
+    *,
+    disparity: np.ndarray,
+    left_rect_rgb: np.ndarray,
+    p_left: np.ndarray,
+    p_right: np.ndarray,
+    r_rect_left: np.ndarray,
+    left_c2w: np.ndarray,
+    min_disparity: float,
+    max_depth_m: float,
+    pixel_step: int,
+    max_points_per_frame: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    valid = np.isfinite(disparity) & (disparity > min_disparity)
+    if pixel_step > 1:
+        yy = np.arange(disparity.shape[0])[:, None]
+        xx = np.arange(disparity.shape[1])[None, :]
+        valid &= (yy % pixel_step == 0) & (xx % pixel_step == 0)
+    ys, xs = np.nonzero(valid)
+    if ys.size == 0:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
+
+    fx = float(p_left[0, 0])
+    fy = float(p_left[1, 1])
+    cx = float(p_left[0, 2])
+    cy = float(p_left[1, 2])
+    baseline = abs(float(p_right[0, 3]) / max(float(p_right[0, 0]), 1e-6))
+    depth = (fx * baseline) / disparity[ys, xs]
+    depth_valid = np.isfinite(depth) & (depth > 0.0)
+    if max_depth_m > 0:
+        depth_valid &= depth <= max_depth_m
+    ys = ys[depth_valid]
+    xs = xs[depth_valid]
+    depth = depth[depth_valid]
+    if depth.size == 0:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
+
+    if max_points_per_frame > 0 and depth.size > max_points_per_frame:
+        keep = rng.choice(depth.size, size=max_points_per_frame, replace=False)
+        ys = ys[keep]
+        xs = xs[keep]
+        depth = depth[keep]
+
+    x_rect = (xs.astype(np.float64) - cx) * depth / fx
+    y_rect = (ys.astype(np.float64) - cy) * depth / fy
+    z_rect = depth.astype(np.float64)
+    points_rect = np.stack([x_rect, y_rect, z_rect], axis=1)
+    points_left = (np.asarray(r_rect_left, dtype=np.float64).T @ points_rect.T).T
+    hom_left = np.concatenate([points_left, np.ones((points_left.shape[0], 1))], axis=1)
+    points_world = (np.asarray(left_c2w, dtype=np.float64) @ hom_left.T).T[:, :3].astype(np.float32)
+    colors = left_rect_rgb[ys, xs, :3].astype(np.uint8)
+    return points_world, colors
+
+
 def save_metadata(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

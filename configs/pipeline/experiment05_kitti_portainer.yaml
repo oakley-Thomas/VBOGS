@@ -1,0 +1,95 @@
+# Experiment 05 KITTI-360 seed-source comparison profile.
+#
+# Server (Portainer) quality settings applied to a KITTI-360 drive. The drive,
+# seed mode, and run root are intentionally null: `scripts/experiment05-
+# seed-comparison` supplies `--drive`, `--seed-mode` (stereo for the sgbm
+# variant, lidar for the lidar variant), `--frame-step`, `--max-frames`, and
+# `--run-output-root` per variant so that only the seed source differs.
+
+pipeline:
+  drive: null
+  start_at: prepare
+  stop_after: bundle
+  dry_run: false
+
+outputs:
+  # The experiment script passes --run-output-root per variant.
+  run_root: null
+
+inputs:
+  raw_root: null
+  poses_root: null
+  calibration_dir: null
+  velodyne_root: null
+
+prepare:
+  # frame_step and max_frames are pinned identically across variants by the
+  # experiment script; max_frames must stay divisible by 8 so the llffhold=8
+  # test split holds out the same frames in every variant.
+  frame_step: 2
+  max_frames: 200
+  copy_mode: symlink
+  training_cameras: left
+  # The experiment script supplies --seed-mode per variant.
+  seed_mode: null
+
+train:
+  gpu: "0"
+  port: null
+  # High-quality 48 GB VRAM profile (matches configs/pipeline/portainer.yaml).
+  resolution: 2
+  iterations: 90000
+  llffhold: 8
+  gaussian_type: explicit3D
+  feat_dim: 16
+  base_layer: 10
+  visible_threshold: 0.01
+  write_config_only: false
+
+stereo:
+  matcher: sgbm
+  pixel_step: 1
+  max_points_per_frame: 100000
+  write_ply: true
+
+bucket:
+  model_path: null
+  bucket_iteration: -1
+  point_chunk_size: 1000000
+  max_points: 0
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 500
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null
+
+uncertainty:
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  resolution: 2
+  max_views: 0
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  # Keep every test view in nbv_scores.json; the experiment analysis uses the
+  # per-view uncertainty scores for calibration against per-view metrics.
+  top_k: 100000
+  save_top_images: 5
+  force_all_levels: false
+  output_dir: null

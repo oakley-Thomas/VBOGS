@@ -10,6 +10,8 @@ accept the dataset terms and get the official **KITTI-360 download links** for
 - Calibrations
 - Vehicle Poses 
 - Left/Right perspective images ("Test SLAM" recommended)
+- Raw Velodyne Scans for the drives you plan to run (per-drive archives;
+  needed for the default LiDAR seed mode)
 
 Run the downloader from the interactive `vbogs-pipeline` container shell:
 
@@ -19,8 +21,15 @@ docker exec -it vbogs-vbogs-pipeline-1 /bin/bash
 export KITTI_CALIBRATION_LINK='https://.../calibration.zip'
 export KITTI_POSES_LINK='https://.../data_poses.zip'
 export KITTI_IMAGES_LINK='https://.../data_2d_test_slam.zip'
+export KITTI_VELODYNE_LINK='https://.../2013_05_28_drive_0004_sync_velodyne.zip'
 bash scripts/download_kitti_360.sh
 ```
+
+`KITTI_VELODYNE_LINK` is optional but recommended: the pipeline seeds
+Octree-AnyGS from raw velodyne LiDAR by default (`prepare.seed_mode: lidar`),
+which needs `data_3d_raw/` for the drive. Without it, run with
+`--seed-mode stereo`. The full `data_3d_raw` set is ~119 GB — download only
+the drives you need.
 
 ### Layout
 
@@ -28,6 +37,7 @@ bash scripts/download_kitti_360.sh
 /workspace/VBOGS/data/KITTI-360/
   calibration/
     perspective.txt
+    calib_cam_to_velo.txt
   data_poses/
     2013_05_28_drive_0007_sync/
       cam0_to_world.txt
@@ -35,6 +45,9 @@ bash scripts/download_kitti_360.sh
     2013_05_28_drive_0007_sync/
       image_00/data_rect/
       image_01/data_rect/
+  data_3d_raw/
+    2013_05_28_drive_0007_sync/
+      velodyne_points/data/
 ```
 
 ### Drive IDs
@@ -155,7 +168,7 @@ export.
 | Source data | Rectified stereo images, camera poses, and calibration under `data/KITTI-360/`. | NCore V4 `.zarr.itar` clip components under `data/NVIDIA-PhysicalAI-AV-NCore/`. |
 | `prepare` script | `scripts/prepare_kitti360_colmap.py` | `scripts/prepare_nvidia_ncore_colmap.py` |
 | Training images | Defaults to the left perspective camera frames from `image_00/data_rect/`. Use `--training-cameras stereo` to add `image_01/data_rect/` as a second posed RGB training camera. | Decodes the selected NCore camera set. The NCore dev profile uses `camera_front_wide_120fov` plus `camera_front_tele_30fov`; direct CLI runs default to `camera_front_wide_120fov` unless `--camera-id` is repeated or comma-separated. |
-| Sparse training seed | Bootstraps `sparse/0/points3D.ply` from lightweight KITTI stereo depth, unless `--seed-mode random` is used. | Bootstraps `sparse/0/points3D.ply` from NCore LiDAR by default. If `--seed-mode stereo` is passed through the generic pipeline, it maps to LiDAR for NCore. |
+| Sparse training seed | Bootstraps `sparse/0/points3D.ply` from raw velodyne LiDAR by default (`--seed-mode lidar`, needs `data_3d_raw/` — see the download section). `--seed-mode stereo` keeps the legacy lightweight stereo-depth bootstrap; `--seed-mode random` seeds a box around the camera path. | Bootstraps `sparse/0/points3D.ply` from NCore LiDAR by default. `--seed-mode stereo` rectifies the `--seed-stereo-pair` cameras (default front wide + front tele) and seeds from SGBM depth. |
 | Point-cloud export stage | The stage name is `stereo`, and it exports world points from rectified stereo disparity. KITTI only supports `--point-source stereo`. | The stage name is still `stereo` for pipeline compatibility, but the default point source is `lidar`. NCore can also use `--point-source camera_depth` with `--camera-depth-pair`. |
 | Point colors | RGB comes from the KITTI left image. | LiDAR points are projected into selected camera views for RGB coloring, or camera-depth points use the configured camera pair. |
 

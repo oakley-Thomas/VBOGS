@@ -29,6 +29,11 @@ def _candidate_paths(kind: str) -> list[Path]:
             Path("data/calibration/calibration"),
             Path("data/calibration"),
         ]
+    if kind == "velodyne":
+        return [
+            Path("data/KITTI-360/data_3d_raw"),
+            Path("data/data_3d_raw"),
+        ]
     raise ValueError(f"Unknown layout kind: {kind}")
 
 

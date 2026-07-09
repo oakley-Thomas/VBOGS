@@ -19,6 +19,7 @@ Archives are normalized into this layout:
   /workspace/VBOGS/data/KITTI-360/calibration/
   /workspace/VBOGS/data/KITTI-360/data_poses/
   /workspace/VBOGS/data/KITTI-360/images/
+  /workspace/VBOGS/data/KITTI-360/data_3d_raw/
 
 Required environment variables:
   KITTI_CALIBRATION_LINK   URL for KITTI-360 calibration archive
@@ -28,6 +29,13 @@ Required environment variables:
 
 KITTI_CALIBRATION_LINK, KITTI_POSES_LINK, and KITTI_IMAGES_LINK may be omitted
 when the matching canonical folders already exist.
+
+Optional velodyne (needed for the default LiDAR seed mode):
+  KITTI_VELODYNE_LINK      URL(s) for KITTI-360 raw velodyne archive(s),
+                           separated by spaces, commas, or newlines. KITTI-360
+                           ships velodyne as per-drive archives (the full
+                           data_3d_raw set is ~119 GB); download only the
+                           drives you need.
 
 Optional:
   KITTI_360_DATA_ROOT       Extraction root. Default:
@@ -182,6 +190,24 @@ copy_pose_drives_from() {
   return "${found}"
 }
 
+copy_velodyne_drives_from() {
+  local source="$1"
+  local destination="$2"
+  local found=1
+  local drive_dir
+
+  [[ -d "${source}" ]] || return 1
+  while IFS= read -r -d '' drive_dir; do
+    if [[ -d "${drive_dir}/velodyne_points" ]]; then
+      mkdir -p "${destination}/$(basename "${drive_dir}")"
+      cp -a "${drive_dir}/." "${destination}/$(basename "${drive_dir}")/"
+      found=0
+    fi
+  done < <(find "${source}" -mindepth 1 -maxdepth 3 -type d -name '2013_05_28_drive_*_sync' -print0)
+
+  return "${found}"
+}
+
 copy_image_drives_from() {
   local source="$1"
   local destination="$2"
@@ -249,6 +275,19 @@ normalize_extraction() {
       fi
       die "images archive did not contain images, data_2d_raw, data_2d_test, data_2d_test_slam, or drive image folders"
       ;;
+    velodyne)
+      target="${DATA_ROOT}/data_3d_raw"
+      if copy_velodyne_drives_from "${extraction_root}/data_3d_raw" "${target}"; then
+        return 0
+      fi
+      if copy_velodyne_drives_from "${extraction_root}/KITTI-360/data_3d_raw" "${target}"; then
+        return 0
+      fi
+      if copy_velodyne_drives_from "${extraction_root}" "${target}"; then
+        return 0
+      fi
+      die "velodyne archive did not contain data_3d_raw drive folders with velodyne_points"
+      ;;
     *)
       die "unknown archive label: ${label}"
       ;;
@@ -301,6 +340,7 @@ fi
 calibration_url="$(get_env_first KITTI_CALIBRATION_LINK || true)"
 poses_url="$(get_env_first KITTI_POSES_LINK || true)"
 images_url="$(get_env_first KITTI_IMAGES_LINK || true)"
+velodyne_url="$(get_env_first KITTI_VELODYNE_LINK || true)"
 
 missing=()
 [[ -n "${calibration_url}" || -d "${DATA_ROOT}/calibration" ]] || missing+=("KITTI_CALIBRATION_LINK")
@@ -320,7 +360,7 @@ mkdir -p "${DATA_ROOT}" "${DOWNLOADS_DIR}"
 
 echo "KITTI-360 data root : ${DATA_ROOT}"
 echo "Archive cache       : ${DOWNLOADS_DIR}"
-echo "Canonical layout    : calibration/, data_poses/, images/"
+echo "Canonical layout    : calibration/, data_poses/, images/, data_3d_raw/"
 
 if [[ -n "${calibration_url}" ]]; then
   process_url "calibration" "${calibration_url}"
@@ -341,6 +381,18 @@ if [[ -n "${images_url}" ]]; then
   done < <(printf '%s\n' "${images_url}" | split_urls)
 else
   echo "Using existing images: ${DATA_ROOT}/images"
+fi
+
+# Velodyne archives are optional; the default LiDAR seed mode needs them.
+if [[ -n "${velodyne_url}" ]]; then
+  while IFS= read -r one_velodyne_url; do
+    [[ -n "${one_velodyne_url}" ]] || continue
+    process_url "velodyne" "${one_velodyne_url}"
+  done < <(printf '%s\n' "${velodyne_url}" | split_urls)
+elif [[ -d "${DATA_ROOT}/data_3d_raw" ]]; then
+  echo "Using existing velodyne scans: ${DATA_ROOT}/data_3d_raw"
+else
+  echo "No KITTI_VELODYNE_LINK set and no data_3d_raw/ present; LiDAR seeding (--seed-mode lidar) will be unavailable."
 fi
 
 echo

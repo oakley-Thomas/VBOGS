@@ -93,3 +93,13 @@ def test_raw_layout_resolver_accepts_kitti360_data_2d_raw(tmp_path, monkeypatch)
     raw_root.mkdir(parents=True)
 
     assert resolve_kitti360_path(None, kind="raw") == Path("data/KITTI-360/data_2d_raw")
+
+
+def test_velodyne_layout_resolver_accepts_kitti360_data_3d_raw(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    velodyne_root = tmp_path / "data" / "KITTI-360" / "data_3d_raw"
+    velodyne_root.mkdir(parents=True)
+
+    assert resolve_kitti360_path(None, kind="velodyne") == Path(
+        "data/KITTI-360/data_3d_raw"
+    )
