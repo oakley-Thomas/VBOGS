@@ -53,7 +53,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=defaults.get("run_output_root") or DEFAULT_RUN_OUTPUT_ROOT,
         help=(
             "Root containing curated pipeline outputs. The default source is "
-            "`<run-output-root>/<drive>.zip`."
+            "`<run-output-root>/<drive>/<drive>.zip`."
         ),
     )
     parser.add_argument(
@@ -142,7 +142,7 @@ def remote_file_destination(remote: str, dest: str, filename: str) -> str:
 
 
 def default_source(drive: str, run_output_root: Path) -> Path:
-    return Path(run_output_root) / f"{drive}.zip"
+    return Path(run_output_root) / drive / f"{drive}.zip"
 
 
 def source_kind(source: Path) -> str:

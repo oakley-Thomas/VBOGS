@@ -113,6 +113,14 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Appearance embedding code passed through to Octree-AnyGS.",
     )
+    parser.add_argument(
+        "--load-source-images",
+        action="store_true",
+        help=(
+            "Use the original Octree-AnyGS camera loader, including source image "
+            "tensors. By default this command uses metadata-only cameras."
+        ),
+    )
     parser.add_argument("--quiet", action="store_true", help="Silence Octree-AnyGS timestamps.")
     return parser.parse_args()
 
@@ -161,11 +169,17 @@ def load_scene(
     ape_code: int,
     quiet: bool,
     resolution: int | None = None,
+    load_source_images: bool = False,
 ):
     add_octree_to_path(octree_root)
 
     from scene import Scene
     from utils.general_utils import parse_cfg, safe_state
+
+    if not load_source_images:
+        from vbogs.viewer.rendering import install_lightweight_octree_camera_loader
+
+        install_lightweight_octree_camera_loader()
 
     cfg = load_octree_config_for_model(model_path)
     dataset, opt, pipe = parse_cfg(cfg)
@@ -365,6 +379,7 @@ def main() -> None:
         args.ape,
         args.quiet,
         args.resolution,
+        args.load_source_images,
     )
     loaded_iteration = int(scene.loaded_iter)
     anchor_count = int(gaussians.get_anchor.shape[0])

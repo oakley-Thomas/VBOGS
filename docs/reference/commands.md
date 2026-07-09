@@ -274,7 +274,16 @@ python scripts/bundle_run_outputs.py \
   --run-output-dir outputs/v1_0/2013_05_28_drive_0007_sync
 ```
 
-Export a renderable local-viewer package:
+The bundle step also writes a renderable local-viewer package by default and
+includes it in the single scene zip:
+
+```text
+outputs/v1_0/2013_05_28_drive_0007_sync/local_viewer/
+outputs/v1_0/2013_05_28_drive_0007_sync/2013_05_28_drive_0007_sync.zip
+```
+
+Use `--skip-local-viewer-export` to skip that package. You can still export one
+manually:
 
 ```bash
 python scripts/export_local_viewer_run.py \
@@ -282,11 +291,10 @@ python scripts/export_local_viewer_run.py \
   --model-path /data/OCTREE-ANYGS/2013_05_28_drive_0007_sync/<run>
 ```
 
-This writes `outputs/local_viewer_exports/<drive>/` and
-`outputs/local_viewer_exports/<drive>-local-viewer.zip`. After extracting the
-zip locally, run the command in its `VIEWER_COMMANDS.md`. The export includes
-real prepared image files, so it is larger than the curated results bundle but
-portable for the viewer.
+After extracting the zip locally, run the command in its `VIEWER_COMMANDS.md`.
+The export omits prepared source images by default. The repo-owned viewer and
+diagnostic render command use metadata-only cameras; pass
+`--include-prepared-images` only if you need a loader that opens source images.
 
 ## Online ROS2 Loop
 

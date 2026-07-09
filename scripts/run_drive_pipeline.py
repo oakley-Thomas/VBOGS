@@ -339,6 +339,11 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "derived under `<root>/<drive>/`."
         ),
     )
+    parser.add_argument(
+        "--skip-local-viewer-export",
+        action="store_true",
+        help="Do not create the portable local viewer export during the bundle stage.",
+    )
     upload_group = parser.add_argument_group("Google Drive upload")
     upload_group.add_argument(
         "--upload-google-drive",
@@ -347,7 +352,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         default=False,
         help=(
             "Upload the final curated run zip after all selected stages succeed. "
-            "The default source is `<run-output-root>/<drive>.zip`."
+            "The default source is `<run-output-root>/<drive>/<drive>.zip`."
         ),
     )
     upload_group.add_argument(
@@ -1031,9 +1036,13 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--drive",
         scene,
         *maybe_option("--run-output-dir", run_dir),
+        *maybe_option("--model-path", args.model_path),
         *maybe_option("--map-viz-output-dir", map_viz_output_dir),
         *maybe_option("--render-output-dir", render_output_dir),
         *maybe_option("--nbv-output-dir", nbv_output_dir),
+        "--viewer-export-iteration",
+        str(args.bucket_iteration),
+        *(("--skip-local-viewer-export",) if args.skip_local_viewer_export else ()),
     )
 
     return [

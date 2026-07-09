@@ -229,9 +229,8 @@ services:
       - <<: *vbogs-repo-mount
         target: /srv/project
         read_only: true
-      - <<: *vbogs-data-mount
+      - type: tmpfs
         target: /srv/data
-        read_only: true
       - <<: *vbogs-kitti360-mount
         target: /srv/data/KITTI-360
         read_only: true

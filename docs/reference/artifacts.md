@@ -120,31 +120,35 @@ uncertainty_histogram.png
 
 ## Map and View Diagnostics
 
-Stages: `map-viz`, `render`, `nbv`, `nbv-viz`  
-Default curated path: `outputs/v1_0/<drive>/`
+Stages: `map-viz`, `render`, `nbv`, `nbv-viz`, `bundle`  
+Default curated path: `outputs/v1_0/<scene-id>/`
 
 ```text
 pointclouds/
   stereo/
   anchors/
-views/
 nbv/
 uncertainty/
 prepared/
 octree/
+local_viewer/
 run_manifest.json
 ```
 
-The final bundle is:
+The renderable scene bundle is:
 
 ```text
-outputs/v1_0/<drive>.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
+
+Rendered diagnostic images may exist on the run host under
+`outputs/v1_0/<scene-id>/views/`, but the bundle archive excludes that
+top-level directory to keep downloads compact.
 
 ## Local Viewer Export
 
-Stage: manual export
-Default path: `outputs/local_viewer_exports/<drive>/`
+Stage: `bundle` by default, or manual export with `scripts/export_local_viewer_run.py`  
+Default path: `outputs/v1_0/<scene-id>/local_viewer/`
 
 ```text
 model/
@@ -152,7 +156,6 @@ model/
   original_config.yaml
   point_cloud/iteration_<N>/
 prepared/
-  images/                       # real image files materialized from prepared-data symlinks
   sparse/0/
 uncertainty/
   U.npy
@@ -160,17 +163,19 @@ VIEWER_COMMANDS.md
 local_viewer_manifest.json
 ```
 
-The final local-viewer archive is:
+The bundle-stage archive that includes this local viewer export is:
 
 ```text
-outputs/local_viewer_exports/<drive>-local-viewer.zip
+outputs/v1_0/<scene-id>/<scene-id>.zip
 ```
 
-Create it with `scripts/export_local_viewer_run.py` when you need to download a
-server run and open it in `scripts/view_octree_anygs.py` locally. Unlike the
-curated bundle, this package includes the Octree-AnyGS checkpoint and prepared
-COLMAP camera/image tree needed for rendering. Prepared image symlinks are
-dereferenced during export so the zip can be extracted on another machine.
+Download `outputs/v1_0/<scene-id>/<scene-id>.zip` when you need to open a
+server run in `scripts/view_octree_anygs.py` locally. The zip includes the
+Octree-AnyGS checkpoint and prepared COLMAP camera metadata needed for
+rendering under `<scene-id>/local_viewer/`. Prepared source images are omitted
+by default because the repo-owned viewer uses metadata-only camera loading. Use
+`scripts/export_local_viewer_run.py --include-prepared-images` only when a
+source-image loader explicitly needs them.
 
 ## Generated Configs
 

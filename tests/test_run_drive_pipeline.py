@@ -61,6 +61,7 @@ def test_run_output_root_routes_v1_stage_outputs():
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/nbv" in by_name["nbv"].command
     assert "outputs/v1_0/2013_05_28_drive_0007_sync/nbv/viz" in by_name["nbv-viz"].command
     assert "outputs/v1_0/2013_05_28_drive_0007_sync" in by_name["bundle"].command
+    assert "--viewer-export-iteration" in by_name["bundle"].command
 
 
 def test_run_output_root_keeps_explicit_stage_output_override():
@@ -130,6 +131,13 @@ def test_render_and_nbv_steps_forward_model_and_uncertainty_paths():
         "data/m4/drive_sync/U.npy"
     )
     assert nbv_step.command[nbv_step.command.index("--iteration") + 1] == "120000"
+
+    bundle_step = by_name["bundle"]
+    assert (
+        bundle_step.command[bundle_step.command.index("--model-path") + 1]
+        == "/data/OCTREE-ANYGS/drive_sync/run"
+    )
+    assert bundle_step.command[bundle_step.command.index("--viewer-export-iteration") + 1] == "120000"
 
 
 def test_train_step_forwards_gaussian_type():
@@ -348,6 +356,8 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
         "camera_front_wide_120fov,camera_front_tele_30fov"
     ]
     assert "data/m4/clip_001/U.npy" in by_name["render"].command
+    assert "clip_001" in by_name["bundle"].command
+    assert "--viewer-export-iteration" in by_name["bundle"].command
 
 
 def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
@@ -553,7 +563,6 @@ def test_vbgs_render_service_publishes_viewer_port():
 def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
     read_only_filebrowser_targets = [
         "/srv/project",
-        "/srv/data",
         "/srv/data/KITTI-360",
         "/srv/data/NVIDIA-PhysicalAI-AV-NCore",
         "/srv/generated_configs",
@@ -578,6 +587,7 @@ def test_compose_uses_filebrowser_instead_of_transfer_sidecar():
         assert "vbogs-filebrowser-config" in filebrowser
         assert "VBOGS_FILEBROWSER_PUID:-0" in filebrowser
         assert "VBOGS_FILEBROWSER_PGID:-0" in filebrowser
+        assert "type: tmpfs\n        target: /srv/data" in filebrowser
         for target in read_only_filebrowser_targets:
             assert f"target: {target}\n        read_only: true" in filebrowser
         assert "target: /srv/outputs" in filebrowser

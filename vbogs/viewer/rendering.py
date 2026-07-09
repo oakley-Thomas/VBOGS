@@ -15,7 +15,7 @@ from PIL import Image
 
 from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
-from vbogs.viewer.camera import ViewerCamera, camera_to_c2w
+from vbogs.viewer.camera import LightweightSceneCamera, ViewerCamera, camera_to_c2w
 from vbogs.viewer.pose import pose_to_c2w, request_payload_to_c2w
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +97,108 @@ def resolve_uncertainty_path(drive: str, u_path: Path | None) -> Path:
     if u_path is not None:
         return u_path.resolve()
     return (REPO_ROOT / "data" / "m4" / drive / "U.npy").resolve()
+
+
+def read_colmap_cameras_metadata_only(
+    cam_extrinsics: dict[Any, Any],
+    cam_intrinsics: dict[Any, Any],
+    depths_params: dict[str, Any] | None,
+    images_folder: str,
+    masks_folder: str | None,
+    depths_folder: str | None,
+) -> list[Any]:
+    """Build CameraInfo records without opening image files.
+
+    Octree-AnyGS keeps PIL handles and later uploads every source image to CUDA.
+    That behavior is useful for training/evaluation losses, but the realtime
+    viewer only needs camera metadata to render the trained scene.
+    """
+
+    if masks_folder is not None or depths_folder is not None or depths_params is not None:
+        raise ValueError("Metadata-only viewer loading does not support masks or depth maps")
+
+    from scene.colmap_loader import qvec2rotmat
+    from scene.dataset_readers import CameraInfo
+    from utils.graphics_utils import focal2fov
+    import os
+
+    cam_infos = []
+    for key in cam_extrinsics:
+        extr = cam_extrinsics[key]
+        intr = cam_intrinsics[extr.camera_id]
+        height = int(intr.height)
+        width = int(intr.width)
+        rotation = np.transpose(qvec2rotmat(extr.qvec))
+        translation = np.asarray(extr.tvec)
+
+        if intr.model in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL"):
+            focal_length_x = intr.params[0]
+            cx, cy = intr.params[1], intr.params[2]
+            fovy = focal2fov(focal_length_x, height)
+            fovx = focal2fov(focal_length_x, width)
+        elif intr.model == "PINHOLE":
+            focal_length_x = intr.params[0]
+            focal_length_y = intr.params[1]
+            cx, cy = intr.params[2], intr.params[3]
+            fovy = focal2fov(focal_length_y, height)
+            fovx = focal2fov(focal_length_x, width)
+        else:
+            raise ValueError(f"Unsupported COLMAP camera model for viewer: {intr.model}")
+
+        image_path = os.path.join(images_folder, extr.name)
+        cam_infos.append(
+            CameraInfo(
+                uid=intr.id,
+                R=rotation,
+                T=translation,
+                FovY=fovy,
+                FovX=fovx,
+                CX=cx,
+                CY=cy,
+                image=None,
+                mask=None,
+                depth=None,
+                depth_params=None,
+                image_path=image_path,
+                image_name=os.path.basename(extr.name).split(".")[0],
+                width=width,
+                height=height,
+            )
+        )
+
+    return sorted(cam_infos, key=lambda item: item.image_path)
+
+
+def lightweight_camera_list_from_cam_infos(
+    cam_infos: list[Any],
+    resolution_scale: float,
+    args: Any,
+    background: Any,
+) -> list[Any]:
+    # Octree-AnyGS applies args.data_device only to image payloads; camera
+    # matrices always live on CUDA (scene/cameras.py). Lightweight cameras
+    # carry no image data, so a config trained with data_device=cpu must not
+    # pull the pose tensors onto the CPU.
+    return [
+        LightweightSceneCamera(
+            cam_info,
+            uid=index,
+            resolution_scale=resolution_scale,
+            resolution_arg=args.resolution,
+            device="cuda",
+        )
+        for index, cam_info in enumerate(cam_infos)
+    ]
+
+
+def install_lightweight_octree_camera_loader() -> None:
+    """Patch Octree-AnyGS imports for viewer-only metadata cameras."""
+
+    import scene as scene_module
+    import scene.dataset_readers as dataset_readers
+
+    dataset_readers.readColmapCameras = read_colmap_cameras_metadata_only
+    scene_module.cameraList_from_camInfos = lightweight_camera_list_from_cam_infos
 
 
 def validate_uncertainty_array(values: np.ndarray, anchor_count: int) -> np.ndarray:
@@ -272,6 +374,7 @@ class OctreeRenderSession:
         vmax: float | None = None,
         force_all_levels: bool = False,
         rgb_only: bool = False,
+        load_source_images: bool = False,
         jpeg_quality: int = 85,
         max_fps: float = 20.0,
         initial_c2w: np.ndarray | None = None,
@@ -289,6 +392,7 @@ class OctreeRenderSession:
         self.colormap = colormap
         self.force_all_levels = bool(force_all_levels)
         self.rgb_only = bool(rgb_only)
+        self.load_source_images = bool(load_source_images)
         self.jpeg_quality = int(jpeg_quality)
         self.max_fps = float(max_fps)
         self.initial_c2w = None if initial_c2w is None else pose_to_c2w(initial_c2w, "c2w")
@@ -316,6 +420,9 @@ class OctreeRenderSession:
     def _load_scene(self):
         from scene import Scene
         from utils.general_utils import parse_cfg, safe_state
+
+        if not self.load_source_images:
+            install_lightweight_octree_camera_loader()
 
         cfg = load_octree_config_for_model(self.model_path)
         dataset, opt, pipe = parse_cfg(cfg)
@@ -360,6 +467,7 @@ class OctreeRenderSession:
             "resolution": self.resolution,
             "anchor_count": self.anchor_count,
             "rgb_only": self.rgb_only,
+            "load_source_images": self.load_source_images,
             "render_modes": ["rgb"] if self.rgb_only else ["rgb", "uncertainty", "alpha", "side_by_side"],
             "default_camera_id": self.default_camera_id,
             "colormap": self.colormap,

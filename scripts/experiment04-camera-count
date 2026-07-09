@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/experiment04-camera-count --scene-id SCENE [OPTIONS] [-- RUN_PIPELINE_ARGS...]
+
+Run Experiment 04: NVIDIA NCore camera-count comparison.
+
+Trains the same NCore clip once per camera-count variant (cam1 = front wide
+only, cam2 = front wide + front tele, ...) and compares Octree-AnyGS
+reconstruction quality and VB uncertainty across variants. This script is
+intended to run from inside the Portainer vbogs-pipeline container.
+
+Variants run sequentially and must never run in parallel: each variant
+overwrites /data/COLMAP/<scene> and data/m4/<scene> before its bundle stage
+snapshots the per-variant artifacts.
+
+Fair evaluation contract: every variant uses llffhold=8 with the same
+--frame-step and --max-frames, and --max-frames must be divisible by 8. This
+holds out the identical primary-camera frames in every variant, so per-view
+metrics restricted to the primary camera are directly comparable.
+
+Defaults:
+  --config       configs/pipeline/experiment04_ncore_portainer.yaml
+  --output-root  outputs/experiments/experiment04-camera-count
+  --cameras-list 1,2
+  --camera-priority camera_front_wide_120fov,camera_front_tele_30fov
+  --frame-step   2
+  --max-frames   200
+  --start-at     prepare
+  --stop-after   bundle
+  --gpu          0
+  --jax-device   0
+
+Options:
+  --scene-id SCENE            NCore clip id (required).
+  --cameras-list COUNTS       Comma-separated camera counts, one variant each.
+  --camera-priority IDS       Comma-separated camera ids; variant camN uses the
+                              first N ids. Extended from clip discovery when a
+                              count exceeds the listed ids.
+  --variant NAME|all          Run a single variant (for example cam2) or all.
+  --config PATH               Pipeline config path.
+  --output-root PATH          Parent output root for cam<N>/ variant runs.
+  --frame-step N              Primary-camera frame step.
+  --max-frames N              Frames per camera; must be divisible by 8.
+  --gpu GPU                   GPU id passed to Octree-AnyGS.
+  --jax-device DEVICE         JAX device id for VBGS fitting.
+  --start-at STAGE            First pipeline stage.
+  --stop-after STAGE          Last pipeline stage.
+  --skip-discovery            Skip NCore clip camera discovery.
+  --skip-analysis             Skip the final cross-variant analysis step.
+  --dry-run                   Print commands without executing stages.
+  --continue-on-error         Continue with remaining variants if one fails.
+  -h, --help                  Show this help.
+
+Examples:
+  scripts/experiment04-camera-count --scene-id <clip_uuid> --dry-run
+
+  scripts/experiment04-camera-count --scene-id <clip_uuid> \
+    --max-frames 16 -- --iterations 2000 --render-max-views 2
+
+  scripts/experiment04-camera-count --scene-id <clip_uuid> --variant cam2
+USAGE
+}
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+scene_id=""
+cameras_list="1,2"
+camera_priority="camera_front_wide_120fov,camera_front_tele_30fov"
+variant="all"
+config="configs/pipeline/experiment04_ncore_portainer.yaml"
+output_root="outputs/experiments/experiment04-camera-count"
+frame_step="2"
+max_frames="200"
+gpu="0"
+jax_device="0"
+start_at="prepare"
+stop_after="bundle"
+skip_discovery=false
+skip_analysis=false
+dry_run=false
+continue_on_error=false
+extra_args=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --scene-id)
+      scene_id="${2:?--scene-id requires a value}"
+      shift 2
+      ;;
+    --cameras-list)
+      cameras_list="${2:?--cameras-list requires a value}"
+      shift 2
+      ;;
+    --camera-priority)
+      camera_priority="${2:?--camera-priority requires a value}"
+      shift 2
+      ;;
+    --variant)
+      variant="${2:?--variant requires a value}"
+      shift 2
+      ;;
+    --config)
+      config="${2:?--config requires a value}"
+      shift 2
+      ;;
+    --output-root)
+      output_root="${2:?--output-root requires a value}"
+      shift 2
+      ;;
+    --frame-step)
+      frame_step="${2:?--frame-step requires a value}"
+      shift 2
+      ;;
+    --max-frames)
+      max_frames="${2:?--max-frames requires a value}"
+      shift 2
+      ;;
+    --gpu)
+      gpu="${2:?--gpu requires a value}"
+      shift 2
+      ;;
+    --jax-device)
+      jax_device="${2:?--jax-device requires a value}"
+      shift 2
+      ;;
+    --start-at)
+      start_at="${2:?--start-at requires a value}"
+      shift 2
+      ;;
+    --stop-after)
+      stop_after="${2:?--stop-after requires a value}"
+      shift 2
+      ;;
+    --skip-discovery)
+      skip_discovery=true
+      shift
+      ;;
+    --skip-analysis)
+      skip_analysis=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --continue-on-error)
+      continue_on_error=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_args=("$@")
+      break
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -z "${scene_id}" ]; then
+  echo "--scene-id is required." >&2
+  usage >&2
+  exit 2
+fi
+
+if ! [[ "${max_frames}" =~ ^[0-9]+$ ]] || [ "${max_frames}" -le 0 ] \
+  || [ "$((max_frames % 8))" -ne 0 ]; then
+  echo "--max-frames must be a positive multiple of 8 (got ${max_frames})." >&2
+  echo "The llffhold=8 split only holds out identical primary-camera frames" >&2
+  echo "across variants when the per-camera frame count is divisible by 8." >&2
+  exit 2
+fi
+
+IFS=',' read -r -a camera_counts <<<"${cameras_list}"
+if [ "${#camera_counts[@]}" -eq 0 ]; then
+  echo "--cameras-list must name at least one camera count." >&2
+  exit 2
+fi
+max_count=0
+for count in "${camera_counts[@]}"; do
+  if ! [[ "${count}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--cameras-list entries must be positive integers (got '${count}')." >&2
+    exit 2
+  fi
+  if [ "${count}" -gt "${max_count}" ]; then
+    max_count="${count}"
+  fi
+done
+
+IFS=',' read -r -a priority_ids <<<"${camera_priority}"
+
+resolve_torch_container() {
+  local label_project="${VBOGS_COMPOSE_PROJECT:-}"
+  if [ -z "${label_project}" ] && [ -n "${HOSTNAME:-}" ]; then
+    label_project="$(
+      docker inspect \
+        -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
+        "${HOSTNAME}" 2>/dev/null || true
+    )"
+    if [ "${label_project}" = "<no value>" ]; then
+      label_project=""
+    fi
+  fi
+  local -a filters=(
+    --filter "label=com.docker.compose.service=vbogs-torch"
+    --filter "status=running"
+  )
+  if [ -n "${label_project}" ]; then
+    filters+=(--filter "label=com.docker.compose.project=${label_project}")
+  fi
+  local matches
+  matches="$(docker ps -q "${filters[@]}")"
+  if [ "$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+    echo "Expected exactly one running vbogs-torch container; found:" >&2
+    printf '%s\n' "${matches}" >&2
+    return 1
+  fi
+  printf '%s\n' "${matches}"
+}
+
+# Discovery: list the clip's cameras and extend the priority list for camera
+# counts beyond the ids named in --camera-priority.
+discovery_cmd=(
+  python scripts/inspect_nvidia_ncore_clip.py
+  --scene-id "${scene_id}"
+  --frame-step "${frame_step}"
+  --json
+)
+if [ "${skip_discovery}" = "false" ]; then
+  if [ "${dry_run}" = "true" ]; then
+    printf '+ docker exec -i -w /workspace/VBOGS <vbogs-torch>'
+    printf ' %q' "${discovery_cmd[@]}"
+    printf '\n'
+    echo "(dry-run: skipping discovery; using --camera-priority ids only)"
+  else
+    torch_container="$(resolve_torch_container)"
+    discovery_json="$(
+      docker exec -i -w /workspace/VBOGS "${torch_container}" "${discovery_cmd[@]}"
+    )"
+    mapfile -t discovered_ids < <(
+      printf '%s' "${discovery_json}" | python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+for camera_id in payload["ordered_camera_ids"]:
+    print(camera_id)
+'
+    )
+    echo "Discovered cameras: ${discovered_ids[*]}"
+    for camera_id in "${discovered_ids[@]}"; do
+      seen=false
+      for existing in "${priority_ids[@]}"; do
+        if [ "${existing}" = "${camera_id}" ]; then
+          seen=true
+          break
+        fi
+      done
+      if [ "${seen}" = "false" ]; then
+        priority_ids+=("${camera_id}")
+      fi
+    done
+  fi
+fi
+
+if [ "${max_count}" -gt "${#priority_ids[@]}" ]; then
+  echo "--cameras-list requests ${max_count} cameras but only ${#priority_ids[@]}" >&2
+  echo "camera ids are known (${priority_ids[*]})." >&2
+  echo "Extend --camera-priority or check discovery output." >&2
+  exit 2
+fi
+
+variants=()
+for count in "${camera_counts[@]}"; do
+  variants+=("cam${count}")
+done
+if [ "${variant}" != "all" ]; then
+  found=false
+  for candidate in "${variants[@]}"; do
+    if [ "${candidate}" = "${variant}" ]; then
+      found=true
+      break
+    fi
+  done
+  if [ "${found}" = "false" ]; then
+    echo "--variant must be 'all' or one of: ${variants[*]}" >&2
+    exit 2
+  fi
+  variants=("${variant}")
+fi
+
+experiment_root="${output_root}/${scene_id}"
+
+run_pipeline_phase() {
+  local variant_output_root="$1"
+  local phase_start="$2"
+  local phase_stop="$3"
+  shift 3
+  local -a camera_flags=("$@")
+  local -a cmd=(
+    scripts/run_pipeline.sh
+    --config "${config}"
+    --dataset-name nvidia_ncore
+    --scene-id "${scene_id}"
+    "${camera_flags[@]}"
+    --frame-step "${frame_step}"
+    --max-frames "${max_frames}"
+    --llffhold 8
+    --gpu "${gpu}"
+    --jax-device "${jax_device}"
+    --run-output-root "${variant_output_root}"
+  )
+  cmd+=("${extra_args[@]}")
+  cmd+=(--start-at "${phase_start}" --stop-after "${phase_stop}")
+
+  printf '+'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
+  if [ "${dry_run}" = "true" ]; then
+    return 0
+  fi
+  "${cmd[@]}"
+}
+
+fairness_gate() {
+  local expected_cameras="$1"
+  echo "+ fairness gate: /data/COLMAP/${scene_id}/metadata.json (cameras=${expected_cameras})"
+  if [ "${dry_run}" = "true" ]; then
+    return 0
+  fi
+  python3 - "${scene_id}" "${expected_cameras}" <<'GATE'
+import json
+import sys
+
+scene_id, expected = sys.argv[1], sys.argv[2].split(",")
+path = f"/data/COLMAP/{scene_id}/metadata.json"
+with open(path, "r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+
+num_frames = int(metadata["num_frames"])
+camera_ids = list(metadata["camera_ids"])
+primary = metadata["primary_camera_id"]
+
+errors = []
+if num_frames % 8 != 0:
+    errors.append(
+        f"num_frames={num_frames} is not divisible by 8; the llffhold=8 test "
+        "split would hold out different primary-camera frames per variant. "
+        "Lower --max-frames to a multiple of 8 that the clip can supply."
+    )
+if camera_ids != expected:
+    errors.append(f"camera_ids={camera_ids} does not match expected {expected}.")
+if primary != expected[0]:
+    errors.append(f"primary_camera_id={primary} is not {expected[0]}.")
+
+if errors:
+    print(f"Fairness gate FAILED for {path}:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    sys.exit(1)
+print(f"Fairness gate OK: {num_frames} frames x {len(camera_ids)} cameras")
+GATE
+}
+
+run_variant() {
+  local variant_name="$1"
+  local count="${variant_name#cam}"
+  local -a camera_flags=()
+  local -a camera_ids=()
+  local index
+  for ((index = 0; index < count; index++)); do
+    camera_flags+=(--camera-id "${priority_ids[index]}")
+    camera_ids+=("${priority_ids[index]}")
+  done
+  local expected_cameras
+  expected_cameras="$(IFS=','; printf '%s' "${camera_ids[*]}")"
+  local variant_output_root="${experiment_root}/${variant_name}"
+
+  echo
+  echo "=== Experiment 04: ${scene_id} :: ${variant_name} (${expected_cameras}) ==="
+
+  if [ "${start_at}" = "prepare" ]; then
+    run_pipeline_phase "${variant_output_root}" prepare prepare "${camera_flags[@]}"
+    fairness_gate "${expected_cameras}"
+    if [ "${stop_after}" = "prepare" ]; then
+      return 0
+    fi
+    run_pipeline_phase "${variant_output_root}" train "${stop_after}" "${camera_flags[@]}"
+  else
+    run_pipeline_phase "${variant_output_root}" "${start_at}" "${stop_after}" "${camera_flags[@]}"
+  fi
+}
+
+echo "Experiment 04 camera-count comparison"
+echo "Scene        : ${scene_id}"
+echo "Config       : ${config}"
+echo "Output root  : ${experiment_root}"
+echo "Variants     : ${variants[*]}"
+echo "Cameras      : ${priority_ids[*]}"
+echo "Frames       : step=${frame_step} max=${max_frames} (llffhold=8)"
+echo "Stages       : ${start_at} -> ${stop_after}"
+echo "GPU/JAX      : ${gpu} / ${jax_device}"
+
+failures=()
+for variant_name in "${variants[@]}"; do
+  if ! run_variant "${variant_name}"; then
+    failures+=("${variant_name}")
+    if [ "${continue_on_error}" != "true" ]; then
+      exit 1
+    fi
+  fi
+done
+
+if [ "${#failures[@]}" -gt 0 ]; then
+  echo
+  echo "Experiment 04 completed with failures: ${failures[*]}" >&2
+  exit 1
+fi
+
+if [ "${skip_analysis}" = "false" ]; then
+  analysis_cmd=(
+    python scripts/analyze_experiment04.py
+    --experiment-root "${experiment_root}"
+  )
+  echo
+  if [ "${dry_run}" = "true" ]; then
+    printf '+ docker exec -i -w /workspace/VBOGS <vbogs-torch>'
+    printf ' %q' "${analysis_cmd[@]}"
+    printf '\n'
+  else
+    torch_container="${torch_container:-$(resolve_torch_container)}"
+    docker exec -i -w /workspace/VBOGS "${torch_container}" "${analysis_cmd[@]}"
+  fi
+fi
+
+echo
+echo "Experiment 04 complete."
+for variant_name in "${variants[@]}"; do
+  echo "${variant_name} bundle: ${experiment_root}/${variant_name}/${scene_id}"
+done
+echo "Analysis: ${experiment_root}/analysis"
+echo
+echo "Check metadata:"
+for variant_name in "${variants[@]}"; do
+  echo "  cat ${experiment_root}/${variant_name}/${scene_id}/prepared/metadata.json"
+done
