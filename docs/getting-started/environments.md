@@ -9,6 +9,7 @@ The normal path is Docker Compose:
 
 | Service | Runtime | Use |
 | --- | --- | --- |
+| `vbogs-preprocess` | FFmpeg/COLMAP plus 360Cam preprocessing deps | DJI Osmo 360 perspective export and SfM/MVS |
 | `vbogs-torch` | PyTorch/CUDA plus Octree-AnyGS | preparation, training, stereo, bucketing, rendering, NBV scoring |
 | `vbogs-jax` | JAX/CUDA plus VBGS | anchor fitting and uncertainty computation |
 | `vbogs-pipeline` | lightweight orchestration image | running stage commands in sibling containers, bundling, uploads |
@@ -39,6 +40,7 @@ services see the same project files.
 
 | Stage | Entry point | Docker service |
 | --- | --- | --- |
+| Osmo 360 prepare | `scripts/prepare_osmo360_colmap.py` | `vbogs-preprocess` |
 | M2 train scene | `scripts/train_octree_anygs.py` | `vbogs-torch` |
 | M3 world point cloud | `scripts/export_points_world.py` | `vbogs-torch` |
 | M4a bucket points | `scripts/bucket_points.py` | `vbogs-torch` |

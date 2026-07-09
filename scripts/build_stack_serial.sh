@@ -6,6 +6,7 @@ set -euo pipefail
 # expensive CUDA wheel download/compile phases do not overlap.
 
 export VBOGS_TORCH_IMAGE="${VBOGS_TORCH_IMAGE:-local/vbogs-torch}"
+export VBOGS_PREPROCESS_IMAGE="${VBOGS_PREPROCESS_IMAGE:-local/vbogs-preprocess}"
 export VBOGS_JAX_IMAGE="${VBOGS_JAX_IMAGE:-local/vbogs-jax}"
 export VBOGS_VBGS_RENDER_IMAGE="${VBOGS_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}"
 export VBOGS_PIPELINE_IMAGE="${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}"
@@ -25,7 +26,7 @@ usage() {
 Usage: bash scripts/build_stack_serial.sh [OPTIONS] [SERVICE...]
 
 Builds VBOGS images one at a time. When no services are listed, builds:
-  vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline
+  vbogs-preprocess vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline
 
 Options:
   --cuda-arch-list ARCHS          CUDA arch list for both Torch and render images.
@@ -153,7 +154,7 @@ export VBOGS_RENDER_CUDA_ARCH_LIST="$(
 )"
 
 if [ "${#services[@]}" -eq 0 ]; then
-  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
+  services=(vbogs-preprocess vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
 fi
 
 for service in "${services[@]}"; do

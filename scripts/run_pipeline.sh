@@ -26,6 +26,15 @@ NVIDIA NCore example:
     --jax-device 0 \
     --start-at prepare \
     --stop-after bundle
+
+DJI Osmo 360 example:
+  scripts/run_pipeline.sh \
+    --config configs/pipeline/dji_osmo360_dev.yaml \
+    --dataset-name dji_osmo360 \
+    --scene-id osmo360_test01 \
+    --video /workspace/VBOGS/data/DJI-Osmo360/osmo360_test01/source.mp4 \
+    --gpu 0 \
+    --jax-device 0
 USAGE
 }
 

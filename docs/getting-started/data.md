@@ -1,7 +1,8 @@
 # Overview
 
-VBOGS supports KITTI-360 perspective stereo and NVIDIA PhysicalAI Autonomous
-Vehicles clips converted to NCore V4.
+VBOGS supports KITTI-360 perspective stereo, NVIDIA PhysicalAI Autonomous
+Vehicles clips converted to NCore V4, and stitched DJI Osmo 360 equirectangular
+videos prepared through virtual perspective views.
 
 ## KITTI-360
 From [KITTI-360 download page](https://www.cvlibs.net/datasets/kitti-360/download.php)
@@ -142,22 +143,81 @@ Do not pass an NCore clip UUID as `--drive` unless you also set
 `--dataset-name nvidia_ncore`. If the pipeline prints `Dataset: kitti360`, it
 will call the KITTI-360 adapter and look for `data/KITTI-360/images/<clip_uuid>`.
 
+## DJI Osmo 360
+
+The Osmo 360 adapter expects a stitched equirectangular video, not raw
+dual-fisheye camera files. Export the video from DJI Studio or an equivalent
+stitcher first. For reconstruction-friendly captures, keep RockSteady off; if
+you need a linear color workflow, use D-Log only and leave other image
+adjustments at their defaults.
+
+The adapter uses the pinned
+[`Mistral-Yu/360Cam-PGM-3DGS-Tools`](https://github.com/Mistral-Yu/360Cam-PGM-3DGS-Tools)
+submodule under `third_party/360Cam-PGM-3DGS-Tools` to convert the panorama
+video into perspective images, then runs local COLMAP in the `vbogs-preprocess`
+service. If the submodule is missing after cloning the repo, initialize it:
+
+```bash
+git submodule update --init --recursive third_party/360Cam-PGM-3DGS-Tools
+```
+
+### Layout
+
+Place videos under the compose-mounted Osmo volume, for example:
+
+```text
+/workspace/VBOGS/data/DJI-Osmo360/
+  osmo360_test01/
+    source.mp4
+```
+
+### Pipeline run
+
+From inside `vbogs-pipeline`, run:
+
+```bash
+scripts/run_pipeline.sh \
+  --config configs/pipeline/dji_osmo360_dev.yaml \
+  --dataset-name dji_osmo360 \
+  --scene-id osmo360_test01 \
+  --video /workspace/VBOGS/data/DJI-Osmo360/osmo360_test01/source.mp4 \
+  --gpu 0 \
+  --jax-device 0
+```
+
+The prepare stage writes the Octree-AnyGS training dataset to:
+
+```text
+/data/COLMAP/<scene-id>/
+```
+
+The default Osmo point source is COLMAP dense MVS:
+
+```text
+/data/COLMAP/<scene-id>/dense/fused.ply
+```
+
+If dense reconstruction is too slow or fails, rerun the point-export and later
+stages with `--point-source sfm_sparse`. Sparse SfM is faster, but more anchors
+will have too few observations and will be marked highly uncertain.
+
 ## How Dataset Processing Differs
 
-KITTI-360 and NVIDIA NCore enter the pipeline through different dataset
-adapters, but they are normalized into the same downstream artifact contracts.
+KITTI-360, NVIDIA NCore, and DJI Osmo 360 enter the pipeline through different
+dataset adapters, but they are normalized into the same downstream artifact
+contracts.
 The main differences are in dataset selection, `prepare`, and point-cloud
 export.
 
-| Pipeline part | KITTI-360 | NVIDIA NCore |
-| --- | --- | --- |
-| Dataset selector | Default adapter: `--dataset-name kitti360`. `--drive` is the drive id. | Must set `--dataset-name nvidia_ncore`. Use `--scene-id` for the clip UUID. |
-| Source data | Rectified stereo images, camera poses, and calibration under `data/KITTI-360/`. | NCore V4 `.zarr.itar` clip components under `data/NVIDIA-PhysicalAI-AV-NCore/`. |
-| `prepare` script | `scripts/prepare_kitti360_colmap.py` | `scripts/prepare_nvidia_ncore_colmap.py` |
-| Training images | Defaults to the left perspective camera frames from `image_00/data_rect/`. Use `--training-cameras stereo` to add `image_01/data_rect/` as a second posed RGB training camera. | Decodes the selected NCore camera set. The NCore dev profile uses `camera_front_wide_120fov` plus `camera_front_tele_30fov`; direct CLI runs default to `camera_front_wide_120fov` unless `--camera-id` is repeated or comma-separated. |
-| Sparse training seed | Bootstraps `sparse/0/points3D.ply` from lightweight KITTI stereo depth, unless `--seed-mode random` is used. | Bootstraps `sparse/0/points3D.ply` from NCore LiDAR by default. If `--seed-mode stereo` is passed through the generic pipeline, it maps to LiDAR for NCore. |
-| Point-cloud export stage | The stage name is `stereo`, and it exports world points from rectified stereo disparity. KITTI only supports `--point-source stereo`. | The stage name is still `stereo` for pipeline compatibility, but the default point source is `lidar`. NCore can also use `--point-source camera_depth` with `--camera-depth-pair`. |
-| Point colors | RGB comes from the KITTI left image. | LiDAR points are projected into selected camera views for RGB coloring, or camera-depth points use the configured camera pair. |
+| Pipeline part | KITTI-360 | NVIDIA NCore | DJI Osmo 360 |
+| --- | --- | --- | --- |
+| Dataset selector | Default adapter: `--dataset-name kitti360`. `--drive` is the drive id. | Must set `--dataset-name nvidia_ncore`. Use `--scene-id` for the clip UUID. | Must set `--dataset-name dji_osmo360`. Use `--scene-id` for the capture name and `--video` for the stitched video. |
+| Source data | Rectified stereo images, camera poses, and calibration under `data/KITTI-360/`. | NCore V4 `.zarr.itar` clip components under `data/NVIDIA-PhysicalAI-AV-NCore/`. | Stitched equirectangular `.mp4` under `data/DJI-Osmo360/`. |
+| `prepare` script | `scripts/prepare_kitti360_colmap.py` | `scripts/prepare_nvidia_ncore_colmap.py` | `scripts/prepare_osmo360_colmap.py` |
+| Training images | Defaults to the left perspective camera frames from `image_00/data_rect/`. Use `--training-cameras stereo` to add `image_01/data_rect/` as a second posed RGB training camera. | Decodes the selected NCore camera set. The NCore dev profile uses `camera_front_wide_120fov` plus `camera_front_tele_30fov`; direct CLI runs default to `camera_front_wide_120fov` unless `--camera-id` is repeated or comma-separated. | Converts each 360 video frame into multiple virtual PINHOLE perspective images with 360Cam, then registers them with COLMAP. |
+| Sparse training seed | Bootstraps `sparse/0/points3D.ply` from lightweight KITTI stereo depth, unless `--seed-mode random` is used. | Bootstraps `sparse/0/points3D.ply` from NCore LiDAR by default. If `--seed-mode stereo` is passed through the generic pipeline, it maps to LiDAR for NCore. | Writes `sparse/0/points3D.ply` from COLMAP sparse SfM points. |
+| Point-cloud export stage | The stage name is `stereo`, and it exports world points from rectified stereo disparity. KITTI only supports `--point-source stereo`. | The stage name is still `stereo` for pipeline compatibility, but the default point source is `lidar`. NCore can also use `--point-source camera_depth` with `--camera-depth-pair`. | The stage name is still `stereo` for pipeline compatibility, but the default point source is `mvs_dense`; `sfm_sparse` is a fallback. |
+| Point colors | RGB comes from the KITTI left image. | LiDAR points are projected into selected camera views for RGB coloring, or camera-depth points use the configured camera pair. | RGB comes from COLMAP dense or sparse PLY/text point colors. |
 
 Both adapters write the prepared Octree-AnyGS dataset to:
 
@@ -184,7 +244,9 @@ The compose stack mounts source datasets at:
 ```text
 /workspace/VBOGS/data/KITTI-360
 /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+/workspace/VBOGS/data/DJI-Osmo360
 ```
 
 KITTI-360 is backed by `VBOGS_DATASETS_VOLUME`. NVIDIA NCore is backed by
-`VBOGS_NVIDIA_NCORE_VOLUME`.
+`VBOGS_NVIDIA_NCORE_VOLUME`. DJI Osmo 360 is backed by
+`VBOGS_DJI_OSMO360_VOLUME`.

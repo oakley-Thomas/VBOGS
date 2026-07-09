@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts.run_drive_pipeline import (
+    PREPROCESS_SERVICE,
     TORCH_SERVICE,
     build_parser,
     build_upload_command,
@@ -373,6 +374,54 @@ def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
     assert flag_values(by_name["stereo"].command, "--camera-id") == expected
 
 
+def test_dji_osmo360_pipeline_dispatches_preprocess_and_dense_points():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name",
+            "dji_osmo360",
+            "--scene-id",
+            "osmo360_test01",
+            "--video",
+            "/workspace/VBOGS/data/DJI-Osmo360/osmo360_test01/source.mp4",
+            "--osmo360-fps",
+            "0.5",
+            "--osmo360-matcher",
+            "exhaustive",
+            "--osmo360-perspective-preset",
+            "full360coverage",
+        ]
+    )
+    by_name = {step.name: step for step in build_steps(args)}
+
+    prepare_step = by_name["prepare"]
+    assert prepare_step.service == PREPROCESS_SERVICE
+    assert prepare_step.command[:2] == ("python", "scripts/prepare_osmo360_colmap.py")
+    assert prepare_step.command[prepare_step.command.index("--scene-id") + 1] == "osmo360_test01"
+    assert prepare_step.command[prepare_step.command.index("--video") + 1] == (
+        "/workspace/VBOGS/data/DJI-Osmo360/osmo360_test01/source.mp4"
+    )
+    assert prepare_step.command[prepare_step.command.index("--fps") + 1] == "0.5"
+    assert prepare_step.command[prepare_step.command.index("--matcher") + 1] == "exhaustive"
+    assert "--dense" in prepare_step.command
+
+    point_step = by_name["stereo"]
+    assert point_step.service == TORCH_SERVICE
+    assert point_step.command[:2] == ("python", "scripts/export_points_world.py")
+    assert point_step.command[point_step.command.index("--dataset-name") + 1] == "dji_osmo360"
+    assert point_step.command[point_step.command.index("--scene-id") + 1] == "osmo360_test01"
+    assert point_step.command[point_step.command.index("--point-source") + 1] == "mvs_dense"
+    assert point_step.command[point_step.command.index("--colmap-root") + 1] == "/data/COLMAP"
+
+
+def test_dji_osmo360_requires_video():
+    parser = build_parser({})
+    args = parser.parse_args(["--dataset-name", "dji_osmo360", "--scene-id", "capture"])
+
+    with pytest.raises(ValueError, match="--video is required"):
+        build_steps(args)
+
+
 def test_environment_pipeline_configs_are_loadable():
     for config_name in (
         "configs/pipeline/dev.yaml",
@@ -467,6 +516,7 @@ def test_gsplat_is_built_from_source_for_requested_cuda_arches():
 
 def test_service_images_do_not_clone_vbogs_during_build():
     for dockerfile_name in (
+        "docker/preprocess.Dockerfile",
         "docker/torch.Dockerfile",
         "docker/jax.Dockerfile",
         "docker/vbgs-render.Dockerfile",

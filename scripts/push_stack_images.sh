@@ -11,12 +11,14 @@ Tag and push the VBOGS images produced by:
 
 The destination image tags are:
   DOCKERHUB_USERNAME/vbogs-torch:VERSION
+  DOCKERHUB_USERNAME/vbogs-preprocess:VERSION
   DOCKERHUB_USERNAME/vbogs-jax:VERSION
   DOCKERHUB_USERNAME/vbogs-vbgs-render:VERSION
   DOCKERHUB_USERNAME/vbogs-pipeline:VERSION
 
 Services:
   vbogs-torch
+  vbogs-preprocess
   vbogs-jax
   vbogs-vbgs-render
   vbogs-pipeline

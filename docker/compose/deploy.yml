@@ -15,6 +15,10 @@ x-vbogs-mounts:
     type: volume
     source: NVIDIA-PhysicalAI-AV-NCore
     target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+  dji-osmo360: &vbogs-dji-osmo360-mount
+    type: volume
+    source: DJI-Osmo360
+    target: /workspace/VBOGS/data/DJI-Osmo360
   outputs: &vbogs-outputs-mount
     type: volume
     source: vbogs-outputs
@@ -37,6 +41,29 @@ x-vbogs-mounts:
     target: /root/.cache/torch
 
 services:
+  vbogs-preprocess:
+    image: ${VBOGS_PREPROCESS_IMAGE:-oakleyth/vbogs-preprocess:latest}
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS
+    volumes:
+      - *vbogs-repo-mount
+      - *vbogs-data-mount
+      - *vbogs-dji-osmo360-mount
+      - *vbogs-outputs-mount
+      - *vbogs-generated-configs-mount
+      - *vbogs-colmap-mount
+    command: sleep infinity
+
   vbogs-torch:
     image: ${VBOGS_TORCH_IMAGE:-oakleyth/vbogs-torch:latest}
     working_dir: /workspace/VBOGS
@@ -119,6 +146,7 @@ services:
     image: ${VBOGS_PIPELINE_IMAGE:-oakleyth/vbogs-pipeline:latest}
     working_dir: /workspace/VBOGS
     depends_on:
+      - vbogs-preprocess
       - vbogs-torch
       - vbogs-jax
     gpus:
@@ -152,6 +180,9 @@ services:
       - type: volume
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
       - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
@@ -205,6 +236,9 @@ services:
       - <<: *vbogs-nvidia-ncore-mount
         target: /srv/data/NVIDIA-PhysicalAI-AV-NCore
         read_only: true
+      - <<: *vbogs-dji-osmo360-mount
+        target: /srv/data/DJI-Osmo360
+        read_only: true
       - <<: *vbogs-outputs-mount
         target: /srv/outputs
       - <<: *vbogs-generated-configs-mount
@@ -224,6 +258,8 @@ volumes:
     name: ${VBOGS_DATASETS_VOLUME:-KITTI-360}
   NVIDIA-PhysicalAI-AV-NCore:
     name: ${VBOGS_NVIDIA_NCORE_VOLUME:-NVIDIA-PhysicalAI-AV-NCore}
+  DJI-Osmo360:
+    name: ${VBOGS_DJI_OSMO360_VOLUME:-DJI-Osmo360}
   vbogs-repo:
   vbogs-data:
   vbogs-outputs:

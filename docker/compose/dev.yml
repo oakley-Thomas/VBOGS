@@ -4,6 +4,27 @@
 #   docker compose --project-directory . -f docker/compose/compose.yml -f docker/compose/dev.yml up -d --no-build
 
 services:
+  vbogs-preprocess:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: vbogs-generated-configs
+        target: /workspace/VBOGS/generated_configs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+
   vbogs-torch:
     ports:
       - "${VBOGS_VIEWER_PORT:-8070}:8070"
@@ -20,6 +41,9 @@ services:
       - type: volume
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
       - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
@@ -51,6 +75,9 @@ services:
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
       - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
+      - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
       - type: volume
@@ -78,6 +105,9 @@ services:
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
       - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
+      - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs
       - type: volume
@@ -103,6 +133,9 @@ services:
       - type: volume
         source: NVIDIA-PhysicalAI-AV-NCore
         target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: DJI-Osmo360
+        target: /workspace/VBOGS/data/DJI-Osmo360
       - type: volume
         source: vbogs-outputs
         target: /workspace/VBOGS/outputs

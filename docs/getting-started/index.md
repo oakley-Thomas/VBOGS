@@ -35,7 +35,7 @@ The dev overlay bind-mounts the local VBOGS code checkout.
 
 ## Downloading the Datasets
 
-VBOGS currently supports both the KITTI-360 dataset and the NVIDIA-NCore dataset. Follow the instructions [here](data.md).
+VBOGS currently supports KITTI-360, NVIDIA NCore, and DJI Osmo 360 inputs. Follow the instructions [here](data.md).
 
 ## NVIDIA NCore Test Run
 

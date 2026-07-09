@@ -7,8 +7,9 @@ operator entrypoint from inside ``vbogs-pipeline`` so it can resolve sibling
 containers and call ``docker exec`` through the mounted Docker socket.
 The framework boundary stays explicit:
 
-- `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
-  point-to-anchor bucketing.
+- `vbogs-preprocess` runs Osmo 360 perspective extraction and COLMAP.
+- `vbogs-torch` runs KITTI/NCore dataset prep, Octree-AnyGS training, point
+  export, and point-to-anchor bucketing.
 - `vbogs-jax` runs per-anchor VBGS fitting and fit inspection.
 
 Data moves only through the shared stack mounts available at the same paths in
@@ -43,12 +44,18 @@ STAGES = (
 )
 TORCH_SERVICE = "vbogs-torch"
 JAX_SERVICE = "vbogs-jax"
+PREPROCESS_SERVICE = "vbogs-preprocess"
 DEFAULT_CONFIG = Path("configs/pipeline/default.yaml")
 CONFIG_KEY_MAP = {
     "dataset": {
         "name": "dataset_name",
         "scene_id": "scene_id",
         "ncore_root": "ncore_root",
+        "video": "osmo360_video",
+        "perspective_preset": "osmo360_perspective_preset",
+        "fps": "osmo360_fps",
+        "dense": "osmo360_dense",
+        "matcher": "osmo360_matcher",
         "camera_ids": "camera_ids",
         "point_source": "point_source",
         "camera_depth_pair": "camera_depth_pair",
@@ -71,6 +78,13 @@ CONFIG_KEY_MAP = {
         "copy_mode": "copy_mode",
         "training_cameras": "training_cameras",
         "seed_mode": "seed_mode",
+        "osmo360_tool_root": "osmo360_tool_root",
+        "osmo360_start": "osmo360_start",
+        "osmo360_end": "osmo360_end",
+        "osmo360_image_size": "osmo360_image_size",
+        "osmo360_image_ext": "osmo360_image_ext",
+        "osmo360_max_image_size": "osmo360_max_image_size",
+        "osmo360_camera_hfov": "osmo360_camera_hfov",
     },
     "train": {
         "gpu": "gpu",
@@ -168,6 +182,7 @@ CONFIG_KEY_MAP = {
     "orchestration": {
         "torch_container": "torch_container",
         "jax_container": "jax_container",
+        "preprocess_container": "preprocess_container",
         "use_service_labels": "use_service_labels",
         "label_project": "label_project",
     },
@@ -249,7 +264,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     dataset_group = parser.add_argument_group("dataset selection")
     dataset_group.add_argument(
         "--dataset-name",
-        choices=("kitti360", "nvidia_ncore"),
+        choices=("kitti360", "nvidia_ncore", "dji_osmo360"),
         default="kitti360",
         help="Dataset adapter used by the prepare and point-cloud stages.",
     )
@@ -276,9 +291,12 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     )
     dataset_group.add_argument(
         "--point-source",
-        choices=("stereo", "lidar", "camera_depth"),
+        choices=("stereo", "lidar", "camera_depth", "mvs_dense", "sfm_sparse"),
         default=None,
-        help="Point source. Defaults to stereo for KITTI-360 and lidar for NVIDIA NCore.",
+        help=(
+            "Point source. Defaults to stereo for KITTI-360, lidar for NVIDIA "
+            "NCore, and mvs_dense for DJI Osmo 360."
+        ),
     )
     dataset_group.add_argument(
         "--camera-depth-pair",
@@ -289,6 +307,37 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--ncore-lidar-id",
         default="lidar_top_360fov",
         help="NCore LiDAR id used by lidar point export and sparse seeding.",
+    )
+    dataset_group.add_argument(
+        "--video",
+        dest="osmo360_video",
+        type=Path,
+        default=None,
+        help="Stitched DJI Osmo 360 equirectangular video for --dataset-name dji_osmo360.",
+    )
+    dataset_group.add_argument(
+        "--osmo360-fps",
+        type=float,
+        default=1.0,
+        help="Frame extraction rate passed to the Osmo 360 perspective export.",
+    )
+    dataset_group.add_argument(
+        "--osmo360-perspective-preset",
+        default="full360coverage",
+        choices=("default", "fisheyelike", "full360coverage", "2views", "evenMinus30", "evenPlus30", "fisheyeXY"),
+        help="360Cam perspective extraction preset.",
+    )
+    dataset_group.add_argument(
+        "--osmo360-dense",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run COLMAP dense MVS during Osmo 360 preparation.",
+    )
+    dataset_group.add_argument(
+        "--osmo360-matcher",
+        choices=("sequential", "exhaustive"),
+        default="sequential",
+        help="COLMAP matcher used for Osmo 360 virtual perspective images.",
     )
     parser.add_argument(
         "--torch-container",
@@ -304,6 +353,14 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help=(
             "Optional concrete container name/id for JAX steps. When set, "
             "`docker exec` is used instead of `docker compose exec`."
+        ),
+    )
+    parser.add_argument(
+        "--preprocess-container",
+        default="",
+        help=(
+            "Optional concrete container name/id for preprocessing steps. When "
+            "set, `docker exec` is used instead of compose label lookup."
         ),
     )
     parser.add_argument(
@@ -438,6 +495,13 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         choices=("stereo", "lidar", "random"),
         default="stereo",
     )
+    prep_group.add_argument("--osmo360-tool-root", type=Path, default=Path("third_party/360Cam-PGM-3DGS-Tools"))
+    prep_group.add_argument("--osmo360-start", type=float, default=None)
+    prep_group.add_argument("--osmo360-end", type=float, default=None)
+    prep_group.add_argument("--osmo360-image-size", type=int, default=1600)
+    prep_group.add_argument("--osmo360-image-ext", choices=("jpg", "png"), default="jpg")
+    prep_group.add_argument("--osmo360-max-image-size", type=int, default=1600)
+    prep_group.add_argument("--osmo360-camera-hfov", type=float, default=None)
 
     train_group = parser.add_argument_group("Octree-AnyGS training")
     train_group.add_argument("--gpu", default="0")
@@ -742,7 +806,11 @@ def scene_id_arg(args: argparse.Namespace) -> str:
 def effective_point_source(args: argparse.Namespace) -> str:
     if args.point_source:
         return str(args.point_source)
-    return "stereo" if args.dataset_name == "kitti360" else "lidar"
+    if args.dataset_name == "kitti360":
+        return "stereo"
+    if args.dataset_name == "nvidia_ncore":
+        return "lidar"
+    return "mvs_dense"
 
 
 def camera_id_args(camera_ids: object | None) -> list[str]:
@@ -809,7 +877,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             "stereo" if args.seed_mode == "lidar" else args.seed_mode,
             *maybe_path_args(args),
         )
-    else:
+    elif args.dataset_name == "nvidia_ncore":
         prepare_cmd = (
             "python",
             "scripts/prepare_nvidia_ncore_colmap.py",
@@ -828,6 +896,37 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             *maybe_option("--ncore-root", args.ncore_root),
             *camera_id_args(args.camera_ids),
         )
+    elif args.dataset_name == "dji_osmo360":
+        if args.osmo360_video is None:
+            raise ValueError("--video is required for --dataset-name dji_osmo360")
+        prepare_cmd = (
+            "python",
+            "scripts/prepare_osmo360_colmap.py",
+            "--scene-id",
+            scene,
+            "--video",
+            str(args.osmo360_video),
+            "--fps",
+            str(args.osmo360_fps),
+            "--perspective-preset",
+            args.osmo360_perspective_preset,
+            "--matcher",
+            args.osmo360_matcher,
+            "--tool-root",
+            str(args.osmo360_tool_root),
+            "--image-size",
+            str(args.osmo360_image_size),
+            "--image-ext",
+            args.osmo360_image_ext,
+            "--max-image-size",
+            str(args.osmo360_max_image_size),
+            *(("--dense",) if args.osmo360_dense else ("--no-dense",)),
+            *maybe_option("--start", args.osmo360_start),
+            *maybe_option("--end", args.osmo360_end),
+            *maybe_option("--camera-hfov", args.osmo360_camera_hfov),
+        )
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset_name}")
 
     train_cmd = (
         "python",
@@ -884,6 +983,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *camera_id_args(args.camera_ids),
         *maybe_option("--camera-depth-pair", args.camera_depth_pair),
         *maybe_option("--lidar-id", args.ncore_lidar_id),
+        "--colmap-root",
+        "/data/COLMAP",
     )
 
     bucket_cmd = (
@@ -1046,7 +1147,11 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     )
 
     return [
-        PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
+        PipelineStep(
+            "prepare",
+            PREPROCESS_SERVICE if args.dataset_name == "dji_osmo360" else TORCH_SERVICE,
+            prepare_cmd,
+        ),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
         PipelineStep("stereo", TORCH_SERVICE, point_cmd),
         PipelineStep("bucket", TORCH_SERVICE, bucket_cmd),
@@ -1079,6 +1184,8 @@ def container_override(args: argparse.Namespace, service: str) -> str:
         return args.torch_container
     if service == JAX_SERVICE:
         return args.jax_container
+    if service == PREPROCESS_SERVICE:
+        return args.preprocess_container
     return ""
 
 
@@ -1187,7 +1294,7 @@ def exec_prefix(args: argparse.Namespace, service: str) -> list[str]:
     raise RuntimeError(
         "No container resolution mode is enabled. Use scripts/run_pipeline.sh "
         "inside vbogs-pipeline, or pass explicit --torch-container and "
-        "--jax-container values."
+        "--jax-container/--preprocess-container values."
     )
 
 

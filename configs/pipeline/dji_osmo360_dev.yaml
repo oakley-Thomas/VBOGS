@@ -1,0 +1,86 @@
+# DJI Osmo 360 end-to-end preprocessing + VBOGS development profile.
+#
+# CLI flags override these defaults. `dataset.video` must point to a stitched
+# equirectangular video visible inside the compose stack.
+
+dataset:
+  name: dji_osmo360
+  scene_id: osmo360_test01
+  video: /workspace/VBOGS/data/DJI-Osmo360/osmo360_test01/source.mp4
+  fps: 1.0
+  perspective_preset: full360coverage
+  matcher: sequential
+  dense: true
+  point_source: mvs_dense
+
+pipeline:
+  start_at: prepare
+  stop_after: bundle
+  dry_run: false
+
+outputs:
+  run_root: outputs/osmo360_dev
+
+prepare:
+  osmo360_tool_root: third_party/360Cam-PGM-3DGS-Tools
+  osmo360_start: null
+  osmo360_end: null
+  osmo360_image_size: 1600
+  osmo360_image_ext: jpg
+  osmo360_max_image_size: 1600
+  osmo360_camera_hfov: null
+
+train:
+  gpu: "0"
+  resolution: 4
+  iterations: 15000
+  llffhold: 8
+  gaussian_type: implicit3D
+  feat_dim: 16
+  base_layer: 9
+  visible_threshold: 0.02
+  write_config_only: false
+
+points:
+  point_source: mvs_dense
+  write_ply: true
+
+bucket:
+  model_path: null
+  bucket_iteration: -1
+  point_chunk_size: 1000000
+  max_points: 0
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 500
+
+inspect:
+  top_k: 5
+  sample_points: 5
+  anchor_id: null
+  export_ply: null
+
+uncertainty:
+  u_max: null
+  no_histogram: false
+
+render:
+  split: both
+  resolution: 2
+  max_views: 1
+  colormap: turbo
+  vmin: null
+  vmax: null
+  output_dir: null
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  top_k: 10
+  save_top_images: 5
+  force_all_levels: false
+  output_dir: null

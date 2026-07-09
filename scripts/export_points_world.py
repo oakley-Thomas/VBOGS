@@ -43,13 +43,14 @@ from vbogs.ncore_adapter import (
     selected_frame_indices,
     write_ply,
 )
+from vbogs.osmo360_adapter import read_colmap_points3d_txt, read_ply_xyz_rgb
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset-name",
-        choices=("kitti360", "nvidia_ncore"),
+        choices=("kitti360", "nvidia_ncore", "dji_osmo360"),
         default="kitti360",
     )
     parser.add_argument("--scene-id", default=None, help="Dataset scene/clip id.")
@@ -60,9 +61,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--point-source",
-        choices=("stereo", "lidar", "camera_depth"),
+        choices=("stereo", "lidar", "camera_depth", "mvs_dense", "sfm_sparse"),
         default=None,
-        help="Point source. Defaults to stereo for KITTI-360 and lidar for NVIDIA NCore.",
+        help=(
+            "Point source. Defaults to stereo for KITTI-360, lidar for NVIDIA "
+            "NCore, and mvs_dense for DJI Osmo 360."
+        ),
     )
 
     kitti_group = parser.add_argument_group("KITTI-360 stereo inputs")
@@ -85,6 +89,26 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated left,right NCore camera ids for camera_depth export.",
     )
     ncore_group.add_argument("--lidar-id", default=DEFAULT_LIDAR_ID)
+
+    osmo_group = parser.add_argument_group("DJI Osmo 360 inputs")
+    osmo_group.add_argument(
+        "--colmap-root",
+        type=Path,
+        default=Path("/data/COLMAP"),
+        help="Root containing prepared COLMAP-style scenes.",
+    )
+    osmo_group.add_argument(
+        "--dense-ply",
+        type=Path,
+        default=None,
+        help="Optional explicit dense fused PLY path for dji_osmo360 mvs_dense export.",
+    )
+    osmo_group.add_argument(
+        "--sparse-points",
+        type=Path,
+        default=None,
+        help="Optional explicit COLMAP sparse points3D.txt path for dji_osmo360 sfm_sparse export.",
+    )
 
     parser.add_argument(
         "--selection-metadata",
@@ -126,7 +150,11 @@ def scene_id(args: argparse.Namespace) -> str:
 def point_source(args: argparse.Namespace) -> str:
     if args.point_source:
         return args.point_source
-    return "stereo" if args.dataset_name == "kitti360" else "lidar"
+    if args.dataset_name == "kitti360":
+        return "stereo"
+    if args.dataset_name == "nvidia_ncore":
+        return "lidar"
+    return "mvs_dense"
 
 
 def load_json(path: Path | None) -> dict[str, Any]:
@@ -523,6 +551,47 @@ def export_kitti_stereo(args: argparse.Namespace) -> Path:
     return stereo_to_pointcloud.export_points(args)
 
 
+def export_osmo360_points(args: argparse.Namespace, source: str) -> Path:
+    scene = scene_id(args)
+    prepared_dir = Path(args.colmap_root) / scene
+    metadata: dict[str, Any]
+    if source == "mvs_dense":
+        dense_ply = args.dense_ply or (prepared_dir / "dense" / "fused.ply")
+        point_cloud = read_ply_xyz_rgb(dense_ply)
+        source_path = dense_ply
+        metadata = {
+            "point_source": "mvs_dense",
+            "source_ply": str(dense_ply),
+            "frame_id_semantics": "COLMAP dense fusion points are not assigned to a single source frame; frame_id is -1.",
+        }
+    elif source == "sfm_sparse":
+        sparse_points = args.sparse_points or (prepared_dir / "sparse" / "0" / "points3D.txt")
+        point_cloud = read_colmap_points3d_txt(sparse_points)
+        source_path = sparse_points
+        metadata = {
+            "point_source": "sfm_sparse",
+            "source_points3d": str(sparse_points),
+            "frame_id_semantics": "COLMAP sparse points are tracks spanning images; frame_id is -1.",
+        }
+    else:
+        raise ValueError("DJI Osmo 360 point sources are mvs_dense or sfm_sparse")
+    frame_id = np.full(point_cloud.xyz.shape[0], -1, dtype=np.int32)
+    metadata.update(
+        {
+            "prepared_colmap_dir": str(prepared_dir),
+            "source_path": str(source_path),
+        }
+    )
+    return write_points_artifact(
+        args=args,
+        scene=scene,
+        xyz=point_cloud.xyz,
+        rgb=point_cloud.rgb,
+        frame_id=frame_id,
+        metadata=metadata,
+    )
+
+
 def main() -> None:
     args = parse_args()
     source = point_source(args)
@@ -539,6 +608,10 @@ def main() -> None:
             output_path = export_lidar_points_from_loader(args, loader)
         else:
             output_path = export_camera_depth_from_loader(args, loader)
+    elif args.dataset_name == "dji_osmo360":
+        if source not in {"mvs_dense", "sfm_sparse"}:
+            raise ValueError("DJI Osmo 360 point sources are mvs_dense or sfm_sparse")
+        output_path = export_osmo360_points(args, source)
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print(f"Wrote world point cloud to: {output_path}")

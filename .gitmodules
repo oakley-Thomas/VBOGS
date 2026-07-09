@@ -6,3 +6,6 @@
 	path = vbgs
 	url = https://github.com/VersesTech/vbgs.git
 	branch = main
+[submodule "third_party/360Cam-PGM-3DGS-Tools"]
+	path = third_party/360Cam-PGM-3DGS-Tools
+	url = https://github.com/Mistral-Yu/360Cam-PGM-3DGS-Tools.git
