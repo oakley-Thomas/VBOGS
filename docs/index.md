@@ -8,6 +8,7 @@ representation, with VBGS, a per-anchor Bayesian uncertainty head.
 | Need | Page |
 | --- | --- |
 | Build containers and run test commands | [Quickstart](getting-started/index.md) |
+| Understand each pipeline stage and artifact handoff | [Pipeline Overview](getting-started/pipeline-overview.md) |
 | Download KITTI-360 data | [Data Setup](getting-started/data.md) |
 | Understand the Docker services | [Environments](getting-started/environments.md) |
 | Download a server run and view/query it locally | [Download and View Artifacts](getting-started/local-artifact-viewing.md) |

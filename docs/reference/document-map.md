@@ -6,6 +6,7 @@ for readers is the [site home](../index.md).
 | Document | Use it for |
 | --- | --- |
 | [Quickstart](../getting-started/index.md) | Build containers, start the dev stack, and run the first pipeline commands |
+| [Pipeline Overview](../getting-started/pipeline-overview.md) | Conceptual map of each pipeline stage, runtime owner, and artifact handoff |
 | [Data Setup](../getting-started/data.md) | KITTI-360 paths, Docker mounts, and download helpers |
 | [Realtime Viewer and Render Server API](../running/realtime-viewer.md) | Browser viewer plus REST API for RGB images, uncertainty images, and rendered uncertainty scores |
 | [Docker Pipeline](../running/docker-pipeline.md) | How `scripts/run_pipeline.sh` orchestrates stage slices |

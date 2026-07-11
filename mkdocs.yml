@@ -25,6 +25,7 @@ nav:
   - Home: index.md
   - Getting Started:
       - Quickstart: getting-started/index.md
+      - Pipeline Overview: getting-started/pipeline-overview.md
       - Deployment: getting-started/deployment.md
       - Data Setup: getting-started/data.md
       - Environments: getting-started/environments.md
