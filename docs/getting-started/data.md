@@ -56,7 +56,8 @@ Run the downloader from the interactive `vbogs-pipeline` container shell. Keep
 the token in your shell or deployment secrets; do not commit it to the repo.
 
 ```bash
-docker exec -it vbogs-vbogs-pipeline-1 /bin/bash
+# Enter pipeline container
+./dc_bash.sh
 
 export HF_TOKEN='hf_...'
 python scripts/download_nvidia_ncore_dataset.py \
