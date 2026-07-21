@@ -16,8 +16,8 @@ bash scripts/build_stack_serial.sh
 **IMPORTANT NOTE:** by default, ```scripts/build_stack_serial.sh``` will compile ```gsplat``` against the CUDA architecture on the machine that builds the images. If you intend to deploy on a different CUDA architecture, you need to specify the supported versions using ```--cuda-arch-list```.
 
 ```bash
-# Example - supports RTX 5080 (sm_12.0) and RTX Quadro 8000 (sm_7.5)
-bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;12.0'
+# Example - supports RTX Quadro 8000 (sm_7.5), RTX 4070 (sm_8.9), and TYX 5080 (sm_12.0) and 
+bash scripts/build_stack_serial.sh --cuda-arch-list '7.5;8.9;12.0'
 ```
 
 To rebuild one service:
