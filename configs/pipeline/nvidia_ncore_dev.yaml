@@ -37,6 +37,7 @@ train:
   resolution: 4
   iterations: 30000
   llffhold: 8
+  eval: false
   gaussian_type: explicit3D
   feat_dim: 16
   base_layer: 9
@@ -44,6 +45,7 @@ train:
   write_config_only: false
 
 points:
+  frame_split: train
   matcher: sgbm
   pixel_step: 2
   max_points_per_frame: 100000

@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vbogs.data_layout import resolve_kitti360_path
+from vbogs.dataset_splits import split_frame_indices, split_lookup
 
 
 @dataclass(frozen=True)
@@ -612,6 +613,7 @@ def materialize_training_images(
     training_cameras: str,
     images_out: Path,
     copy_mode: str,
+    frame_split_by_id: dict[int, str],
 ) -> tuple[list[ColmapImage], list[dict]]:
     colmap_images: list[ColmapImage] = []
     frame_records: list[dict] = []
@@ -620,6 +622,7 @@ def materialize_training_images(
     for frame_id, left_path, right_path, pose in frames:
         output_name = f"{frame_id:010d}.png"
         frame_images: list[dict] = []
+        split_name = frame_split_by_id[int(frame_id)]
 
         camera_specs: list[tuple[str, int, Path, str, np.ndarray]]
         if training_cameras == "stereo":
@@ -638,14 +641,16 @@ def materialize_training_images(
 
         for camera_label, camera_id, src_path, image_name, c2w in camera_specs:
             materialize_image(src_path, images_out / image_name, copy_mode)
-            colmap_images.append(
-                ColmapImage(
-                    image_id=image_id,
-                    camera_id=camera_id,
-                    image_name=image_name,
-                    c2w=c2w,
+            if split_name == "train":
+                colmap_images.append(
+                    ColmapImage(
+                        image_id=image_id,
+                        camera_id=camera_id,
+                        image_name=image_name,
+                        c2w=c2w,
+                    )
                 )
-            )
+                image_id += 1
             frame_images.append(
                 {
                     "camera": camera_label,
@@ -655,9 +660,8 @@ def materialize_training_images(
                     "c2w": matrix_for_metadata(c2w),
                 }
             )
-            image_id += 1
 
-        frame_records.append({"frame_id": frame_id, "images": frame_images})
+        frame_records.append({"frame_id": frame_id, "split": split_name, "images": frame_images})
 
     return colmap_images, frame_records
 
@@ -687,6 +691,14 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         frame_step=args.frame_step,
         max_frames=args.max_frames,
     )
+    selected_frame_ids = [frame_id for frame_id, _, _, _ in frames]
+    frame_splits = split_frame_indices(selected_frame_ids)
+    frame_split_by_id = split_lookup(frame_splits)
+    train_frames = [
+        frame
+        for frame in frames
+        if frame_split_by_id[int(frame[0])] == "train"
+    ]
 
     dataset_dir = args.output_root / args.drive
     images_out = dataset_dir / "images"
@@ -703,12 +715,13 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         training_cameras=training_cameras,
         images_out=images_out,
         copy_mode=args.copy_mode,
+        frame_split_by_id=frame_split_by_id,
     )
 
     if args.seed_mode == "stereo":
-        points_xyz, points_rgb = build_sparse_points_from_stereo(frames, calibration, args)
+        points_xyz, points_rgb = build_sparse_points_from_stereo(train_frames, calibration, args)
     else:
-        points_xyz, points_rgb = build_random_points(frames, args)
+        points_xyz, points_rgb = build_random_points(train_frames, args)
 
     write_cameras_txt(sparse_out / "cameras.txt", cameras)
     write_images_txt(sparse_out / "images.txt", colmap_images)
@@ -722,6 +735,11 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         "drive": args.drive,
         "num_frames": len(frames),
         "num_images": len(colmap_images),
+        "frame_splits": frame_splits,
+        "split_counts": {
+            split_name: len(frame_ids)
+            for split_name, frame_ids in frame_splits.items()
+        },
         "training_cameras": training_cameras,
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
@@ -741,7 +759,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
             "cy": calibration.cy,
             "baseline_m": calibration.baseline_m,
         },
-        "selected_frames": [frame_id for frame_id, _, _, _ in frames],
+        "selected_frames": selected_frame_ids,
         "frame_records": frame_records,
     }
     (dataset_dir / "metadata.json").write_text(

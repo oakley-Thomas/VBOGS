@@ -352,9 +352,17 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
     assert point_step.command[point_step.command.index("--dataset-name") + 1] == "nvidia_ncore"
     assert point_step.command[point_step.command.index("--scene-id") + 1] == "clip_001"
     assert point_step.command[point_step.command.index("--point-source") + 1] == "lidar"
+    assert point_step.command[point_step.command.index("--frame-split") + 1] == "all"
     assert flag_values(point_step.command, "--camera-id") == [
         "camera_front_wide_120fov,camera_front_tele_30fov"
     ]
+    assert by_name["train"].command[by_name["train"].command.index("--eval")] == "--eval"
+    assert by_name["render"].command[by_name["render"].command.index("--selection-metadata") + 1] == (
+        "/data/COLMAP/clip_001/metadata.json"
+    )
+    assert by_name["nbv"].command[by_name["nbv"].command.index("--selection-metadata") + 1] == (
+        "/data/COLMAP/clip_001/metadata.json"
+    )
     assert "data/m4/clip_001/U.npy" in by_name["render"].command
     assert "clip_001" in by_name["bundle"].command
     assert "--viewer-export-iteration" in by_name["bundle"].command
@@ -369,21 +377,29 @@ def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
     expected = ["camera_front_wide_120fov", "camera_front_tele_30fov"]
     assert args.dataset_name == "nvidia_ncore"
     assert args.camera_ids == expected
+    assert args.frame_split == "train"
+    assert args.train_eval is False
     assert flag_values(by_name["prepare"].command, "--camera-id") == expected
     assert flag_values(by_name["stereo"].command, "--camera-id") == expected
+    assert by_name["stereo"].command[by_name["stereo"].command.index("--frame-split") + 1] == "train"
+    assert "--no-eval" in by_name["train"].command
 
 
 def test_environment_pipeline_configs_are_loadable():
     for config_name in (
+        "configs/pipeline/default.yaml",
         "configs/pipeline/dev.yaml",
         "configs/pipeline/portainer.yaml",
     ):
         defaults = load_config_defaults(REPO_ROOT / config_name)
         assert defaults["drive"] == "2013_05_28_drive_0007_sync"
         assert defaults["run_output_root"] == "outputs/v1_0"
-        assert defaults["gaussian_type"] == "explicit3D"
+        if config_name != "configs/pipeline/default.yaml":
+            assert defaults["gaussian_type"] == "explicit3D"
         assert defaults["render_resolution"] == 2
         assert defaults["bucket_point_chunk_size"] == 1000000
+        assert defaults["frame_split"] == "train"
+        assert defaults["train_eval"] is False
         assert "train_port" not in defaults
     assert (
         load_config_defaults(REPO_ROOT / "configs/pipeline/dev.yaml")["bucket_max_points"]

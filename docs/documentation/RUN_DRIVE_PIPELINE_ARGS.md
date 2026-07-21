@@ -255,6 +255,7 @@ written under `generated_configs/`, and Octree-AnyGS outputs go under
 | `--resolution RESOLUTION` | `4` | Octree-AnyGS image divisor. Higher values reduce memory use and image fidelity. |
 | `--iterations ITERATIONS` | Profile-specific config; parser: `15000` | Number of training iterations. |
 | `--llffhold LLFFHOLD` | `8` | Held-out test frame cadence used by the Octree-AnyGS data loader. |
+| `--train-eval` / `--no-train-eval` | `true`; shipped profiles: `false` | Enable Octree-AnyGS eval-mode train/test splitting. Shipped KITTI and NCore profiles disable this because preparation already writes only train images to COLMAP. |
 | `--gaussian-type {implicit3D,explicit3D}` | `implicit3D` | Octree-AnyGS Gaussian representation. `implicit3D` is the neural default; `explicit3D` uses explicit SH 3D Gaussians. |
 | `--feat-dim FEAT_DIM` | `16` | Neural anchor feature dimension. Lower values reduce VRAM pressure. Ignored for `explicit3D`. |
 | `--base-layer BASE_LAYER` | `9` | LoD base layer. Lower values reduce anchor count and memory. |
@@ -275,6 +276,7 @@ for backward compatibility with existing command slices.
 | `--max-points-per-frame MAX_POINTS_PER_FRAME` | `250000` | Per-frame cap on exported world points. |
 | `--write-ply` | Config: `true` | Also write a PLY point cloud for quick visual inspection and the curated bundle. |
 | `--point-source {stereo,lidar,camera_depth}` | Dataset default | Selects KITTI stereo, NVIDIA LiDAR, or NVIDIA camera-depth export. |
+| `--frame-split {train,test,validation,all}` | `all`; shipped profiles: `train` | Prepared frame split exported to `points_world.npz`. Use `train` for normal VBOGS fitting so held-out test/validation frames are not bucketed. |
 
 The point-cloud stage also receives `--max-frames`, KITTI input overrides, and
 NVIDIA NCore sensor options as applicable.
@@ -353,7 +355,7 @@ directory is `outputs/v1_0/<drive>/views`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--render-split {train,test,both}` | `both` | Camera split to render. |
+| `--render-split {train,test,validation,both,all}` | `both` | Camera split to render. Held-out `test` and `validation` can be loaded from prepared split metadata. |
 | `--render-resolution RENDER_RESOLUTION` | Config: `2` | Octree-AnyGS image divisor/target width for diagnostic renders. Smaller divisors produce higher-resolution views; `1` is full input resolution. |
 | `--render-max-views RENDER_MAX_VIEWS` | `0` | Per-split cap for render smoke tests. `0` renders all views. |
 | `--render-colormap RENDER_COLORMAP` | `turbo` | Matplotlib colormap for uncertainty heatmaps. |
@@ -369,7 +371,7 @@ output directory is `outputs/v1_0/<drive>/nbv`.
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--nbv-candidate-source {test,train,lattice}` | `test` | Candidate camera set used for scoring. |
+| `--nbv-candidate-source {test,train,validation,lattice}` | `test` | Candidate camera set used for scoring. Held-out `test` and `validation` candidates can be loaded from prepared split metadata. |
 | `--nbv-max-candidates NBV_MAX_CANDIDATES` | `0` | Optional candidate cap. `0` scores all selected candidates. |
 | `--nbv-top-k NBV_TOP_K` | `10` | Number of ranked candidates stored in `nbv_scores.json`. |
 | `--nbv-save-top-images NBV_SAVE_TOP_IMAGES` | `5` | Number of top uncertainty/alpha arrays saved for visualization. |
@@ -412,8 +414,8 @@ The default config file uses section names that map to CLI arguments:
 | `pipeline` | `drive`, `start_at`, `stop_after`, `dry_run` |
 | `inputs` | `raw_root`, `poses_root`, `calibration_dir` |
 | `prepare` | `frame_step`, `max_frames`, `copy_mode`, `training_cameras`, `seed_mode` |
-| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
-| `stereo` | `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
+| `train` | `gpu`, `resolution`, `iterations`, `llffhold`, `eval`, `gaussian_type`, `feat_dim`, `base_layer`, `visible_threshold`, `port`, `write_config_only`, `skip_stack_check` |
+| `stereo` | `frame_split`, `matcher`, `pixel_step`, `max_points_per_frame`, `write_ply` |
 | `bucket` | `model_path`, `bucket_iteration`, `point_chunk_size`, `max_points` |
 | `fit` | `jax_device`, `fit_mode`, `batch_size`, `batch_buckets`, `no_auto_extend_buckets`, `vmap_group_size`, `max_padded_points_per_group`, `log_every` |
 | `inspect` | `top_k`, `sample_points`, `anchor_id`, `export_ply` |

@@ -78,6 +78,10 @@ scripts/run_pipeline.sh \
 | `train.visible_threshold` | `0.02` | `0.01` |
 | `bucket.max_points` | `10000000` | `0` |
 
+The shipped KITTI and NCore profiles use explicit prepared-data splits:
+`train.eval: false` disables Octree-AnyGS's internal `llffhold` holdout, and
+`stereo.frame_split: train` exports only train-split points for VBOGS fitting.
+
 For KITTI-360, set `prepare.training_cameras: stereo` to train Octree-AnyGS
 from both `image_00` and `image_01` RGB frames. The default `left` preserves
 the legacy left-camera-only prepared dataset.

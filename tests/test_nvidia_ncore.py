@@ -69,7 +69,7 @@ class FakeLidarSensor:
 
 
 class FakeLoader:
-    def __init__(self):
+    def __init__(self, frame_count=2):
         image_a = np.zeros((4, 4, 3), dtype=np.uint8)
         image_a[1, 1] = [10, 20, 30]
         image_a[1, 2] = [40, 50, 60]
@@ -77,13 +77,22 @@ class FakeLoader:
         c2w = np.eye(4, dtype=np.float64)
         c2w_shift = np.eye(4, dtype=np.float64)
         c2w_shift[:3, 3] = [10.0, 0.0, 0.0]
+        images_a = [image_a for _ in range(frame_count)]
+        images_b = [image_b for _ in range(frame_count)]
+        c2ws_a = [c2w_shift for _ in range(frame_count)]
+        c2ws_b = [c2w for _ in range(frame_count)]
+        timestamps = [100 * (idx + 1) for idx in range(frame_count)]
         self.cameras = {
-            "cam_a": FakeCameraSensor("cam_a", [image_a, image_a], [c2w_shift, c2w_shift], [100, 200]),
-            "cam_b": FakeCameraSensor("cam_b", [image_b, image_b], [c2w, c2w], [100, 200]),
+            "cam_a": FakeCameraSensor("cam_a", images_a, c2ws_a, timestamps),
+            "cam_b": FakeCameraSensor("cam_b", images_b, c2ws_b, timestamps),
         }
         lidar_points = np.array([[0.0, 0.0, 2.0], [1.0, 0.0, 2.0]], dtype=np.float32)
+        lidar_points_by_frame = [
+            lidar_points + np.array([float(idx), 0.0, 0.0], dtype=np.float32)
+            for idx in range(frame_count)
+        ]
         self.lidars = {
-            "lidar_top_360fov": FakeLidarSensor([lidar_points], [c2w_shift], [100])
+            "lidar_top_360fov": FakeLidarSensor(lidar_points_by_frame, c2ws_a, timestamps)
         }
         self.camera_ids = list(self.cameras)
         self.lidar_ids = list(self.lidars)
@@ -118,18 +127,26 @@ def test_prepare_ncore_colmap_writes_multi_camera_metadata(tmp_path):
 
     assert (dataset_dir / "images" / "cam_a" / "cam_a_0000000000_0000000000.png").exists()
     assert (dataset_dir / "sparse" / "0" / "cameras.txt").read_text().count("PINHOLE") == 2
-    assert "cam_b/cam_b_0000000001_0000000001.png" in image_names
-    assert len(image_names) == 4
-    assert len(set(image_basenames)) == 4
+    assert (dataset_dir / "images" / "cam_b" / "cam_b_0000000001_0000000001.png").exists()
+    assert "cam_b/cam_b_0000000001_0000000001.png" not in image_names
+    assert len(image_names) == 2
+    assert len(set(image_basenames)) == 2
     assert prepared.metadata["dataset"] == "nvidia_ncore"
     assert prepared.metadata["camera_ids"] == ["cam_a", "cam_b"]
     assert prepared.metadata["primary_camera_id"] == "cam_a"
     assert prepared.metadata["num_frames"] == 2
-    assert prepared.metadata["num_images"] == 4
+    assert prepared.metadata["num_images"] == 2
+    assert prepared.metadata["split_counts"] == {"train": 1, "test": 1, "validation": 0}
+    assert prepared.metadata["frame_splits"] == {
+        "train": [0],
+        "test": [1],
+        "validation": [],
+    }
     assert set(prepared.metadata["intrinsics"]) == {"cam_a", "cam_b"}
     assert len(prepared.metadata["frame_records"]) == 2
     for record in prepared.metadata["frame_records"]:
         assert record["primary_camera_id"] == "cam_a"
+        assert record["split"] in {"train", "test"}
         assert set(record["cameras"]) == {"cam_a", "cam_b"}
         assert record["cameras"]["cam_a"]["image_name"].startswith("cam_a/cam_a_")
         assert record["cameras"]["cam_b"]["image_name"].startswith("cam_b/cam_b_")
@@ -165,6 +182,8 @@ def test_lidar_export_transforms_points_and_preserves_contract(tmp_path):
         write_ply=False,
         lidar_id="lidar_top_360fov",
         camera_ids=["cam_a"],
+        selection_metadata=None,
+        frame_split="all",
         frame_step=1,
         max_frames=1,
         max_points_per_frame=0,
@@ -180,6 +199,43 @@ def test_lidar_export_transforms_points_and_preserves_contract(tmp_path):
         np.array([[10.0, 0.0, 2.0], [11.0, 0.0, 2.0]], dtype=np.float32),
     )
     assert payload["rgb"].tolist() == [[10, 20, 30], [40, 50, 60]]
+    assert payload["frame_id"].tolist() == [0, 0]
+
+
+def test_lidar_export_frame_split_uses_prepare_metadata(tmp_path):
+    metadata_path = tmp_path / "metadata.json"
+    metadata_path.write_text(
+        """
+{
+  "frame_records": [
+    {"frame_id": 0, "timestamp_us": 100, "split": "train"},
+    {"frame_id": 1, "timestamp_us": 200, "split": "test"},
+    {"frame_id": 2, "timestamp_us": 300, "split": "validation"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        dataset_name="nvidia_ncore",
+        scene_id="clip_001",
+        drive=None,
+        output_root=tmp_path / "points_world",
+        output_name="points_world.npz",
+        write_ply=False,
+        lidar_id="lidar_top_360fov",
+        camera_ids=["cam_a"],
+        selection_metadata=metadata_path,
+        frame_split="train",
+        frame_step=1,
+        max_frames=0,
+        max_points_per_frame=0,
+        random_seed=0,
+    )
+
+    output_path = export_lidar_points_from_loader(args, FakeLoader(frame_count=3))
+    payload = np.load(output_path)
+
     assert payload["frame_id"].tolist() == [0, 0]
 
 

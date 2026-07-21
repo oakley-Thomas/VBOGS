@@ -20,14 +20,14 @@ def write_fixture_drive(root: Path, drive: str = "drive_sync") -> tuple[Path, Pa
     poses_dir.mkdir(parents=True)
     calibration_dir.mkdir(parents=True)
 
-    for frame_id in (0, 1):
+    for frame_id in range(10):
         name = f"{frame_id:010d}.png"
         (left_dir / name).write_bytes(b"left")
         (right_dir / name).write_bytes(b"right")
 
     identity = np.eye(4, dtype=np.float64)
     pose_lines = []
-    for frame_id in (0, 1):
+    for frame_id in range(10):
         pose_lines.append(
             f"{frame_id} " + " ".join(f"{value:.8f}" for value in identity.reshape(-1))
         )
@@ -123,6 +123,8 @@ def test_prepare_kitti360_default_left_mode_preserves_flat_layout(tmp_path, monk
     assert metadata["num_frames"] == 1
     assert metadata["num_images"] == 1
     assert metadata["selected_frames"] == [0]
+    assert metadata["split_counts"] == {"train": 1, "test": 0, "validation": 0}
+    assert metadata["frame_records"][0]["split"] == "train"
     assert metadata["frame_records"][0]["images"][0]["image_name"] == "0000000000.png"
 
 
@@ -144,11 +146,13 @@ def test_prepare_kitti360_stereo_mode_writes_two_cameras_and_right_pose(
     assert "2 PINHOLE 4 4 100.00000000 100.00000000 3.00000000 2.00000000" in cameras_txt
 
     entries = colmap_image_entries(dataset_dir / "sparse" / "0" / "images.txt")
-    assert len(entries) == 4
+    assert len(entries) == 2
     assert [entry["name"] for entry in entries[:2]] == [
         "image_00/0000000000.png",
         "image_01/0000000000.png",
     ]
+    assert (dataset_dir / "images" / "image_00" / "0000000001.png").is_file()
+    assert (dataset_dir / "images" / "image_01" / "0000000001.png").is_file()
     right_entry = entries[1]
     assert right_entry["camera_id"] == 2
     assert right_entry["tvec"][0] == pytest.approx(-0.5)
@@ -157,10 +161,17 @@ def test_prepare_kitti360_stereo_mode_writes_two_cameras_and_right_pose(
     metadata = json.loads((dataset_dir / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["training_cameras"] == "stereo"
     assert metadata["num_frames"] == 2
-    assert metadata["num_images"] == 4
+    assert metadata["num_images"] == 2
     assert metadata["selected_frames"] == [0, 1]
+    assert metadata["split_counts"] == {"train": 1, "test": 1, "validation": 0}
+    assert metadata["frame_splits"] == {
+        "train": [0],
+        "test": [1],
+        "validation": [],
+    }
     assert metadata["right_camera_center_in_left"] == pytest.approx([0.5, 0.0, 0.0])
     assert metadata["camera_intrinsics"]["image_01"]["camera_id"] == 2
     assert metadata["frame_records"][0]["images"][1]["image_name"] == (
         "image_01/0000000000.png"
     )
+    assert metadata["frame_records"][1]["split"] == "test"

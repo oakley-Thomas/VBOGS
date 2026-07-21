@@ -12,6 +12,7 @@ def make_args(tmp_path, *, gaussian_type="implicit3D"):
         resolution=4,
         iterations=30000,
         llffhold=8,
+        eval=True,
         gaussian_type=gaussian_type,
         feat_dim=12,
         base_layer=8,
@@ -33,6 +34,7 @@ def test_build_config_keeps_implicit_neural_defaults(tmp_path):
     assert model_kwargs["visible_threshold"] == 0.03
     assert optim_params["mlp_opacity_lr_max_steps"] == 30000
     assert "opacity_lr" not in optim_params
+    assert cfg["model_params"]["eval"] is True
 
 
 def test_build_config_can_select_explicit_3d_gaussians(tmp_path):
@@ -64,3 +66,12 @@ def test_resolve_gui_port_offsets_by_gpu_index():
     assert resolve_gui_port("-1", None) == 6009
     assert resolve_gui_port("cuda:1", None) == 6009
     assert resolve_gui_port("1", 6200) == 6200
+
+
+def test_build_config_can_disable_octree_eval_split(tmp_path):
+    args = make_args(tmp_path)
+    args.eval = False
+
+    cfg = build_config(args)
+
+    assert cfg["model_params"]["eval"] is False

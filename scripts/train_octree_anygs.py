@@ -193,6 +193,15 @@ def parse_args() -> argparse.Namespace:
         help="Held-out test frame cadence for eval mode.",
     )
     parser.add_argument(
+        "--eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable Octree-AnyGS eval-mode train/test splitting. Use --no-eval "
+            "when the prepared dataset already contains only training images."
+        ),
+    )
+    parser.add_argument(
         "--gaussian-type",
         choices=GAUSSIAN_TYPES,
         default="implicit3D",
@@ -297,6 +306,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params["vbogs_dataset_name"] = args.dataset_name
     model_params["resolution"] = args.resolution
     model_params["llffhold"] = args.llffhold
+    model_params["eval"] = bool(args.eval)
 
     model_kwargs = model_params["model_config"]["kwargs"]
     if gaussian_type == "implicit3D":

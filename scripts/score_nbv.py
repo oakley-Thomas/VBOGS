@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vbogs.io import save_json
+from vbogs.dataset_splits import load_split_metadata, metadata_cameras_for_split
 from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
 
@@ -75,13 +76,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--iteration", type=int, default=-1)
     parser.add_argument("--octree-root", type=Path, default=Path("Octree-AnyGS"))
-    parser.add_argument("--candidate-source", choices=("test", "train", "lattice"), default="test")
+    parser.add_argument("--candidate-source", choices=("test", "train", "validation", "lattice"), default="test")
+    parser.add_argument(
+        "--selection-metadata",
+        type=Path,
+        default=None,
+        help=(
+            "Prepared NCore metadata.json used for metadata-backed test and "
+            "validation candidates. Defaults to /data/COLMAP/<drive>/metadata.json."
+        ),
+    )
     parser.add_argument("--max-candidates", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--eps", type=float, default=1e-6)
     parser.add_argument("--force-all-levels", action="store_true")
     parser.add_argument("--save-top-images", type=int, default=0)
-    parser.add_argument("--reference-source", choices=("test", "train"), default="test")
+    parser.add_argument("--reference-source", choices=("test", "train", "validation"), default="test")
     parser.add_argument("--reference-index", type=int, default=0)
     parser.add_argument("--lattice-radii", default="0,5,10")
     parser.add_argument("--lattice-yaws-deg", default="-30,0,30")
@@ -104,6 +114,12 @@ def resolve_u_path(args: argparse.Namespace) -> Path:
     if args.u_path is not None:
         return args.u_path.resolve()
     return (Path("data/m4") / args.drive / "U.npy").resolve()
+
+
+def resolve_selection_metadata(args: argparse.Namespace) -> Path:
+    if args.selection_metadata is not None:
+        return args.selection_metadata.resolve()
+    return (Path("/data/COLMAP") / args.drive / "metadata.json").resolve()
 
 
 def parse_float_list(raw: str) -> List[float]:
@@ -132,7 +148,7 @@ def load_octree_scene(model_path: Path, iteration: int, octree_root: Path, quiet
     gaussians.ape_code = -1
     scene = Scene(dataset, opt, gaussians, load_iteration=iteration, shuffle=False)
     gaussians.eval()
-    return scene, gaussians, pipe
+    return scene, gaussians, pipe, int(dataset.resolution)
 
 
 def camera_to_c2w(cam) -> np.ndarray:
@@ -178,15 +194,65 @@ def make_lattice_candidates(reference_cam, args: argparse.Namespace) -> List[Sca
     return candidates
 
 
-def select_base_cameras(scene, source: str) -> Sequence:
-    return scene.getTestCameras() if source == "test" else scene.getTrainCameras()
+def select_base_cameras(
+    scene,
+    source: str,
+    *,
+    split_metadata: dict,
+    resolution: int,
+) -> Sequence:
+    train_cameras = list(scene.getTrainCameras())
+    reference = train_cameras[0] if train_cameras else None
+    if source == "train":
+        return train_cameras
+    if source in ("test", "validation"):
+        cameras = metadata_cameras_for_split(
+            split_metadata,
+            source,
+            resolution_arg=resolution,
+            source_cam=reference,
+        )
+        if cameras:
+            return cameras
+        if source == "test":
+            return scene.getTestCameras()
+    raise ValueError(f"No {source} cameras available")
 
 
-def build_candidates(scene, args: argparse.Namespace) -> List:
+def build_candidates(
+    scene,
+    args: argparse.Namespace,
+    *,
+    split_metadata: dict,
+    resolution: int,
+) -> List:
     if args.candidate_source in ("test", "train"):
-        candidates = list(select_base_cameras(scene, args.candidate_source))
+        candidates = list(
+            select_base_cameras(
+                scene,
+                args.candidate_source,
+                split_metadata=split_metadata,
+                resolution=resolution,
+            )
+        )
+    elif args.candidate_source == "validation":
+        candidates = list(
+            select_base_cameras(
+                scene,
+                "validation",
+                split_metadata=split_metadata,
+                resolution=resolution,
+            )
+        )
     else:
-        reference_cams = list(select_base_cameras(scene, args.reference_source))
+        reference_cams = list(
+            select_base_cameras(
+                scene,
+                args.reference_source,
+                split_metadata=split_metadata,
+                resolution=resolution,
+            )
+        )
         if not reference_cams:
             raise ValueError(f"No {args.reference_source} cameras available for lattice reference")
         reference = reference_cams[min(args.reference_index, len(reference_cams) - 1)]
@@ -226,17 +292,24 @@ def main() -> None:
     args = parse_args()
     model_path = resolve_model_path(args)
     u_path = resolve_u_path(args)
+    split_metadata_path = resolve_selection_metadata(args)
+    split_metadata = load_split_metadata(split_metadata_path)
     output_root = (args.output_root or (Path("data/m6") / args.drive)).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
-    scene, gaussians, _pipe = load_octree_scene(model_path, args.iteration, args.octree_root, args.quiet)
+    scene, gaussians, _pipe, resolution = load_octree_scene(model_path, args.iteration, args.octree_root, args.quiet)
     u_values_np = np.load(u_path).astype(np.float32)
     if u_values_np.shape[0] != gaussians.get_anchor.shape[0]:
         raise ValueError(
             f"U length {u_values_np.shape[0]} does not match anchor count {gaussians.get_anchor.shape[0]}"
         )
     per_anchor_scalar = torch.from_numpy(u_values_np).to(device="cuda", dtype=torch.float32)
-    candidates = build_candidates(scene, args)
+    candidates = build_candidates(
+        scene,
+        args,
+        split_metadata=split_metadata,
+        resolution=resolution,
+    )
 
     rows = []
     top_payloads = []
@@ -275,6 +348,7 @@ def main() -> None:
         "model_path": str(model_path),
         "u_path": str(u_path),
         "candidate_source": args.candidate_source,
+        "selection_metadata": str(split_metadata_path) if split_metadata else None,
         "candidate_count": len(candidates),
         "top_k": top_k,
         "best_pose": top_k[0],

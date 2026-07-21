@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vbogs.data_layout import resolve_kitti360_path
+from vbogs.dataset_splits import frames_for_split, load_split_metadata
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,15 @@ def parse_args() -> argparse.Namespace:
         "--write-ply",
         action="store_true",
         help="Also write a `.ply` copy for viewer-based sanity checks.",
+    )
+    parser.add_argument(
+        "--frame-split",
+        choices=("train", "test", "validation", "all"),
+        default="all",
+        help=(
+            "Frame split exported when --selection-metadata contains split "
+            "metadata. With no metadata, only `all` is supported."
+        ),
     )
     parser.add_argument(
         "--matcher",
@@ -338,12 +348,12 @@ def parse_cam0_to_world(path: Path) -> Dict[int, FramePose]:
     return poses
 
 
-def load_selected_frames(path: Path) -> List[int]:
-    metadata = json.loads(path.read_text(encoding="utf-8"))
-    selected = metadata.get("selected_frames")
-    if not isinstance(selected, list) or not selected:
-        raise ValueError(f"`selected_frames` missing or empty in {path}")
-    return [int(frame_id) for frame_id in selected]
+def load_selected_frames(path: Path, frame_split: str = "all") -> List[int]:
+    metadata = load_split_metadata(path)
+    selected = frames_for_split(metadata, frame_split)
+    if not selected:
+        raise ValueError(f"`{frame_split}` frame split missing or empty in {path}")
+    return selected
 
 
 def sample_drive_frames(
@@ -573,12 +583,15 @@ def export_points(args: argparse.Namespace) -> Path:
 
     calibration = parse_perspective_file(perspective_path)
     poses_by_frame = parse_cam0_to_world(poses_path)
+    frame_split = getattr(args, "frame_split", "all")
     if args.selection_metadata is not None:
-        selected_frame_ids = load_selected_frames(args.selection_metadata)
+        selected_frame_ids = load_selected_frames(args.selection_metadata, frame_split)
         frames = select_frames_from_metadata(left_dir, right_dir, poses_by_frame, selected_frame_ids)
         if args.max_frames:
             frames = frames[: args.max_frames]
     else:
+        if frame_split != "all":
+            raise ValueError("--frame-split requires --selection-metadata unless it is `all`")
         frames = sample_drive_frames(left_dir, right_dir, poses_by_frame, args.frame_step, args.max_frames)
 
     output_dir = args.output_root / args.drive
@@ -658,6 +671,7 @@ def export_points(args: argparse.Namespace) -> Path:
         "num_frames": len(frames),
         "num_points": int(xyz.shape[0]),
         "selection_metadata": str(args.selection_metadata) if args.selection_metadata else None,
+        "frame_split": frame_split,
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
         "intrinsics": {
