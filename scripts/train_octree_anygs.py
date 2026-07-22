@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -251,6 +252,15 @@ def parse_args() -> argparse.Namespace:
         help="Generate the config but do not launch training.",
     )
     parser.add_argument(
+        "--run-record",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON output recording the newly created Octree run path "
+            "and saved iterations. Useful for experiment orchestration."
+        ),
+    )
+    parser.add_argument(
         "--python",
         default=sys.executable,
         help="Python interpreter used to launch Octree-AnyGS/train.py.",
@@ -399,8 +409,42 @@ def main() -> None:
         "--port",
         str(resolve_gui_port(args.gpu, args.port)),
     ]
+    scene_name = args.scene_name or args.dataset_path.name
+    scene_output_root = args.output_root.resolve() / scene_name
+    before = {
+        path.resolve()
+        for path in scene_output_root.iterdir()
+        if scene_output_root.exists() and path.is_dir() and (path / "config.yaml").exists()
+    } if scene_output_root.exists() else set()
+
     print("Launching:", " ".join(cmd))
     subprocess.run(cmd, cwd=str(octree_root.parent), check=True)
+
+    if args.run_record is not None:
+        after = {
+            path.resolve()
+            for path in scene_output_root.iterdir()
+            if path.is_dir() and (path / "config.yaml").exists()
+        }
+        created = sorted(after - before)
+        if len(created) != 1:
+            raise RuntimeError(
+                f"Expected exactly one new Octree run under {scene_output_root}, found {created}"
+            )
+        model_path = created[0]
+        iterations = sorted(
+            int(path.name.removeprefix("iteration_"))
+            for path in (model_path / "point_cloud").glob("iteration_*")
+            if path.is_dir() and path.name.removeprefix("iteration_").isdigit()
+        )
+        payload = {
+            "model_path": str(model_path),
+            "generated_config": str(config_path.resolve()),
+            "iterations": iterations,
+        }
+        args.run_record.parent.mkdir(parents=True, exist_ok=True)
+        args.run_record.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote run record: {args.run_record}")
 
 
 if __name__ == "__main__":

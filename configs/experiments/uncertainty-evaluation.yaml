@@ -1,0 +1,108 @@
+schema_version: 1
+
+outputs:
+  report_root: outputs/experiments/uncertainty-evaluation
+  work_root: data/experiments/uncertainty-evaluation
+  octree_root: /data/OCTREE-ANYGS/uncertainty-evaluation
+
+runtime:
+  gpu: "0"
+  jax_device: 0
+
+datasets:
+  kitti360:
+    frame_step: 1
+    max_frames: 1000
+    copy_mode: symlink
+    training_cameras: left
+    seed_mode: stereo
+    point_source: stereo
+    camera_ids: []
+  nvidia_ncore:
+    frame_step: 2
+    max_frames: 200
+    copy_mode: copy
+    seed_mode: lidar
+    point_source: lidar
+    lidar_id: lidar_top_360fov
+    camera_ids:
+      - camera_front_wide_120fov
+      - camera_front_tele_30fov
+
+octree:
+  iterations: 90000
+  gaussian_type: explicit3D
+  feat_dim: 16
+  eval: false
+  profiles:
+    - name: production
+      resolution: 2
+      base_layer: 10
+      visible_threshold: 0.01
+    - name: coarse_resolution
+      resolution: 4
+      base_layer: 10
+      visible_threshold: 0.01
+    - name: shallower_lod
+      resolution: 2
+      base_layer: 9
+      visible_threshold: 0.01
+    - name: stronger_pruning
+      resolution: 2
+      base_layer: 10
+      visible_threshold: 0.02
+
+points:
+  pixel_step: 1
+  max_points_per_frame: 100000
+  matcher: sgbm
+  write_ply: true
+
+bucket:
+  point_chunk_size: 1000000
+  max_points: 10000000
+
+fit:
+  batch_size: 5000
+  fit_mode: batched
+  batch_buckets: 64,128,256,512,1024,2048,4096,5000
+  vmap_group_size: 64
+  max_padded_points_per_group: 0
+  k_init: 10
+  k_growth_factor: 2
+  k_growth_min_points: 256
+  seed: 0
+  profiles:
+    - name: baseline
+      k_max: 40
+      min_points_per_anchor: 20
+      elbo_improvement_tol: 0.01
+    - name: low_capacity
+      k_max: 20
+      min_points_per_anchor: 20
+      elbo_improvement_tol: 0.01
+    - name: inclusive_sparse
+      k_max: 40
+      min_points_per_anchor: 10
+      elbo_improvement_tol: 0.01
+    - name: strict_observed
+      k_max: 40
+      min_points_per_anchor: 40
+      elbo_improvement_tol: 0.01
+    - name: conservative_growth
+      k_max: 40
+      min_points_per_anchor: 20
+      elbo_improvement_tol: 0.02
+
+evaluation:
+  resolution: 2
+  max_views: 0
+  save_test_images: true
+
+smoke:
+  max_frames: 16
+  iterations: 2000
+  octree_profile_count: 1
+  uncertainty_profile_count: 3
+  max_points: 200000
+  max_views: 4
