@@ -50,6 +50,7 @@ STAGES = (
     "uncertainty-validation",
     "uncertainty-select",
     "test",
+    "export",
     "report",
 )
 
@@ -605,6 +606,143 @@ class Experiment:
             ),
         )
 
+    def export_artifacts(self) -> None:
+        """Copy the locked splat and uncertainty into the report root for local viewing."""
+
+        export = self.config.get("export", {})
+        if not export.get("enabled", True):
+            print("Export disabled in config; skipping")
+            return
+
+        destination = self.root / "export"
+        if self.args.dry_run:
+            print(f"+ would export selected splat and uncertainty into {destination}")
+            return
+
+        lock = self.verify_lock()
+        paths = {name: Path(path) for name, path in lock["artifact_paths"].items()}
+        iteration = int(lock["iteration"])
+        splat_dir = destination / "splat"
+        uncertainty_dir = destination / "uncertainty"
+        iteration_dir = splat_dir / "point_cloud" / f"iteration_{iteration}"
+
+        if destination.exists():
+            shutil.rmtree(destination)
+        iteration_dir.parent.mkdir(parents=True, exist_ok=True)
+        uncertainty_dir.mkdir(parents=True, exist_ok=True)
+
+        # Mirror the Octree model layout so `export/splat` works directly as --model-path.
+        shutil.copytree(paths["model_iteration"], iteration_dir)
+        shutil.copy2(paths["model_config"], splat_dir / "config.yaml")
+        cfg_args = paths["model_config"].parent / "cfg_args"
+        if cfg_args.exists():
+            shutil.copy2(cfg_args, splat_dir / "cfg_args")
+
+        shutil.copy2(paths["uncertainty"], uncertainty_dir / "U.npy")
+        source_dir = paths["uncertainty"].parent
+        optional = ["uncertainty_metadata.json", "uncertainty_histogram.png"]
+        if export.get("include_uncertainty_components", True):
+            optional.append("uncertainty_components.npz")
+        for name in optional:
+            candidate = source_dir / name
+            if candidate.exists():
+                shutil.copy2(candidate, uncertainty_dir / name)
+        if export.get("include_posterior", False):
+            shutil.copy2(paths["posterior"], uncertainty_dir / "anchor_posterior.npz")
+
+        anchor_ply = iteration_dir / "point_cloud_anchor.ply"
+        colored_ply = uncertainty_dir / "uncertainty_anchors.ply"
+        if export.get("write_colored_anchor_ply", True) and anchor_ply.exists():
+            self.runner.run(
+                TORCH_SERVICE,
+                [
+                    "python", "scripts/export_uncertainty_ply.py",
+                    "--anchor-ply", container_path(anchor_ply),
+                    "--u-path", container_path(uncertainty_dir / "U.npy"),
+                    "--output", container_path(colored_ply),
+                    "--colormap", str(export.get("colormap", "viridis")),
+                    "--clip-percentile", str(export.get("color_clip_percentile", 99.0)),
+                ],
+            )
+
+        files = sorted(
+            path for path in destination.rglob("*") if path.is_file()
+        )
+        manifest = {
+            "schema_version": 1,
+            "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+            "octree_profile": lock["octree_profile"],
+            "uncertainty_profile": lock["uncertainty_profile"],
+            "iteration": iteration,
+            "source_model_path": lock["model_path"],
+            "source_u_path": lock["u_path"],
+            "source_posterior_path": lock["posterior_path"],
+            "locked_artifact_hashes": lock["artifact_hashes"],
+            "exported_bytes": sum(path.stat().st_size for path in files),
+            "files": [path.relative_to(destination).as_posix() for path in files],
+        }
+        save_json(destination / "export_manifest.json", manifest)
+        self.write_export_readme(destination, lock, iteration, colored_ply.exists())
+        total_mb = manifest["exported_bytes"] / (1024 * 1024)
+        print(f"Exported {len(files)} files ({total_mb:.1f} MiB) to {destination}")
+
+    def write_export_readme(
+        self, destination: Path, lock: dict[str, Any], iteration: int, colored: bool
+    ) -> None:
+        gaussian_type = str(self.config["octree"]["gaussian_type"])
+        lines = [
+            "# Exported scene and uncertainty",
+            "",
+            f"- Octree profile: `{lock['octree_profile']}` at iteration `{iteration}`",
+            f"- Uncertainty profile: `{lock['uncertainty_profile']}`",
+            f"- Gaussian type: `{gaussian_type}`",
+            "",
+            "These files are byte-identical copies of the artifacts recorded in",
+            "`../selection.lock.json`. Hashes are repeated in `export_manifest.json`.",
+            "",
+            "## Viewing the splat",
+            "",
+            f"`splat/point_cloud/iteration_{iteration}/` contains:",
+            "",
+            "- `point_cloud_gs.ply` — expanded Gaussians. This is the file to open in a",
+            "  standard 3DGS viewer (SuperSplat, Splatviz, antimatter15/splat).",
+            "- `point_cloud_anchor.ply` — Octree anchors. Requires Octree-AnyGS to render;",
+            "  most generic splat viewers will not decode it correctly.",
+            "",
+            "`splat/` mirrors the Octree model layout, so it can be passed straight back in:",
+            "",
+            "```bash",
+            "python scripts/evaluate_uncertainty_views.py \\",
+            "  --model-path <path to>/export/splat \\",
+            f"  --iteration {iteration} ...",
+            "```",
+            "",
+            "## Viewing the uncertainty",
+            "",
+            "- `uncertainty/U.npy` — per-anchor scalar, indexed in anchor order and the same",
+            "  length as the anchor cloud.",
+        ]
+        if colored:
+            lines.extend(
+                [
+                    "- `uncertainty/uncertainty_anchors.ply` — anchor positions colored by `U`.",
+                    "  Open in CloudCompare, MeshLab, or any point-cloud viewer. Color range is",
+                    "  recorded in the ply `obj_info` header; the raw value is kept per-vertex as",
+                    "  the `uncertainty` property so you can re-map it yourself.",
+                ]
+            )
+        lines.extend(
+            [
+                "- `uncertainty/uncertainty_metadata.json` — anchor counts and summary statistics.",
+                "",
+                "Unobserved anchors are assigned the maximum uncertainty rather than a fitted",
+                "value. Check `unobserved_anchor_count` in the metadata before reading the high",
+                "end of the color ramp as a model result.",
+                "",
+            ]
+        )
+        (destination / "README.md").write_text("\n".join(lines), encoding="utf-8")
+
     def run_stage(self, stage: str) -> None:
         actions = {
             "prepare": self.prepare,
@@ -617,6 +755,7 @@ class Experiment:
             "uncertainty-validation": self.evaluate_uncertainty_validation,
             "uncertainty-select": lambda: self.analyze("uncertainty"),
             "test": self.evaluate_test,
+            "export": self.export_artifacts,
             "report": lambda: self.analyze("report"),
         }
         actions[stage]()

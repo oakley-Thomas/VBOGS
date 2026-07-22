@@ -99,6 +99,14 @@ evaluation:
   max_views: 0
   save_test_images: true
 
+export:
+  enabled: true
+  include_posterior: false
+  include_uncertainty_components: true
+  write_colored_anchor_ply: true
+  colormap: viridis
+  color_clip_percentile: 99.0
+
 smoke:
   max_frames: 16
   iterations: 2000

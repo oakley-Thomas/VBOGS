@@ -108,6 +108,7 @@ uncertainty-fit
 uncertainty-validation
 uncertainty-select
 test
+export
 report
 ```
 
@@ -152,8 +153,40 @@ test/summary.json
 test/per_view.json
 test/renders/
 plots/
+export/
 report.md
 ```
+
+## Exported scene and uncertainty
+
+The `export` stage copies the validation-selected splat and uncertainty into the report
+directory so a single download is enough to visualize the run locally:
+
+```text
+export/README.md
+export/export_manifest.json
+export/splat/config.yaml
+export/splat/point_cloud/iteration_<N>/point_cloud_gs.ply
+export/splat/point_cloud/iteration_<N>/point_cloud_anchor.ply
+export/uncertainty/U.npy
+export/uncertainty/uncertainty_anchors.ply
+export/uncertainty/uncertainty_metadata.json
+```
+
+With the default `explicit3D` gaussian type, `point_cloud_gs.ply` holds expanded Gaussians
+and opens in a standard 3DGS viewer. `point_cloud_anchor.ply` holds Octree anchors and
+needs Octree-AnyGS to render. `export/splat` mirrors the Octree model layout, so it can be
+passed back as `--model-path` without rearranging anything.
+
+`uncertainty_anchors.ply` is the anchor cloud colored by per-anchor `U`, viewable in
+CloudCompare or MeshLab. It keeps the raw scalar as a per-vertex `uncertainty` property,
+and the color range is written into the ply `obj_info` header. Unobserved anchors take the
+maximum uncertainty rather than a fitted value, so read `unobserved_anchor_count` in
+`uncertainty_metadata.json` before interpreting the high end of the ramp.
+
+Export re-verifies `selection.lock.json` before copying, and repeats the locked hashes in
+`export_manifest.json`. The `export:` config block turns the stage off, adds the full
+`anchor_posterior.npz`, or changes the colormap and clip percentile.
 
 Large working data stays outside the report directory:
 

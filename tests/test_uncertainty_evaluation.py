@@ -387,3 +387,61 @@ def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
     assert "--split validation" in completed.stdout
     assert "--split test" in completed.stdout
     assert "--no-eval" in completed.stdout
+
+
+def test_export_uncertainty_ply_colors_anchors(tmp_path):
+    plyfile = pytest.importorskip("plyfile")
+    pytest.importorskip("matplotlib")
+
+    anchor_ply = tmp_path / "point_cloud_anchor.ply"
+    xyz = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+    elements = np.empty(3, dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("opacity", "f4")])
+    elements["x"], elements["y"], elements["z"] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    elements["opacity"] = 0.0
+    plyfile.PlyData([plyfile.PlyElement.describe(elements, "vertex")]).write(anchor_ply)
+
+    u_path = tmp_path / "U.npy"
+    np.save(u_path, np.array([0.0, 0.5, 1.0], dtype=np.float32))
+    output = tmp_path / "uncertainty_anchors.ply"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "export_uncertainty_ply.py"),
+            "--anchor-ply", str(anchor_ply),
+            "--u-path", str(u_path),
+            "--output", str(output),
+        ],
+        check=True,
+    )
+
+    written = plyfile.PlyData.read(output)["vertex"]
+    assert np.allclose(np.asarray(written["x"]), xyz[:, 0])
+    assert np.allclose(np.asarray(written["uncertainty"]), [0.0, 0.5, 1.0])
+    colors = np.stack([np.asarray(written[c]) for c in ("red", "green", "blue")], axis=1)
+    assert colors.dtype == np.uint8
+    assert not np.array_equal(colors[0], colors[2])
+
+
+def test_export_uncertainty_ply_rejects_length_mismatch(tmp_path):
+    plyfile = pytest.importorskip("plyfile")
+
+    anchor_ply = tmp_path / "point_cloud_anchor.ply"
+    elements = np.zeros(3, dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")])
+    plyfile.PlyData([plyfile.PlyElement.describe(elements, "vertex")]).write(anchor_ply)
+    u_path = tmp_path / "U.npy"
+    np.save(u_path, np.zeros(2, dtype=np.float32))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "export_uncertainty_ply.py"),
+            "--anchor-ply", str(anchor_ply),
+            "--u-path", str(u_path),
+            "--output", str(tmp_path / "out.ply"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "does not match the anchor count" in result.stderr
