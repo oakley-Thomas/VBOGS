@@ -71,8 +71,11 @@ def metric_values(render, ground_truth, lpips_model) -> dict[str, float]:
     from utils.image_utils import psnr
     from utils.loss_utils import ssim
 
-    render_batch = render.unsqueeze(0)
-    gt_batch = ground_truth.unsqueeze(0)
+    # Octree-AnyGS's PSNR helper flattens with Tensor.view(), which requires a
+    # contiguous layout. PILtoTorch returns a channel-permuted tensor and model
+    # renders may also be sliced views, so normalize both layouts here.
+    render_batch = render.contiguous().unsqueeze(0)
+    gt_batch = ground_truth.contiguous().unsqueeze(0)
     return {
         "PSNR": float(psnr(render_batch, gt_batch).mean().item()),
         "SSIM": float(ssim(render_batch, gt_batch).mean().item()),

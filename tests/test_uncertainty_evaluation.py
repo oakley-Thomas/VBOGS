@@ -343,6 +343,24 @@ def test_reference_psnr_matches_upstream_octree_when_torch_is_available():
     )
 
 
+def test_gpu_metric_adapter_accepts_channel_permuted_tensors_when_available():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root / "Octree-AnyGS"))
+    from scripts.evaluate_uncertainty_views import metric_values
+
+    class ZeroLpips:
+        def __call__(self, render, ground_truth):
+            return torch.zeros((render.shape[0],), dtype=render.dtype, device=render.device)
+
+    render = torch.zeros((2, 2, 3), dtype=torch.float32).permute(2, 0, 1)
+    ground_truth = torch.full((2, 2, 3), 0.1, dtype=torch.float32).permute(2, 0, 1)
+    assert not render.is_contiguous()
+    values = metric_values(render, ground_truth, ZeroLpips())
+    assert values["PSNR"] == pytest.approx(20.0, abs=1.0e-5)
+
+
 @pytest.mark.parametrize("dataset,scene", [("kitti360", "drive"), ("nvidia_ncore", "clip")])
 def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
     repo_root = Path(__file__).resolve().parents[1]
