@@ -1,0 +1,950 @@
+#!/usr/bin/env python3
+
+"""Run the two-stage VBOGS Uncertainty-Evaluation experiment."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.export_local_viewer_run import copy_prepared_colmap_for_viewer
+from scripts.run_drive_pipeline import (
+    JAX_SERVICE,
+    TORCH_SERVICE,
+    current_container_project,
+    require_container_runtime,
+    resolve_service_container,
+)
+from vbogs.uncertainty_evaluation import (
+    canonical_json_hash,
+    expected_training_image_count,
+    split_fingerprint,
+    validate_split_integrity,
+    verify_selection_lock,
+)
+
+
+DEFAULT_CONFIG = Path("configs/experiments/uncertainty-evaluation.yaml")
+STAGES = (
+    "prepare",
+    "octree-train",
+    "octree-validation",
+    "octree-select",
+    "points",
+    "bucket",
+    "uncertainty-fit",
+    "uncertainty-validation",
+    "uncertainty-select",
+    "test",
+    "export",
+    "report",
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset-name", choices=("kitti360", "nvidia_ncore"), required=True)
+    parser.add_argument("--scene-id", required=True)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--start-at", choices=STAGES, default="prepare")
+    parser.add_argument("--stop-after", choices=STAGES, default="report")
+    parser.add_argument("--gpu", default=None)
+    parser.add_argument("--jax-device", type=int, default=None)
+    parser.add_argument("--frame-step", type=int, default=None)
+    parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--camera-id", action="append", dest="camera_ids", default=None)
+    return parser.parse_args()
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        value = yaml.safe_load(handle)
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise ValueError("Uncertainty-Evaluation config must be a schema_version: 1 object")
+    return value
+
+
+def effective_config(args: argparse.Namespace) -> dict[str, Any]:
+    config = copy.deepcopy(load_config(args.config))
+    dataset = config["datasets"][args.dataset_name]
+    if args.gpu is not None:
+        config["runtime"]["gpu"] = args.gpu
+    if args.jax_device is not None:
+        config["runtime"]["jax_device"] = args.jax_device
+    if args.frame_step is not None:
+        dataset["frame_step"] = args.frame_step
+    if args.max_frames is not None:
+        dataset["max_frames"] = args.max_frames
+    if args.camera_ids is not None:
+        dataset["camera_ids"] = args.camera_ids
+    if args.smoke:
+        smoke = config["smoke"]
+        dataset["max_frames"] = int(smoke["max_frames"])
+        config["octree"]["iterations"] = int(smoke["iterations"])
+        config["octree"]["profiles"] = config["octree"]["profiles"][
+            : int(smoke["octree_profile_count"])
+        ]
+        config["fit"]["profiles"] = config["fit"]["profiles"][
+            : int(smoke["uncertainty_profile_count"])
+        ]
+        config["bucket"]["max_points"] = int(smoke["max_points"])
+        config["evaluation"]["max_views"] = int(smoke["max_views"])
+    if not config["octree"]["profiles"] or not config["fit"]["profiles"]:
+        raise ValueError("Experiment config must contain Octree and uncertainty profiles")
+    for section in ("octree", "fit"):
+        names = [str(profile.get("name", "")) for profile in config[section]["profiles"]]
+        if len(names) != len(set(names)):
+            raise ValueError(f"{section} profile names must be unique")
+        for name in names:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or name in (".", ".."):
+                raise ValueError(f"Unsafe {section} profile name: {name!r}")
+    return config
+
+
+def save_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    return value
+
+
+def container_path(path: Path) -> str:
+    absolute = path.resolve()
+    try:
+        relative = absolute.relative_to(REPO_ROOT)
+    except ValueError:
+        return str(absolute)
+    return str(Path("/workspace/VBOGS") / relative)
+
+
+class ServiceRunner:
+    def __init__(self, *, dry_run: bool):
+        self.dry_run = dry_run
+        self.project = current_container_project() if not dry_run else ""
+        self._containers: dict[str, str] = {}
+
+    def run(self, service: str, command: Sequence[str]) -> None:
+        if self.dry_run:
+            prefix = ["docker", "exec", "-i", "-w", "/workspace/VBOGS", f"<{service}>"]
+        else:
+            container = self._containers.get(service)
+            if container is None:
+                container = resolve_service_container(service, project=self.project, dry_run=False)
+                self._containers[service] = container
+            prefix = ["docker", "exec", "-i", "-w", "/workspace/VBOGS", container]
+        full = [*prefix, *command]
+        print("+ " + shlex.join(full), flush=True)
+        if not self.dry_run:
+            subprocess.run(full, check=True)
+
+
+class Experiment:
+    def __init__(self, args: argparse.Namespace, config: dict[str, Any]):
+        self.args = args
+        self.config = config
+        self.config_hash = canonical_json_hash(config)
+        default_run = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.run_id = args.run_id or default_run
+        outputs = config["outputs"]
+        self.root = (
+            REPO_ROOT
+            / outputs["report_root"]
+            / args.dataset_name
+            / args.scene_id
+            / self.run_id
+        ).resolve()
+        self.work_root = (
+            REPO_ROOT
+            / outputs["work_root"]
+            / args.dataset_name
+            / args.scene_id
+            / self.run_id
+        ).resolve()
+        self.octree_root = (
+            Path(outputs["octree_root"])
+            / args.dataset_name
+            / args.scene_id
+            / self.run_id
+        )
+        self.metadata_path = Path("/data/COLMAP") / args.scene_id / "metadata.json"
+        self.runner = ServiceRunner(dry_run=args.dry_run)
+        self._octree_index: dict[str, Any] | None = None
+        self._selected_octree: dict[str, Any] | None = None
+        self._uncertainty_index: dict[str, Any] | None = None
+        self._dry_lock: dict[str, Any] | None = None
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.root / "experiment_manifest.json"
+
+    def marker(self, stage: str) -> Path:
+        return self.root / ".stages" / f"{stage}.json"
+
+    def is_complete(self, stage: str) -> bool:
+        return self.marker(stage).exists()
+
+    def mark(self, stage: str) -> None:
+        save_json(
+            self.marker(stage),
+            {"stage": stage, "completed_at_utc": datetime.now(timezone.utc).isoformat()},
+        )
+
+    def prepare_root(self) -> None:
+        if self.args.dry_run:
+            return
+        if self.root.exists() and not self.args.resume:
+            raise FileExistsError(
+                f"Experiment run already exists: {self.root}. Pass --resume with this --run-id."
+            )
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        if self.args.resume:
+            if not self.manifest_path.exists():
+                raise FileNotFoundError(f"Cannot resume without {self.manifest_path}")
+            manifest = read_json(self.manifest_path)
+            if manifest.get("config_hash") != self.config_hash:
+                raise ValueError("Refusing resume: effective experiment config hash changed")
+            if manifest.get("dataset") != self.args.dataset_name or manifest.get("scene_id") != self.args.scene_id:
+                raise ValueError("Refusing resume: dataset or scene differs from the manifest")
+            if self.metadata_path.exists():
+                active_metadata = read_json(self.metadata_path)
+                if split_fingerprint(active_metadata) != manifest.get("split_hash"):
+                    raise ValueError(
+                        "Refusing resume: /data/COLMAP prepared split no longer matches this run"
+                    )
+        else:
+            effective_path = self.root / "effective_config.yaml"
+            effective_path.write_text(yaml.safe_dump(self.config, sort_keys=False), encoding="utf-8")
+
+    def write_manifest(self, metadata: dict[str, Any]) -> None:
+        split_hash = split_fingerprint(metadata)
+        existing = read_json(self.manifest_path) if self.manifest_path.exists() else {}
+        if existing and existing.get("split_hash") != split_hash:
+            raise ValueError("Refusing to reuse an experiment root with different split metadata")
+        try:
+            git_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            git_commit = None
+        payload = {
+            "schema_version": 1,
+            "dataset": self.args.dataset_name,
+            "scene_id": self.args.scene_id,
+            "run_id": self.run_id,
+            "created_at_utc": existing.get("created_at_utc", datetime.now(timezone.utc).isoformat()),
+            "config_hash": self.config_hash,
+            "split_hash": split_hash,
+            "git_commit": git_commit,
+            "effective_config": str((self.root / "effective_config.yaml").resolve()),
+            "prepared_metadata": str((self.root / "prepared_metadata.json").resolve()),
+            "work_root": str(self.work_root),
+            "octree_root": str(self.octree_root),
+        }
+        save_json(self.manifest_path, payload)
+
+    def prepare(self) -> None:
+        dataset = self.config["datasets"][self.args.dataset_name]
+        if self.args.dataset_name == "kitti360":
+            command = [
+                "python", "scripts/prepare_kitti360_colmap.py",
+                "--drive", self.args.scene_id,
+                "--frame-step", str(dataset["frame_step"]),
+                "--max-frames", str(dataset["max_frames"]),
+                "--copy-mode", str(dataset["copy_mode"]),
+                "--training-cameras", str(dataset["training_cameras"]),
+                "--seed-mode", str(dataset["seed_mode"]),
+            ]
+        else:
+            command = [
+                "python", "scripts/prepare_nvidia_ncore_colmap.py",
+                "--scene-id", self.args.scene_id,
+                "--frame-step", str(dataset["frame_step"]),
+                "--max-frames", str(dataset["max_frames"]),
+                "--copy-mode", str(dataset["copy_mode"]),
+                "--seed-mode", str(dataset["seed_mode"]),
+                "--lidar-id", str(dataset["lidar_id"]),
+            ]
+            for camera_id in dataset.get("camera_ids", []):
+                command.extend(["--camera-id", str(camera_id)])
+        self.runner.run(TORCH_SERVICE, command)
+        if self.args.dry_run:
+            return
+        metadata = read_json(self.metadata_path)
+        validate_split_integrity(metadata)
+        expected_images = expected_training_image_count(metadata)
+        images_txt = self.metadata_path.parent / "sparse" / "0" / "images.txt"
+        payload_lines = [
+            line
+            for line in images_txt.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        actual_images = len(payload_lines) // 2
+        if len(payload_lines) % 2 or actual_images != expected_images:
+            raise ValueError(
+                "COLMAP leakage gate failed: images.txt does not contain exactly the train-split images "
+                f"(expected {expected_images}, found {actual_images})"
+            )
+        shutil.copy2(self.metadata_path, self.root / "prepared_metadata.json")
+        self.write_manifest(metadata)
+
+    def train_octree(self) -> None:
+        common = self.config["octree"]
+        gpu = str(self.config["runtime"]["gpu"])
+        profiles_index: list[dict[str, Any]] = []
+        for profile in common["profiles"]:
+            name = str(profile["name"])
+            profile_dir = self.root / "octree" / name
+            run_record = profile_dir / "run.json"
+            if self.args.resume and run_record.exists():
+                record = read_json(run_record)
+            else:
+                command = [
+                    "python", "scripts/train_octree_anygs.py",
+                    "--dataset-path", f"/data/COLMAP/{self.args.scene_id}",
+                    "--scene-name", self.args.scene_id,
+                    "--dataset-name", self.args.dataset_name,
+                    "--output-root", str(self.octree_root / name),
+                    "--output-config", container_path(profile_dir / "config.yaml"),
+                    "--run-record", container_path(run_record),
+                    "--gpu", gpu,
+                    "--resolution", str(profile["resolution"]),
+                    "--iterations", str(common["iterations"]),
+                    "--no-eval",
+                    "--gaussian-type", str(common["gaussian_type"]),
+                    "--feat-dim", str(common["feat_dim"]),
+                    "--base-layer", str(profile["base_layer"]),
+                    "--visible-threshold", str(profile["visible_threshold"]),
+                ]
+                self.runner.run(TORCH_SERVICE, command)
+                if self.args.dry_run:
+                    iterations = list(range(10000, int(common["iterations"]) + 1, 10000))
+                    if not iterations or iterations[-1] != int(common["iterations"]):
+                        iterations.append(int(common["iterations"]))
+                    record = {
+                        "model_path": str(self.octree_root / name / self.args.scene_id / "<timestamp>"),
+                        "generated_config": str(profile_dir / "config.yaml"),
+                        "iterations": iterations,
+                    }
+                else:
+                    record = read_json(run_record)
+            profiles_index.append({"name": name, **record})
+        self._octree_index = {"profiles": profiles_index}
+        if not self.args.dry_run:
+            save_json(self.root / "octree_runs.json", self._octree_index)
+
+    def evaluate_octree_validation(self) -> None:
+        index = self._octree_index or read_json(self.root / "octree_runs.json")
+        evaluation = self.config["evaluation"]
+        for profile in index["profiles"]:
+            for iteration in profile["iterations"]:
+                output = self.root / "validation" / "octree" / profile["name"] / f"iteration_{iteration}"
+                if self.args.resume and (output / "summary.json").exists():
+                    continue
+                command = self.evaluation_command(
+                    model_path=Path(profile["model_path"]),
+                    iteration=int(iteration),
+                    split="validation",
+                    output=output,
+                    u_path=None,
+                    save_images=False,
+                    max_views=int(evaluation["max_views"]),
+                )
+                self.runner.run(TORCH_SERVICE, command)
+
+    def analyze(self, phase: str) -> None:
+        if (
+            phase == "uncertainty"
+            and self.args.resume
+            and (self.root / "selection.lock.json").exists()
+        ):
+            self.verify_lock()
+            print("Selection lock already exists and passed hash verification")
+            return
+        self.runner.run(
+            TORCH_SERVICE,
+            [
+                "python", "scripts/analyze_uncertainty_evaluation.py",
+                "--experiment-root", container_path(self.root),
+                "--phase", phase,
+            ],
+        )
+        if self.args.dry_run and phase == "octree":
+            index = self._octree_index
+            assert index is not None
+            first = index["profiles"][0]
+            self._selected_octree = {
+                "profile": first["name"],
+                "profile_order": 0,
+                "iteration": int(first["iterations"][-1]),
+                "model_path": first["model_path"],
+            }
+        elif self.args.dry_run and phase == "uncertainty":
+            selected = self.selected_octree()
+            index = self._uncertainty_index
+            assert index is not None
+            profile = index["profiles"][0]
+            self._dry_lock = {
+                "model_path": selected["model_path"],
+                "iteration": selected["iteration"],
+                "u_path": profile["u_path"],
+            }
+
+    def export_points(self) -> None:
+        dataset = self.config["datasets"][self.args.dataset_name]
+        points = self.config["points"]
+        command = [
+            "python", "scripts/export_points_world.py",
+            "--dataset-name", self.args.dataset_name,
+            "--scene-id", self.args.scene_id,
+            "--point-source", str(dataset["point_source"]),
+            "--selection-metadata", str(self.metadata_path),
+            "--output-root", container_path(self.work_root / "points"),
+            "--frame-split", "train",
+            "--frame-step", str(dataset["frame_step"]),
+            "--max-frames", str(dataset["max_frames"]),
+            "--pixel-step", str(points["pixel_step"]),
+            "--max-points-per-frame", str(points["max_points_per_frame"]),
+            "--matcher", str(points["matcher"]),
+        ]
+        if points.get("write_ply"):
+            command.append("--write-ply")
+        if self.args.dataset_name == "nvidia_ncore":
+            command.extend(["--lidar-id", str(dataset["lidar_id"])])
+            for camera_id in dataset.get("camera_ids", []):
+                command.extend(["--camera-id", str(camera_id)])
+        self.runner.run(TORCH_SERVICE, command)
+        if not self.args.dry_run:
+            point_metadata_path = (
+                self.work_root / "points" / self.args.scene_id / "points_world_metadata.json"
+            )
+            point_metadata = read_json(point_metadata_path)
+            if point_metadata.get("frame_split") != "train":
+                raise ValueError(
+                    f"Point export leakage gate expected frame_split=train in {point_metadata_path}"
+                )
+
+    def selected_octree(self) -> dict[str, Any]:
+        if self._selected_octree is not None:
+            return self._selected_octree
+        return read_json(self.root / "octree_selection.json")["selected"]
+
+    def bucket(self) -> None:
+        selected = self.selected_octree()
+        bucket = self.config["bucket"]
+        points_path = self.work_root / "points" / self.args.scene_id / "points_world.npz"
+        command = [
+            "python", "scripts/bucket_points.py",
+            "--drive", self.args.scene_id,
+            "--model-path", selected["model_path"],
+            "--iteration", str(selected["iteration"]),
+            "--points-world", container_path(points_path),
+            "--output-root", container_path(self.work_root / "bucket"),
+            "--point-chunk-size", str(bucket["point_chunk_size"]),
+            "--max-points", str(bucket["max_points"]),
+        ]
+        self.runner.run(TORCH_SERVICE, command)
+
+    def fit_uncertainty(self) -> None:
+        fit = self.config["fit"]
+        index: list[dict[str, Any]] = []
+        for profile in fit["profiles"]:
+            name = str(profile["name"])
+            output = self.work_root / "uncertainty" / name
+            posterior = output / "anchor_posterior.npz"
+            u_path = output / "U.npy"
+            if not (self.args.resume and posterior.exists()):
+                command = [
+                    "python", "scripts/fit_anchors.py",
+                    "--drive", self.args.scene_id,
+                    "--bucket-root", container_path(self.work_root / "bucket"),
+                    "--output-root", container_path(output),
+                    "--device", str(self.config["runtime"]["jax_device"]),
+                    "--seed", str(fit["seed"]),
+                    "--batch-size", str(fit["batch_size"]),
+                    "--fit-mode", str(fit["fit_mode"]),
+                    "--batch-buckets", str(fit["batch_buckets"]),
+                    "--vmap-group-size", str(fit["vmap_group_size"]),
+                    "--max-padded-points-per-group", str(fit["max_padded_points_per_group"]),
+                    "--k-init", str(fit["k_init"]),
+                    "--k-max", str(profile["k_max"]),
+                    "--k-growth-factor", str(fit["k_growth_factor"]),
+                    "--k-growth-min-points", str(fit["k_growth_min_points"]),
+                    "--min-points-per-anchor", str(profile["min_points_per_anchor"]),
+                    "--elbo-improvement-tol", str(profile["elbo_improvement_tol"]),
+                ]
+                self.runner.run(JAX_SERVICE, command)
+            if not (self.args.resume and u_path.exists()):
+                command = [
+                    "python", "scripts/compute_uncertainty.py",
+                    "--drive", self.args.scene_id,
+                    "--bucket-root", container_path(self.work_root / "bucket"),
+                    "--posterior", container_path(posterior),
+                    "--output", container_path(u_path),
+                    "--components-output", container_path(output / "uncertainty_components.npz"),
+                    "--metadata-output", container_path(output / "uncertainty_metadata.json"),
+                    "--histogram-output", container_path(output / "uncertainty_histogram.png"),
+                ]
+                self.runner.run(JAX_SERVICE, command)
+            index.append(
+                {
+                    "name": name,
+                    "posterior_path": str(posterior),
+                    "u_path": str(u_path),
+                }
+            )
+        self._uncertainty_index = {"profiles": index}
+        if not self.args.dry_run:
+            save_json(self.root / "uncertainty_runs.json", self._uncertainty_index)
+
+    def evaluate_uncertainty_validation(self) -> None:
+        selected = self.selected_octree()
+        index = self._uncertainty_index or read_json(self.root / "uncertainty_runs.json")
+        max_views = int(self.config["evaluation"]["max_views"])
+        for profile in index["profiles"]:
+            output = self.root / "validation" / "uncertainty" / profile["name"]
+            if self.args.resume and (output / "summary.json").exists():
+                continue
+            self.runner.run(
+                TORCH_SERVICE,
+                self.evaluation_command(
+                    model_path=Path(selected["model_path"]),
+                    iteration=int(selected["iteration"]),
+                    split="validation",
+                    output=output,
+                    u_path=Path(profile["u_path"]),
+                    save_images=False,
+                    max_views=max_views,
+                ),
+            )
+
+    def evaluation_command(
+        self,
+        *,
+        model_path: Path,
+        iteration: int,
+        split: str,
+        output: Path,
+        u_path: Path | None,
+        save_images: bool,
+        max_views: int,
+    ) -> list[str]:
+        command = [
+            "python", "scripts/evaluate_uncertainty_views.py",
+            "--dataset-name", self.args.dataset_name,
+            "--scene-id", self.args.scene_id,
+            "--model-path", str(model_path),
+            "--iteration", str(iteration),
+            "--selection-metadata", str(self.metadata_path),
+            "--split", split,
+            "--output-dir", container_path(output),
+            "--resolution", str(self.config["evaluation"]["resolution"]),
+            "--max-views", str(max_views),
+            "--quiet",
+        ]
+        if u_path is not None:
+            command.extend(["--u-path", container_path(u_path)])
+        command.append("--save-images" if save_images else "--no-save-images")
+        return command
+
+    def verify_lock(self) -> dict[str, Any]:
+        manifest = read_json(self.manifest_path)
+        metadata = read_json(self.root / "prepared_metadata.json")
+        lock = read_json(self.root / "selection.lock.json")
+        paths = {name: Path(path) for name, path in lock["artifact_paths"].items()}
+        verify_selection_lock(
+            lock,
+            config_hash=manifest["config_hash"],
+            split_hash=split_fingerprint(metadata),
+            artifact_paths=paths,
+        )
+        return lock
+
+    def evaluate_test(self) -> None:
+        lock = self._dry_lock if self.args.dry_run else self.verify_lock()
+        if lock is None:
+            raise RuntimeError("Test evaluation requires an uncertainty selection lock")
+        output = self.root / "test"
+        self.runner.run(
+            TORCH_SERVICE,
+            self.evaluation_command(
+                model_path=Path(lock["model_path"]),
+                iteration=int(lock["iteration"]),
+                split="test",
+                output=output,
+                u_path=Path(lock["u_path"]),
+                save_images=bool(self.config["evaluation"]["save_test_images"]),
+                max_views=int(self.config["evaluation"]["max_views"]),
+            ),
+        )
+
+    def export_artifacts(self) -> None:
+        """Copy the locked splat and uncertainty into the report root for local viewing."""
+
+        export = self.config.get("export", {})
+        if not export.get("enabled", True):
+            print("Export disabled in config; skipping")
+            return
+
+        destination = self.root / "export"
+        if self.args.dry_run:
+            print(f"+ would export selected splat and uncertainty into {destination}")
+            return
+
+        lock = self.verify_lock()
+        paths = {name: Path(path) for name, path in lock["artifact_paths"].items()}
+        iteration = int(lock["iteration"])
+        splat_dir = destination / "splat"
+        uncertainty_dir = destination / "uncertainty"
+        prepared_dir = destination / "prepared"
+        iteration_dir = splat_dir / "point_cloud" / f"iteration_{iteration}"
+
+        if destination.exists():
+            shutil.rmtree(destination)
+        iteration_dir.parent.mkdir(parents=True, exist_ok=True)
+        uncertainty_dir.mkdir(parents=True, exist_ok=True)
+
+        # Mirror the Octree model layout so `export/splat` works directly as --model-path.
+        shutil.copytree(paths["model_iteration"], iteration_dir)
+        cfg_args = paths["model_config"].parent / "cfg_args"
+        if cfg_args.exists():
+            shutil.copy2(cfg_args, splat_dir / "cfg_args")
+
+        # The trained config records an absolute `source_path` into the server's
+        # /data/COLMAP tree, which does not exist on a machine that only has this
+        # export. Ship the COLMAP camera metadata alongside the splat and rewrite
+        # source_path to a relative one so `scripts/view_octree_anygs.py` resolves
+        # it against --model-path. Keep the untouched config for hash provenance.
+        prepared_images: dict[str, Any] | None = None
+        include_prepared = bool(export.get("include_prepared_colmap", True))
+        shutil.copy2(paths["model_config"], splat_dir / "original_config.yaml")
+        with paths["model_config"].open("r", encoding="utf-8") as handle:
+            model_cfg = yaml.load(handle, Loader=yaml.FullLoader)
+        if include_prepared:
+            prepared_images = copy_prepared_colmap_for_viewer(
+                self.metadata_path.parent,
+                prepared_dir,
+                include_images=bool(export.get("include_prepared_images", False)),
+                copied=[],
+            )
+            model_cfg["model_params"] = {
+                **model_cfg.get("model_params", {}),
+                "source_path": "../prepared",
+            }
+        with (splat_dir / "config.yaml").open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(model_cfg, handle, sort_keys=False)
+
+        shutil.copy2(paths["uncertainty"], uncertainty_dir / "U.npy")
+        source_dir = paths["uncertainty"].parent
+        optional = ["uncertainty_metadata.json", "uncertainty_histogram.png"]
+        if export.get("include_uncertainty_components", True):
+            optional.append("uncertainty_components.npz")
+        for name in optional:
+            candidate = source_dir / name
+            if candidate.exists():
+                shutil.copy2(candidate, uncertainty_dir / name)
+        if export.get("include_posterior", False):
+            shutil.copy2(paths["posterior"], uncertainty_dir / "anchor_posterior.npz")
+
+        anchor_ply = iteration_dir / "point_cloud_anchor.ply"
+        colored_ply = uncertainty_dir / "uncertainty_anchors.ply"
+        if export.get("write_colored_anchor_ply", True) and anchor_ply.exists():
+            self.runner.run(
+                TORCH_SERVICE,
+                [
+                    "python", "scripts/export_uncertainty_ply.py",
+                    "--anchor-ply", container_path(anchor_ply),
+                    "--u-path", container_path(uncertainty_dir / "U.npy"),
+                    "--output", container_path(colored_ply),
+                    "--colormap", str(export.get("colormap", "viridis")),
+                    "--clip-percentile", str(export.get("color_clip_percentile", 99.0)),
+                ],
+            )
+
+        files = sorted(
+            path for path in destination.rglob("*") if path.is_file()
+        )
+        manifest = {
+            "schema_version": 1,
+            "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+            "octree_profile": lock["octree_profile"],
+            "uncertainty_profile": lock["uncertainty_profile"],
+            "iteration": iteration,
+            "source_model_path": lock["model_path"],
+            "source_u_path": lock["u_path"],
+            "source_posterior_path": lock["posterior_path"],
+            "locked_artifact_hashes": lock["artifact_hashes"],
+            "exported_bytes": sum(path.stat().st_size for path in files),
+            "files": [path.relative_to(destination).as_posix() for path in files],
+            "local_viewer": {
+                "enabled": include_prepared,
+                "model_path": "splat",
+                "prepared_path": "prepared" if include_prepared else None,
+                "u_path": "uncertainty/U.npy",
+                "config_source_path": "../prepared" if include_prepared else None,
+                "original_config": "splat/original_config.yaml",
+                "camera_source": "train",
+                "prepared_images": prepared_images,
+            },
+        }
+        save_json(destination / "export_manifest.json", manifest)
+        if include_prepared:
+            self.write_viewer_commands(destination, iteration)
+        self.write_export_readme(destination, lock, iteration, colored_ply.exists(), include_prepared)
+        total_mb = manifest["exported_bytes"] / (1024 * 1024)
+        print(f"Exported {len(files)} files ({total_mb:.1f} MiB) to {destination}")
+
+    def write_viewer_commands(self, destination: Path, iteration: int) -> None:
+        text = f"""# Interactive viewer commands
+
+`export/` is a portable local-viewer bundle. Copy or extract it onto a machine
+with a checked-out VBOGS repo and the Docker stack built, then point
+`EXPORT_DIR` at this folder.
+
+```bash
+cd /path/to/VBOGS
+./dc_up.sh
+./dc_bash.sh vbogs-vbgs-render
+
+EXPORT_DIR=/workspace/VBOGS/local_viewer_exports/<run-id>/export
+
+python scripts/view_octree_anygs.py \\
+  --model-path "${{EXPORT_DIR}}/splat" \\
+  --u-path "${{EXPORT_DIR}}/uncertainty/U.npy" \\
+  --iteration {iteration} \\
+  --camera-source train \\
+  --resolution 4
+```
+
+Open the viewer from the host at `http://localhost:8071` (the process listens on
+container port `8070`; compose publishes it as `8071`).
+
+`--camera-source train` is required. This experiment's COLMAP scene contains
+only the train split — the `prepare` stage enforces that with a leakage gate,
+and the model config sets `eval: false` — so Octree-AnyGS loads every prepared
+camera as a train camera and `getTestCameras()` is empty. The viewer's default
+`--camera-source test` would fail with "No test cameras available".
+
+Held-out poses are not viewer cameras, but they do ship here as
+`prepared/metadata.json`. Use them with the offline evaluator:
+
+```bash
+python scripts/evaluate_uncertainty_views.py \\
+  --model-path "${{EXPORT_DIR}}/splat" \\
+  --u-path "${{EXPORT_DIR}}/uncertainty/U.npy" \\
+  --selection-metadata "${{EXPORT_DIR}}/prepared/metadata.json" \\
+  --iteration {iteration} \\
+  --split test \\
+  --output-dir "${{EXPORT_DIR}}/test_rerun"
+```
+
+Query the loaded scene:
+
+```bash
+curl http://localhost:8071/api/metadata
+curl http://localhost:8071/api/cameras
+
+curl -X POST http://localhost:8071/api/rendered-anchors \\
+  -H 'Content-Type: application/json' \\
+  -d '{{"camera_id":"train:0","max_anchors":25}}'
+```
+
+`prepared/images/` is intentionally empty. The viewer uses metadata-only camera
+loading and reads poses and intrinsics from `prepared/sparse/0`. Re-export with
+`export.include_prepared_images: true` only if you need `--load-source-images`.
+"""
+        (destination / "VIEWER_COMMANDS.md").write_text(text, encoding="utf-8")
+
+    def write_export_readme(
+        self,
+        destination: Path,
+        lock: dict[str, Any],
+        iteration: int,
+        colored: bool,
+        include_prepared: bool,
+    ) -> None:
+        gaussian_type = str(self.config["octree"]["gaussian_type"])
+        lines = [
+            "# Exported scene and uncertainty",
+            "",
+            f"- Octree profile: `{lock['octree_profile']}` at iteration `{iteration}`",
+            f"- Uncertainty profile: `{lock['uncertainty_profile']}`",
+            f"- Gaussian type: `{gaussian_type}`",
+            "",
+        ]
+        if include_prepared:
+            lines.extend(
+                [
+                    "These files are byte-identical copies of the artifacts recorded in",
+                    "`../selection.lock.json`, with one exception: `splat/config.yaml` has its",
+                    "`model_params.source_path` rewritten to the portable `../prepared`. The",
+                    "unmodified config is kept as `splat/original_config.yaml`, and that is the",
+                    "file the `model_config` hash in `export_manifest.json` refers to.",
+                    "",
+                    "## Interactive viewer",
+                    "",
+                    "See `VIEWER_COMMANDS.md` for the copy-pasteable commands. In short:",
+                    "",
+                    "```bash",
+                    "python scripts/view_octree_anygs.py \\",
+                    "  --model-path <path to>/export/splat \\",
+                    "  --u-path <path to>/export/uncertainty/U.npy \\",
+                    f"  --iteration {iteration} \\",
+                    "  --camera-source train",
+                    "```",
+                    "",
+                    "`--camera-source train` is required: the prepared COLMAP scene holds only",
+                    "the train split, so Octree-AnyGS reports no test cameras.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "These files are byte-identical copies of the artifacts recorded in",
+                    "`../selection.lock.json`. Hashes are repeated in `export_manifest.json`.",
+                    "",
+                    "This export was built with `export.include_prepared_colmap: false`, so it",
+                    "carries no COLMAP cameras and cannot be opened in the interactive viewer.",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "## Viewing the splat",
+                "",
+                f"`splat/point_cloud/iteration_{iteration}/` contains:",
+                "",
+                "- `point_cloud_gs.ply` — expanded Gaussians. This is the file to open in a",
+                "  standard 3DGS viewer (SuperSplat, Splatviz, antimatter15/splat).",
+                "- `point_cloud_anchor.ply` — Octree anchors. Requires Octree-AnyGS to render;",
+                "  most generic splat viewers will not decode it correctly.",
+                "",
+                "`splat/` mirrors the Octree model layout, so it can be passed straight back in:",
+                "",
+                "```bash",
+                "python scripts/evaluate_uncertainty_views.py \\",
+                "  --model-path <path to>/export/splat \\",
+                f"  --iteration {iteration} ...",
+                "```",
+                "",
+                "## Viewing the uncertainty",
+                "",
+                "- `uncertainty/U.npy` — per-anchor scalar, indexed in anchor order and the same",
+                "  length as the anchor cloud.",
+            ]
+        )
+        if colored:
+            lines.extend(
+                [
+                    "- `uncertainty/uncertainty_anchors.ply` — anchor positions colored by `U`.",
+                    "  Open in CloudCompare, MeshLab, or any point-cloud viewer. Color range is",
+                    "  recorded in the ply `obj_info` header; the raw value is kept per-vertex as",
+                    "  the `uncertainty` property so you can re-map it yourself.",
+                ]
+            )
+        lines.extend(
+            [
+                "- `uncertainty/uncertainty_metadata.json` — anchor counts and summary statistics.",
+                "",
+                "Unobserved anchors are assigned the maximum uncertainty rather than a fitted",
+                "value. Check `unobserved_anchor_count` in the metadata before reading the high",
+                "end of the color ramp as a model result.",
+                "",
+            ]
+        )
+        (destination / "README.md").write_text("\n".join(lines), encoding="utf-8")
+
+    def run_stage(self, stage: str) -> None:
+        actions = {
+            "prepare": self.prepare,
+            "octree-train": self.train_octree,
+            "octree-validation": self.evaluate_octree_validation,
+            "octree-select": lambda: self.analyze("octree"),
+            "points": self.export_points,
+            "bucket": self.bucket,
+            "uncertainty-fit": self.fit_uncertainty,
+            "uncertainty-validation": self.evaluate_uncertainty_validation,
+            "uncertainty-select": lambda: self.analyze("uncertainty"),
+            "test": self.evaluate_test,
+            "export": self.export_artifacts,
+            "report": lambda: self.analyze("report"),
+        }
+        actions[stage]()
+
+    def run(self) -> None:
+        self.prepare_root()
+        start = STAGES.index(self.args.start_at)
+        stop = STAGES.index(self.args.stop_after)
+        if start > stop:
+            raise ValueError("--start-at must not come after --stop-after")
+        for stage in STAGES[start : stop + 1]:
+            if self.args.resume and self.is_complete(stage):
+                print(f"=== {stage}: already complete ===")
+                continue
+            print(f"\n=== {stage} ===", flush=True)
+            self.run_stage(stage)
+            if not self.args.dry_run:
+                self.mark(stage)
+        print(f"\nExperiment root: {self.root}")
+
+
+def main() -> None:
+    args = parse_args()
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.scene_id)
+        or args.scene_id in (".", "..")
+    ):
+        raise ValueError("--scene-id must be a simple file-name-safe identifier")
+    if args.run_id is not None and (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.run_id)
+        or args.run_id in (".", "..")
+    ):
+        raise ValueError("--run-id must be a simple file-name-safe identifier")
+    if args.resume and not args.run_id:
+        raise ValueError("--resume requires an explicit --run-id")
+    if args.start_at != "prepare" and not args.resume and not args.dry_run:
+        raise ValueError("Starting after prepare requires --resume and an existing --run-id")
+    if not args.dry_run:
+        require_container_runtime()
+    config = effective_config(args)
+    experiment = Experiment(args, config)
+    experiment.run()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        sys.exit(exc.returncode)
+    except (FileNotFoundError, FileExistsError, ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)

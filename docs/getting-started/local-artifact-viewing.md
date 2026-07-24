@@ -8,6 +8,23 @@ Use this page after a pipeline run reaches the `bundle` stage. The normal full
 pipeline command writes one zip that contains diagnostics plus the portable
 local viewer export.
 
+## Two Bundle Layouts
+
+Two different producers write viewer-ready bundles, and their layouts differ. Check
+which one you have before following the steps below.
+
+| Producer | Viewer folder | Model | Cameras | Uncertainty |
+| --- | --- | --- | --- | --- |
+| Full pipeline (`bundle` stage) | `local_viewer/` | `model/` | `prepared/` | `uncertainty/U.npy` |
+| Uncertainty-Evaluation `export` stage | `export/` | `splat/` | `prepared/` | `uncertainty/U.npy` |
+
+The rest of this page covers the pipeline layout. For an Uncertainty-Evaluation run,
+read `export/VIEWER_COMMANDS.md` inside the bundle, or see
+[the experiment page](../experiments/uncertainty-evaluation.md#interactive-viewer). The
+one substantive difference: that experiment holds its test split out of COLMAP entirely,
+so its export has no test cameras and the viewer must be started with
+`--camera-source train`.
+
 ## What to Download
 
 Download the scene bundle zip:

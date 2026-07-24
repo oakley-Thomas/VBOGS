@@ -77,6 +77,7 @@ CONFIG_KEY_MAP = {
         "resolution": "resolution",
         "iterations": "iterations",
         "llffhold": "llffhold",
+        "eval": "train_eval",
         "gaussian_type": "gaussian_type",
         "feat_dim": "feat_dim",
         "base_layer": "base_layer",
@@ -86,6 +87,7 @@ CONFIG_KEY_MAP = {
         "skip_stack_check": "skip_stack_check",
     },
     "stereo": {
+        "frame_split": "frame_split",
         "matcher": "matcher",
         "pixel_step": "pixel_step",
         "max_points_per_frame": "max_points_per_frame",
@@ -93,6 +95,7 @@ CONFIG_KEY_MAP = {
     },
     "points": {
         "point_source": "point_source",
+        "frame_split": "frame_split",
         "matcher": "matcher",
         "pixel_step": "pixel_step",
         "max_points_per_frame": "max_points_per_frame",
@@ -445,6 +448,16 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     train_group.add_argument("--iterations", type=int, default=15000)
     train_group.add_argument("--llffhold", type=int, default=8)
     train_group.add_argument(
+        "--train-eval",
+        dest="train_eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable Octree-AnyGS eval-mode train/test splitting. Disable for "
+            "NCore profiles that prepare explicit held-out splits."
+        ),
+    )
+    train_group.add_argument(
         "--gaussian-type",
         choices=("implicit3D", "explicit3D"),
         default="implicit3D",
@@ -480,6 +493,12 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     )
 
     stereo_group = parser.add_argument_group("point-cloud export")
+    stereo_group.add_argument(
+        "--frame-split",
+        choices=("train", "test", "validation", "all"),
+        default="all",
+        help="Prepared frame split exported to points_world.npz.",
+    )
     stereo_group.add_argument(
         "--matcher",
         choices=("sgbm", "raft"),
@@ -620,7 +639,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     render_group = parser.add_argument_group("uncertainty rendering")
     render_group.add_argument(
         "--render-split",
-        choices=("train", "test", "both"),
+        choices=("train", "test", "validation", "both", "all"),
         default="both",
         help="Camera split rendered by the final diagnostic stage.",
     )
@@ -659,7 +678,7 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
     nbv_group = parser.add_argument_group("next-best-view scoring")
     nbv_group.add_argument(
         "--nbv-candidate-source",
-        choices=("test", "train", "lattice"),
+        choices=("test", "train", "validation", "lattice"),
         default="test",
         help="Candidate camera set passed to score_nbv.py.",
     )
@@ -846,6 +865,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.iterations),
         "--llffhold",
         str(args.llffhold),
+        "--eval" if args.train_eval else "--no-eval",
         "--gaussian-type",
         args.gaussian_type,
         "--feat-dim",
@@ -870,6 +890,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         effective_point_source(args),
         "--selection-metadata",
         selection_metadata,
+        "--frame-split",
+        args.frame_split,
         "--matcher",
         args.matcher,
         "--pixel-step",
@@ -989,6 +1011,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.bucket_iteration),
         "--split",
         args.render_split,
+        "--selection-metadata",
+        selection_metadata,
         *maybe_option("--resolution", args.render_resolution),
         "--max-views",
         str(args.render_max_views),
@@ -1011,6 +1035,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.bucket_iteration),
         "--candidate-source",
         args.nbv_candidate_source,
+        "--selection-metadata",
+        selection_metadata,
         "--max-candidates",
         str(args.nbv_max_candidates),
         "--top-k",

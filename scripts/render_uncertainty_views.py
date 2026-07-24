@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.octree_config import load_octree_config_for_model
 from vbogs.render import render_scalar
+from vbogs.dataset_splits import load_split_metadata, metadata_cameras_for_split
 
 DEFAULT_OCTREE_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
 
@@ -55,9 +56,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--split",
-        choices=("train", "test", "both"),
+        choices=("train", "test", "validation", "both", "all"),
         default="both",
         help="Camera split to render.",
+    )
+    parser.add_argument(
+        "--selection-metadata",
+        type=Path,
+        default=None,
+        help=(
+            "Prepared NCore metadata.json used for metadata-backed test and "
+            "validation cameras. Defaults to /data/COLMAP/<drive>/metadata.json."
+        ),
     )
     parser.add_argument(
         "--resolution",
@@ -151,6 +161,12 @@ def resolve_output_dir(drive: str, output_dir: Path | None) -> Path:
     if output_dir is not None:
         return output_dir.resolve()
     return (REPO_ROOT / "outputs" / "uncertainty_views" / drive).resolve()
+
+
+def resolve_selection_metadata(drive: str, selection_metadata: Path | None) -> Path:
+    if selection_metadata is not None:
+        return selection_metadata.resolve()
+    return (Path("/data/COLMAP") / drive / "metadata.json").resolve()
 
 
 def add_octree_to_path(octree_root: Path) -> Path:
@@ -256,11 +272,38 @@ def image_stem(view: Any, index: int) -> str:
     return Path(str(name)).stem
 
 
-def iter_selected_splits(scene: Any, split: str) -> Iterable[tuple[str, list[Any]]]:
-    if split in ("train", "both"):
-        yield "train", scene.getTrainCameras()
-    if split in ("test", "both"):
-        yield "test", scene.getTestCameras()
+def split_names_to_render(split: str) -> tuple[str, ...]:
+    if split == "both":
+        return ("train", "test")
+    if split == "all":
+        return ("train", "test", "validation")
+    return (split,)
+
+
+def iter_selected_splits(
+    scene: Any,
+    split: str,
+    *,
+    split_metadata: dict[str, Any],
+    resolution: int | None,
+) -> Iterable[tuple[str, list[Any]]]:
+    train_cameras = list(scene.getTrainCameras())
+    reference = train_cameras[0] if train_cameras else None
+    for split_name in split_names_to_render(split):
+        if split_name == "train":
+            cameras = train_cameras
+        elif split_name in ("test", "validation"):
+            cameras = metadata_cameras_for_split(
+                split_metadata,
+                split_name,
+                resolution_arg=resolution or 1,
+                source_cam=reference,
+            )
+            if not cameras and split_name == "test":
+                cameras = list(scene.getTestCameras())
+        else:
+            raise ValueError(f"Unsupported split: {split_name}")
+        yield split_name, cameras
 
 
 def ensure_split_dirs(output_dir: Path, split_name: str) -> dict[str, Path]:
@@ -294,12 +337,19 @@ def render_splits(
     vmax: float,
     colormap_name: str,
     max_views: int,
+    split_metadata: dict[str, Any],
+    resolution: int | None,
 ) -> list[dict[str, Any]]:
     from gaussian_renderer.render import render as render_rgb
 
     rows: list[dict[str, Any]] = []
     with torch.no_grad():
-        for split_name, cameras in iter_selected_splits(scene, split):
+        for split_name, cameras in iter_selected_splits(
+            scene,
+            split,
+            split_metadata=split_metadata,
+            resolution=resolution,
+        ):
             out_paths = ensure_split_dirs(output_dir, split_name)
             selected_cameras = cameras[:max_views] if max_views > 0 else cameras
             print(f"Rendering {len(selected_cameras)} {split_name} views")
@@ -370,6 +420,8 @@ def main() -> None:
     model_path = resolve_model_path(args.drive, args.model_path)
     uncertainty_path = resolve_uncertainty_path(args.drive, args.uncertainty)
     output_dir = resolve_output_dir(args.drive, args.output_dir)
+    split_metadata_path = resolve_selection_metadata(args.drive, args.selection_metadata)
+    split_metadata = load_split_metadata(split_metadata_path)
 
     print(f"Loading Octree-AnyGS model: {model_path}")
     scene, gaussians, pipe = load_scene(
@@ -401,6 +453,8 @@ def main() -> None:
         vmax=vmax,
         colormap_name=args.colormap,
         max_views=args.max_views,
+        split_metadata=split_metadata,
+        resolution=args.resolution,
     )
 
     metadata = {
@@ -413,6 +467,7 @@ def main() -> None:
         "vmin": vmin,
         "vmax": vmax,
         "colormap": args.colormap,
+        "selection_metadata": str(split_metadata_path) if split_metadata else None,
         "anchor_count": anchor_count,
         "view_count": len(rows),
         "views": rows,

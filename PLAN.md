@@ -160,6 +160,12 @@ completed M5 `U.npy`.
 
 Depends on: M6.
 
+The reproducible validation workflow is documented in
+[`docs/experiments/uncertainty-evaluation.md`](docs/experiments/uncertainty-evaluation.md).
+It selects checkpoints and uncertainty settings on validation views before a
+hash-locked, one-time test evaluation. Running the workflow does not replace
+the human posterior and scene review below.
+
 - [ ] Pick a scene you understand well (known uncertain regions: far / glass / textureless)
 - [ ] Run full pipeline
 - [ ] Overlay `U` as a heatmap on a held-out training view

@@ -43,6 +43,7 @@ from vbogs.ncore_adapter import (
     selected_frame_indices,
     write_ply,
 )
+from vbogs.dataset_splits import load_split_metadata, records_for_split
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +96,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=Path("data/points_world"))
     parser.add_argument("--output-name", default="points_world.npz")
     parser.add_argument("--write-ply", action="store_true")
+    parser.add_argument(
+        "--frame-split",
+        choices=("train", "test", "validation", "all"),
+        default="all",
+        help=(
+            "Prepared frame split to export when --selection-metadata contains "
+            "split metadata."
+        ),
+    )
     parser.add_argument("--frame-step", type=int, default=10)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--pixel-step", type=int, default=1)
@@ -130,13 +140,7 @@ def point_source(args: argparse.Namespace) -> str:
 
 
 def load_json(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {}
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError(f"Expected JSON object in {path}")
-    return payload
+    return load_split_metadata(path)
 
 
 def point_output_paths(args: argparse.Namespace, scene: str) -> tuple[Path, Path, Path]:
@@ -254,11 +258,39 @@ def color_points_from_cameras(
     return colors, int(colors.shape[0] - np.count_nonzero(missing)), stats
 
 
+def ncore_frame_indices_for_split(
+    *,
+    sensor: Any,
+    selection_metadata: dict[str, Any],
+    frame_split: str,
+    frame_step: int,
+    max_frames: int,
+) -> list[int]:
+    records = records_for_split(selection_metadata, frame_split)
+    if records:
+        return [
+            closest_frame_index(sensor, int(record["timestamp_us"]))
+            for record in records
+        ]
+    if frame_split != "all":
+        raise ValueError(
+            f"--frame-split {frame_split} requires split records in --selection-metadata"
+        )
+    return selected_frame_indices(sensor, frame_step, max_frames)
+
+
 def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Path:
     scene = scene_id(args)
     camera_ids = parse_id_list(args.camera_ids, DEFAULT_CAMERA_IDS)
     lidar_sensor = loader.get_lidar_sensor(args.lidar_id)
-    frame_indices = selected_frame_indices(lidar_sensor, args.frame_step, args.max_frames)
+    selection_metadata = load_json(args.selection_metadata)
+    frame_indices = ncore_frame_indices_for_split(
+        sensor=lidar_sensor,
+        selection_metadata=selection_metadata,
+        frame_split=args.frame_split,
+        frame_step=args.frame_step,
+        max_frames=args.max_frames,
+    )
     rng = np.random.default_rng(args.random_seed)
 
     all_xyz: list[np.ndarray] = []
@@ -303,6 +335,7 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         "lidar_id": args.lidar_id,
         "camera_ids": camera_ids,
         "num_frames": len(frame_indices),
+        "frame_split": args.frame_split,
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
         "max_points_per_frame": args.max_points_per_frame,
@@ -426,13 +459,13 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
     left_sensor = loader.get_camera_sensor(left_id)
     right_sensor = loader.get_camera_sensor(right_id)
     selection_metadata = load_json(args.selection_metadata)
-    selected_frames = selection_metadata.get("selected_frames")
-    if isinstance(selected_frames, list) and selected_frames:
-        frame_indices = [int(frame_id) for frame_id in selected_frames]
-        if args.max_frames:
-            frame_indices = frame_indices[: args.max_frames]
-    else:
-        frame_indices = selected_frame_indices(left_sensor, args.frame_step, args.max_frames)
+    frame_indices = ncore_frame_indices_for_split(
+        sensor=left_sensor,
+        selection_metadata=selection_metadata,
+        frame_split=args.frame_split,
+        frame_step=args.frame_step,
+        max_frames=args.max_frames,
+    )
     matcher = stereo_to_pointcloud.build_matcher(args)
     rng = np.random.default_rng(args.random_seed)
 
@@ -495,6 +528,7 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         "camera_depth_pair": [left_id, right_id],
         "matcher": matcher.name,
         "num_frames": len(frame_indices),
+        "frame_split": args.frame_split,
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
         "filters": {

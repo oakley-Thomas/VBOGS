@@ -45,6 +45,7 @@ from vbogs.ncore_adapter import (
     write_image,
     write_ply,
 )
+from vbogs.dataset_splits import split_frame_indices, split_lookup
 
 
 @dataclass(frozen=True)
@@ -150,10 +151,16 @@ def build_sparse_seed_from_lidar(
     seed_max_points: int,
     max_points_per_lidar_frame: int,
     random_seed: int,
+    frame_indices: Sequence[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     lidar_sensor = loader.get_lidar_sensor(lidar_id)
     rng = np.random.default_rng(random_seed)
-    frame_indices = selected_frame_indices(lidar_sensor, frame_step, max_frames)
+    if frame_indices is None:
+        frame_indices = selected_frame_indices(lidar_sensor, frame_step, max_frames)
+    else:
+        frame_indices = [int(frame_index) for frame_index in frame_indices]
+    if not frame_indices:
+        raise ValueError("Sparse seed frame selection produced no frames")
 
     all_xyz: list[np.ndarray] = []
     for frame_index in frame_indices:
@@ -214,6 +221,8 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
     primary_camera_id = camera_ids[0]
     primary_sensor = cameras_by_id[primary_camera_id]
     primary_indices = selected_frame_indices(primary_sensor, args.frame_step, args.max_frames)
+    frame_splits = split_frame_indices(primary_indices)
+    frame_split_by_id = split_lookup(frame_splits)
 
     dataset_dir = Path(args.output_root) / args.scene_id
     images_out = dataset_dir / "images"
@@ -233,6 +242,7 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
         record: dict[str, Any] = {
             "frame_id": int(primary_index),
             "timestamp_us": int(timestamp_us),
+            "split": frame_split_by_id[int(primary_index)],
             "primary_camera_id": primary_camera_id,
             "cameras": {},
         }
@@ -256,24 +266,31 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
             )
             write_image(images_out / image_name, image_rgb)
             c2w = get_sensor_c2w(sensor, frame_index)
-            colmap_images.append(
-                ColmapImage(
-                    image_id=image_id,
-                    camera_model_id=camera_model_id,
-                    image_name=image_name,
-                    c2w=c2w,
+            if record["split"] == "train":
+                colmap_images.append(
+                    ColmapImage(
+                        image_id=image_id,
+                        camera_model_id=camera_model_id,
+                        image_name=image_name,
+                        c2w=c2w,
+                    )
                 )
-            )
+                image_id += 1
             record["cameras"][camera_id] = {
                 "frame_index": int(frame_index),
                 "timestamp_us": get_frame_timestamp_us(sensor, frame_index),
                 "image_name": image_name,
                 "c2w": json_ready_matrix(c2w),
             }
-            image_id += 1
         frame_records.append(record)
 
     if args.seed_mode == "lidar":
+        lidar_sensor = loader.get_lidar_sensor(args.lidar_id)
+        train_seed_indices = [
+            closest_frame_index(lidar_sensor, int(record["timestamp_us"]))
+            for record in frame_records
+            if record["split"] == "train"
+        ]
         seed_xyz, seed_rgb, seed_metadata = build_sparse_seed_from_lidar(
             loader=loader,
             lidar_id=args.lidar_id,
@@ -282,10 +299,11 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
             seed_max_points=args.seed_max_points,
             max_points_per_lidar_frame=args.max_points_per_lidar_frame,
             random_seed=args.random_seed,
+            frame_indices=train_seed_indices,
         )
     else:
         seed_xyz, seed_rgb, seed_metadata = build_random_seed(
-            frame_records=frame_records,
+            frame_records=[record for record in frame_records if record["split"] == "train"],
             seed_max_points=args.seed_max_points,
             random_seed=args.random_seed,
         )
@@ -301,6 +319,11 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
         "num_frames": len(frame_records),
         "num_images": len(colmap_images),
         "selected_frames": [record["frame_id"] for record in frame_records],
+        "frame_splits": frame_splits,
+        "split_counts": {
+            split_name: len(frame_ids)
+            for split_name, frame_ids in frame_splits.items()
+        },
         "camera_ids": camera_ids,
         "primary_camera_id": primary_camera_id,
         "lidar_id": args.lidar_id,
