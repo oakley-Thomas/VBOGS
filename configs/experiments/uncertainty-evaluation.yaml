@@ -106,6 +106,13 @@ export:
   write_colored_anchor_ply: true
   colormap: viridis
   color_clip_percentile: 99.0
+  # Ship the prepared COLMAP cameras and rewrite the model config's source_path so
+  # export/ opens directly in scripts/view_octree_anygs.py. Disable only if you want
+  # a diagnostics-only bundle.
+  include_prepared_colmap: true
+  # Copy the real source images into prepared/images. The viewer uses metadata-only
+  # camera loading and does not need them; this roughly doubles the export size.
+  include_prepared_images: false
 
 smoke:
   max_frames: 16

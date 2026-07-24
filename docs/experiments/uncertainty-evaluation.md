@@ -164,10 +164,14 @@ directory so a single download is enough to visualize the run locally:
 
 ```text
 export/README.md
+export/VIEWER_COMMANDS.md
 export/export_manifest.json
 export/splat/config.yaml
+export/splat/original_config.yaml
 export/splat/point_cloud/iteration_<N>/point_cloud_gs.ply
 export/splat/point_cloud/iteration_<N>/point_cloud_anchor.ply
+export/prepared/sparse/0/
+export/prepared/metadata.json
 export/uncertainty/U.npy
 export/uncertainty/uncertainty_anchors.ply
 export/uncertainty/uncertainty_metadata.json
@@ -177,6 +181,43 @@ With the default `explicit3D` gaussian type, `point_cloud_gs.ply` holds expanded
 and opens in a standard 3DGS viewer. `point_cloud_anchor.ply` holds Octree anchors and
 needs Octree-AnyGS to render. `export/splat` mirrors the Octree model layout, so it can be
 passed back as `--model-path` without rearranging anything.
+
+### Interactive viewer
+
+`export/` is self-contained enough to open in the realtime viewer. The trained config
+records an absolute `source_path` into the server's `/data/COLMAP` tree, so the export
+ships the prepared COLMAP cameras under `export/prepared/` and rewrites
+`export/splat/config.yaml` to the relative `source_path: ../prepared`. The untouched
+config stays as `export/splat/original_config.yaml`, and that is what the `model_config`
+hash in `export_manifest.json` covers.
+
+```bash
+EXPORT_DIR=/workspace/VBOGS/local_viewer_exports/<run-id>/export
+
+python scripts/view_octree_anygs.py \
+  --model-path "${EXPORT_DIR}/splat" \
+  --u-path "${EXPORT_DIR}/uncertainty/U.npy" \
+  --iteration <N> \
+  --camera-source train \
+  --resolution 4
+```
+
+`--camera-source train` is required, and this is the one place the experiment's export
+differs from `scripts/export_local_viewer_run.py`. The `prepare` stage enforces a leakage
+gate that keeps held-out frames out of COLMAP entirely, and the trained config sets
+`eval: false`, so Octree-AnyGS loads every prepared camera as a train camera and
+`getTestCameras()` returns nothing. The viewer's default `--camera-source test` fails with
+"No test cameras available".
+
+Held-out poses still ship, as `export/prepared/metadata.json`, but they are not viewer
+cameras. Use them through `scripts/evaluate_uncertainty_views.py --selection-metadata`, or
+navigate to an arbitrary pose in the viewer with `--initial-pose` or the `pose` field on
+`POST /api/rendered-anchors`. `export/prepared/images/` is omitted: the viewer uses
+metadata-only camera loading. Set `export.include_prepared_images: true` if you need
+`--load-source-images`.
+
+Setting `export.include_prepared_colmap: false` restores the previous diagnostics-only
+bundle, with an unmodified `config.yaml` and no `prepared/` tree.
 
 `uncertainty_anchors.ply` is the anchor cloud colored by per-anchor `U`, viewable in
 CloudCompare or MeshLab. It keeps the raw scalar as a per-vertex `uncertainty` property,

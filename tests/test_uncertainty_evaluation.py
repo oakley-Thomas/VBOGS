@@ -1,7 +1,10 @@
+import importlib.machinery
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,6 +25,17 @@ from vbogs.uncertainty_evaluation import (
     verify_selection_lock,
 )
 from scripts.analyze_uncertainty_evaluation import report, select_octree, select_uncertainty
+
+
+def load_runner_module():
+    """Import `scripts/uncertainty-evaluation`, which has no `.py` suffix."""
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "uncertainty-evaluation"
+    loader = importlib.machinery.SourceFileLoader("uncertainty_evaluation_runner", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def kitti_metadata():
@@ -445,3 +459,115 @@ def test_export_uncertainty_ply_rejects_length_mismatch(tmp_path):
     )
     assert result.returncode == 2
     assert "does not match the anchor count" in result.stderr
+
+
+def build_export_fixture(tmp_path, monkeypatch):
+    """Stage a locked run so `export_artifacts` can be driven without a server."""
+
+    yaml = pytest.importorskip("yaml")
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(repo_root)
+
+    colmap = tmp_path / "colmap"
+    (colmap / "sparse" / "0").mkdir(parents=True)
+    (colmap / "images").mkdir(parents=True)
+    (colmap / "sparse" / "0" / "cameras.txt").write_text("# cameras\n", encoding="utf-8")
+    (colmap / "sparse" / "0" / "images.txt").write_text(
+        "# images\n1 1 0 0 0 0 0 0 1 frame_000.png\n\n", encoding="utf-8"
+    )
+    (colmap / "sparse" / "0" / "points3D.txt").write_text("# points\n", encoding="utf-8")
+    (colmap / "metadata.json").write_text('{"records": []}', encoding="utf-8")
+    (colmap / "images" / "frame_000.png").write_bytes(b"image")
+
+    model = tmp_path / "model"
+    iteration_dir = model / "point_cloud" / "iteration_90000"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "point_cloud_anchor.ply").write_bytes(b"anchors")
+    with (model / "config.yaml").open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {"model_params": {"source_path": str(colmap), "eval": False}, "optim_params": {}},
+            handle,
+        )
+
+    uncertainty = tmp_path / "uncertainty"
+    uncertainty.mkdir()
+    np.save(uncertainty / "U.npy", np.zeros(4, dtype=np.float32))
+
+    root = tmp_path / "run"
+    root.mkdir()
+    lock = {
+        "octree_profile": "production",
+        "uncertainty_profile": "baseline",
+        "iteration": 90000,
+        "model_path": str(model),
+        "u_path": str(uncertainty / "U.npy"),
+        "posterior_path": str(uncertainty / "anchor_posterior.npz"),
+        "artifact_hashes": {"model_config": "hash"},
+        "artifact_paths": {
+            "model_config": str(model / "config.yaml"),
+            "model_iteration": str(iteration_dir),
+            "uncertainty": str(uncertainty / "U.npy"),
+            "posterior": str(uncertainty / "anchor_posterior.npz"),
+        },
+    }
+
+    runner_module = load_runner_module()
+    experiment = object.__new__(runner_module.Experiment)
+    with (repo_root / "configs" / "experiments" / "uncertainty-evaluation.yaml").open(
+        "r", encoding="utf-8"
+    ) as handle:
+        experiment.config = yaml.safe_load(handle)
+    experiment.root = root
+    experiment.args = SimpleNamespace(dry_run=False)
+    experiment.metadata_path = colmap / "metadata.json"
+    experiment.verify_lock = lambda: lock
+    # The colored-anchor ply is produced by a container command; skip it here.
+    experiment.runner = SimpleNamespace(run=lambda *args, **kwargs: None)
+    return experiment, colmap
+
+
+def test_export_ships_colmap_cameras_and_a_portable_source_path(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    from vbogs.octree_config import load_octree_config_for_model
+
+    experiment, colmap = build_export_fixture(tmp_path, monkeypatch)
+    experiment.export_artifacts()
+
+    export = experiment.root / "export"
+    # The viewer resolves a relative source_path against --model-path, so the
+    # patched config must land on the COLMAP tree shipped inside the export.
+    resolved = Path(load_octree_config_for_model(export / "splat")["model_params"]["source_path"])
+    assert resolved == (export / "prepared").resolve()
+    assert (resolved / "sparse" / "0" / "images.txt").is_file()
+    assert (resolved / "metadata.json").is_file()
+
+    # Source images are not copied: the viewer uses metadata-only camera loading.
+    assert not (resolved / "images").exists()
+
+    # The unmodified config is what `model_config` in the lock hashes.
+    with (export / "splat" / "original_config.yaml").open("r", encoding="utf-8") as handle:
+        original = yaml.safe_load(handle)
+    assert original["model_params"]["source_path"] == str(colmap)
+
+    assert (export / "VIEWER_COMMANDS.md").is_file()
+    assert "--camera-source train" in (export / "VIEWER_COMMANDS.md").read_text(encoding="utf-8")
+
+    with (export / "export_manifest.json").open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    assert manifest["local_viewer"]["enabled"] is True
+    assert manifest["local_viewer"]["config_source_path"] == "../prepared"
+
+
+def test_export_without_prepared_colmap_leaves_the_config_untouched(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+
+    experiment, colmap = build_export_fixture(tmp_path, monkeypatch)
+    experiment.config["export"]["include_prepared_colmap"] = False
+    experiment.export_artifacts()
+
+    export = experiment.root / "export"
+    assert not (export / "prepared").exists()
+    assert not (export / "VIEWER_COMMANDS.md").exists()
+    with (export / "splat" / "config.yaml").open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    assert config["model_params"]["source_path"] == str(colmap)

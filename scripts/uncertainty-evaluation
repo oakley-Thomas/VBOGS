@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.export_local_viewer_run import copy_prepared_colmap_for_viewer
 from scripts.run_drive_pipeline import (
     JAX_SERVICE,
     TORCH_SERVICE,
@@ -624,6 +625,7 @@ class Experiment:
         iteration = int(lock["iteration"])
         splat_dir = destination / "splat"
         uncertainty_dir = destination / "uncertainty"
+        prepared_dir = destination / "prepared"
         iteration_dir = splat_dir / "point_cloud" / f"iteration_{iteration}"
 
         if destination.exists():
@@ -633,10 +635,33 @@ class Experiment:
 
         # Mirror the Octree model layout so `export/splat` works directly as --model-path.
         shutil.copytree(paths["model_iteration"], iteration_dir)
-        shutil.copy2(paths["model_config"], splat_dir / "config.yaml")
         cfg_args = paths["model_config"].parent / "cfg_args"
         if cfg_args.exists():
             shutil.copy2(cfg_args, splat_dir / "cfg_args")
+
+        # The trained config records an absolute `source_path` into the server's
+        # /data/COLMAP tree, which does not exist on a machine that only has this
+        # export. Ship the COLMAP camera metadata alongside the splat and rewrite
+        # source_path to a relative one so `scripts/view_octree_anygs.py` resolves
+        # it against --model-path. Keep the untouched config for hash provenance.
+        prepared_images: dict[str, Any] | None = None
+        include_prepared = bool(export.get("include_prepared_colmap", True))
+        shutil.copy2(paths["model_config"], splat_dir / "original_config.yaml")
+        with paths["model_config"].open("r", encoding="utf-8") as handle:
+            model_cfg = yaml.load(handle, Loader=yaml.FullLoader)
+        if include_prepared:
+            prepared_images = copy_prepared_colmap_for_viewer(
+                self.metadata_path.parent,
+                prepared_dir,
+                include_images=bool(export.get("include_prepared_images", False)),
+                copied=[],
+            )
+            model_cfg["model_params"] = {
+                **model_cfg.get("model_params", {}),
+                "source_path": "../prepared",
+            }
+        with (splat_dir / "config.yaml").open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(model_cfg, handle, sort_keys=False)
 
         shutil.copy2(paths["uncertainty"], uncertainty_dir / "U.npy")
         source_dir = paths["uncertainty"].parent
@@ -680,14 +705,92 @@ class Experiment:
             "locked_artifact_hashes": lock["artifact_hashes"],
             "exported_bytes": sum(path.stat().st_size for path in files),
             "files": [path.relative_to(destination).as_posix() for path in files],
+            "local_viewer": {
+                "enabled": include_prepared,
+                "model_path": "splat",
+                "prepared_path": "prepared" if include_prepared else None,
+                "u_path": "uncertainty/U.npy",
+                "config_source_path": "../prepared" if include_prepared else None,
+                "original_config": "splat/original_config.yaml",
+                "camera_source": "train",
+                "prepared_images": prepared_images,
+            },
         }
         save_json(destination / "export_manifest.json", manifest)
-        self.write_export_readme(destination, lock, iteration, colored_ply.exists())
+        if include_prepared:
+            self.write_viewer_commands(destination, iteration)
+        self.write_export_readme(destination, lock, iteration, colored_ply.exists(), include_prepared)
         total_mb = manifest["exported_bytes"] / (1024 * 1024)
         print(f"Exported {len(files)} files ({total_mb:.1f} MiB) to {destination}")
 
+    def write_viewer_commands(self, destination: Path, iteration: int) -> None:
+        text = f"""# Interactive viewer commands
+
+`export/` is a portable local-viewer bundle. Copy or extract it onto a machine
+with a checked-out VBOGS repo and the Docker stack built, then point
+`EXPORT_DIR` at this folder.
+
+```bash
+cd /path/to/VBOGS
+./dc_up.sh
+./dc_bash.sh vbogs-vbgs-render
+
+EXPORT_DIR=/workspace/VBOGS/local_viewer_exports/<run-id>/export
+
+python scripts/view_octree_anygs.py \\
+  --model-path "${{EXPORT_DIR}}/splat" \\
+  --u-path "${{EXPORT_DIR}}/uncertainty/U.npy" \\
+  --iteration {iteration} \\
+  --camera-source train \\
+  --resolution 4
+```
+
+Open the viewer from the host at `http://localhost:8071` (the process listens on
+container port `8070`; compose publishes it as `8071`).
+
+`--camera-source train` is required. This experiment's COLMAP scene contains
+only the train split — the `prepare` stage enforces that with a leakage gate,
+and the model config sets `eval: false` — so Octree-AnyGS loads every prepared
+camera as a train camera and `getTestCameras()` is empty. The viewer's default
+`--camera-source test` would fail with "No test cameras available".
+
+Held-out poses are not viewer cameras, but they do ship here as
+`prepared/metadata.json`. Use them with the offline evaluator:
+
+```bash
+python scripts/evaluate_uncertainty_views.py \\
+  --model-path "${{EXPORT_DIR}}/splat" \\
+  --u-path "${{EXPORT_DIR}}/uncertainty/U.npy" \\
+  --selection-metadata "${{EXPORT_DIR}}/prepared/metadata.json" \\
+  --iteration {iteration} \\
+  --split test \\
+  --output-dir "${{EXPORT_DIR}}/test_rerun"
+```
+
+Query the loaded scene:
+
+```bash
+curl http://localhost:8071/api/metadata
+curl http://localhost:8071/api/cameras
+
+curl -X POST http://localhost:8071/api/rendered-anchors \\
+  -H 'Content-Type: application/json' \\
+  -d '{{"camera_id":"train:0","max_anchors":25}}'
+```
+
+`prepared/images/` is intentionally empty. The viewer uses metadata-only camera
+loading and reads poses and intrinsics from `prepared/sparse/0`. Re-export with
+`export.include_prepared_images: true` only if you need `--load-source-images`.
+"""
+        (destination / "VIEWER_COMMANDS.md").write_text(text, encoding="utf-8")
+
     def write_export_readme(
-        self, destination: Path, lock: dict[str, Any], iteration: int, colored: bool
+        self,
+        destination: Path,
+        lock: dict[str, Any],
+        iteration: int,
+        colored: bool,
+        include_prepared: bool,
     ) -> None:
         gaussian_type = str(self.config["octree"]["gaussian_type"])
         lines = [
@@ -697,31 +800,68 @@ class Experiment:
             f"- Uncertainty profile: `{lock['uncertainty_profile']}`",
             f"- Gaussian type: `{gaussian_type}`",
             "",
-            "These files are byte-identical copies of the artifacts recorded in",
-            "`../selection.lock.json`. Hashes are repeated in `export_manifest.json`.",
-            "",
-            "## Viewing the splat",
-            "",
-            f"`splat/point_cloud/iteration_{iteration}/` contains:",
-            "",
-            "- `point_cloud_gs.ply` — expanded Gaussians. This is the file to open in a",
-            "  standard 3DGS viewer (SuperSplat, Splatviz, antimatter15/splat).",
-            "- `point_cloud_anchor.ply` — Octree anchors. Requires Octree-AnyGS to render;",
-            "  most generic splat viewers will not decode it correctly.",
-            "",
-            "`splat/` mirrors the Octree model layout, so it can be passed straight back in:",
-            "",
-            "```bash",
-            "python scripts/evaluate_uncertainty_views.py \\",
-            "  --model-path <path to>/export/splat \\",
-            f"  --iteration {iteration} ...",
-            "```",
-            "",
-            "## Viewing the uncertainty",
-            "",
-            "- `uncertainty/U.npy` — per-anchor scalar, indexed in anchor order and the same",
-            "  length as the anchor cloud.",
         ]
+        if include_prepared:
+            lines.extend(
+                [
+                    "These files are byte-identical copies of the artifacts recorded in",
+                    "`../selection.lock.json`, with one exception: `splat/config.yaml` has its",
+                    "`model_params.source_path` rewritten to the portable `../prepared`. The",
+                    "unmodified config is kept as `splat/original_config.yaml`, and that is the",
+                    "file the `model_config` hash in `export_manifest.json` refers to.",
+                    "",
+                    "## Interactive viewer",
+                    "",
+                    "See `VIEWER_COMMANDS.md` for the copy-pasteable commands. In short:",
+                    "",
+                    "```bash",
+                    "python scripts/view_octree_anygs.py \\",
+                    "  --model-path <path to>/export/splat \\",
+                    "  --u-path <path to>/export/uncertainty/U.npy \\",
+                    f"  --iteration {iteration} \\",
+                    "  --camera-source train",
+                    "```",
+                    "",
+                    "`--camera-source train` is required: the prepared COLMAP scene holds only",
+                    "the train split, so Octree-AnyGS reports no test cameras.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "These files are byte-identical copies of the artifacts recorded in",
+                    "`../selection.lock.json`. Hashes are repeated in `export_manifest.json`.",
+                    "",
+                    "This export was built with `export.include_prepared_colmap: false`, so it",
+                    "carries no COLMAP cameras and cannot be opened in the interactive viewer.",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "## Viewing the splat",
+                "",
+                f"`splat/point_cloud/iteration_{iteration}/` contains:",
+                "",
+                "- `point_cloud_gs.ply` — expanded Gaussians. This is the file to open in a",
+                "  standard 3DGS viewer (SuperSplat, Splatviz, antimatter15/splat).",
+                "- `point_cloud_anchor.ply` — Octree anchors. Requires Octree-AnyGS to render;",
+                "  most generic splat viewers will not decode it correctly.",
+                "",
+                "`splat/` mirrors the Octree model layout, so it can be passed straight back in:",
+                "",
+                "```bash",
+                "python scripts/evaluate_uncertainty_views.py \\",
+                "  --model-path <path to>/export/splat \\",
+                f"  --iteration {iteration} ...",
+                "```",
+                "",
+                "## Viewing the uncertainty",
+                "",
+                "- `uncertainty/U.npy` — per-anchor scalar, indexed in anchor order and the same",
+                "  length as the anchor cloud.",
+            ]
+        )
         if colored:
             lines.extend(
                 [
