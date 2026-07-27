@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import scripts.analyze_uncertainty_evaluation as analyze_uncertainty
 
 from vbogs.uncertainty_evaluation import (
     calibration_summary,
@@ -25,7 +26,13 @@ from vbogs.uncertainty_evaluation import (
     verify_selection_lock,
     view_score_fields,
 )
-from scripts.analyze_uncertainty_evaluation import report, select_octree, select_uncertainty
+from scripts.analyze_uncertainty_evaluation import (
+    configured_octree,
+    configured_uncertainty,
+    report,
+    select_octree,
+    select_uncertainty,
+)
 
 
 def load_runner_module():
@@ -404,6 +411,113 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
     assert (tmp_path / "plots" / "test_calibration_scatter_legacy.png").exists()
 
 
+def test_analyzer_locks_configured_default_profiles_without_validation(tmp_path, monkeypatch):
+    model = tmp_path / "model"
+    iteration_dir = model / "point_cloud" / "iteration_90000"
+    iteration_dir.mkdir(parents=True)
+    (model / "config.yaml").write_text("model: true\n", encoding="utf-8")
+    (iteration_dir / "point_cloud_anchor.ply").write_bytes(b"model")
+    posterior_root = tmp_path / "uncertainty" / "baseline"
+    posterior_root.mkdir(parents=True)
+    posterior = posterior_root / "anchor_posterior.npz"
+    uncertainty = posterior_root / "U.npy"
+    posterior.write_bytes(b"posterior")
+    np.save(uncertainty, np.asarray([1.0, 2.0], dtype=np.float32))
+    (tmp_path / "experiment_manifest.json").write_text(
+        json.dumps(
+            {
+                "dataset": "nvidia_ncore",
+                "scene_id": "clip",
+                "config_hash": "config-hash",
+                "split_hash": "split-hash",
+                "selection_mode": "configured-default",
+                "dynamic_object_masking": "disabled",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "effective_config.yaml").write_text(
+        """selection:
+  default_octree_profile: production
+  default_uncertainty_profile: baseline
+octree:
+  profiles:
+    - name: production
+fit:
+  profiles:
+    - name: baseline
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "octree_runs.json").write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {"name": "production", "model_path": str(model), "iterations": [10000, 90000]}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "uncertainty_runs.json").write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "baseline",
+                        "posterior_path": str(posterior),
+                        "u_path": str(uncertainty),
+                    },
+                    {
+                        "name": "baseline-kl",
+                        "posterior_path": str(posterior),
+                        "u_path": str(posterior_root / "U_kl.npy"),
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    configured_octree(tmp_path)
+    configured_uncertainty(tmp_path)
+
+    octree = json.loads((tmp_path / "octree_selection.json").read_text(encoding="utf-8"))
+    uncertainty_selection = json.loads(
+        (tmp_path / "uncertainty_selection.json").read_text(encoding="utf-8")
+    )
+    lock = json.loads((tmp_path / "selection.lock.json").read_text(encoding="utf-8"))
+    assert octree["selection_mode"] == "configured-default"
+    assert octree["selected"]["iteration"] == 90000
+    assert uncertainty_selection["selected"]["profile"] == "baseline"
+    assert lock["selection_mode"] == "configured-default"
+    assert lock["dynamic_object_masking"] == "disabled"
+    assert lock["u_path"] == str(uncertainty)
+
+    test_root = tmp_path / "test"
+    test_root.mkdir()
+    rows = [
+        {
+            "view_id": f"test-{index}",
+            "is_primary": True,
+            "PSNR": psnr,
+            "SSIM": ssim,
+            "LPIPS": lpips,
+            "uncertainty_score": score,
+        }
+        for index, (psnr, ssim, lpips, score) in enumerate(
+            ((30.0, 0.9, 0.1, 1.0), (20.0, 0.7, 0.3, 3.0))
+        )
+    ]
+    (test_root / "summary.json").write_text(json.dumps(evaluation_summary(rows)), encoding="utf-8")
+    (test_root / "per_view.json").write_text(json.dumps({"views": rows}), encoding="utf-8")
+    monkeypatch.setattr(analyze_uncertainty, "make_plots", lambda *args: None)
+    report(tmp_path)
+    report_text = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Configured default Octree profile/checkpoint" in report_text
+    assert "Dynamic object masking: `disabled`" in report_text
+
+
 def test_reference_psnr_matches_known_unit_range_value():
     ground_truth = np.zeros((3, 2, 2), dtype=np.float32)
     render = np.full_like(ground_truth, 0.1)
@@ -473,7 +587,7 @@ def test_static_image_metrics_and_mask_loader_when_torch_is_available(tmp_path):
 
 
 @pytest.mark.parametrize("dataset,scene", [("kitti360", "drive"), ("nvidia_ncore", "clip")])
-def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
+def test_runner_default_smoke_dry_run_uses_fixed_unmasked_profiles(dataset, scene):
     repo_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
         [
@@ -495,9 +609,99 @@ def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
         stderr=subprocess.PIPE,
     )
     assert "--frame-split train" in completed.stdout
-    assert "--split validation" in completed.stdout
+    assert "--split validation" not in completed.stdout
     assert "--split test" in completed.stdout
     assert "--no-eval" in completed.stdout
+    assert "--dynamic-mask-root" not in completed.stdout
+    assert completed.stdout.count("scripts/train_octree_anygs.py") == 1
+    assert completed.stdout.count("scripts/fit_anchors.py") == 1
+    assert "/production" in completed.stdout
+    assert "/uncertainty/baseline" in completed.stdout
+    assert "coarse_resolution" not in completed.stdout
+    assert "low_capacity" not in completed.stdout
+    assert "--phase configured-octree" in completed.stdout
+    assert "--phase configured-uncertainty" in completed.stdout
+
+
+def test_runner_validation_selection_is_explicit_opt_in():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/uncertainty-evaluation",
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip",
+            "--run-id",
+            "pytest-validation-dry-run",
+            "--smoke",
+            "--select-on-validation",
+            "--dry-run",
+        ],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert "--split validation" in completed.stdout
+    assert completed.stdout.count("scripts/train_octree_anygs.py") == 1
+    assert completed.stdout.count("scripts/fit_anchors.py") == 3
+    assert "--phase octree" in completed.stdout
+    assert "--phase uncertainty" in completed.stdout
+
+
+def test_runner_rejects_validation_stage_without_opt_in():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/uncertainty-evaluation",
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip",
+            "--run-id",
+            "pytest-invalid-stage",
+            "--start-at",
+            "octree-validation",
+            "--stop-after",
+            "octree-validation",
+            "--dry-run",
+        ],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 2
+    assert "requires --select-on-validation" in completed.stderr
+
+
+def test_runner_rejects_unknown_configured_default_profile(tmp_path):
+    runner = load_runner_module()
+    config = (Path(__file__).resolve().parents[1] / "configs" / "experiments" / "uncertainty-evaluation.yaml").read_text(
+        encoding="utf-8"
+    )
+    path = tmp_path / "experiment.yaml"
+    path.write_text(
+        config.replace("default_octree_profile: production", "default_octree_profile: missing"),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        config=path,
+        dataset_name="nvidia_ncore",
+        gpu=None,
+        jax_device=None,
+        frame_step=None,
+        max_frames=None,
+        camera_ids=None,
+        smoke=False,
+        select_on_validation=False,
+    )
+    with pytest.raises(ValueError, match="default_octree_profile.*not a octree profile"):
+        runner.effective_config(args)
 
 
 def test_export_uncertainty_ply_colors_anchors(tmp_path):

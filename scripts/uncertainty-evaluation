@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Run the two-stage VBOGS Uncertainty-Evaluation experiment."""
+"""Run the fixed-default or validation-selected VBOGS uncertainty experiment."""
 
 from __future__ import annotations
 
@@ -40,7 +40,17 @@ from vbogs.uncertainty_evaluation import (
 
 
 DEFAULT_CONFIG = Path("configs/experiments/uncertainty-evaluation.yaml")
-STAGES = (
+DEFAULT_STAGES = (
+    "prepare",
+    "octree-train",
+    "points",
+    "bucket",
+    "uncertainty-fit",
+    "test",
+    "export",
+    "report",
+)
+SELECTION_STAGES = (
     "prepare",
     "octree-train",
     "octree-validation",
@@ -54,6 +64,7 @@ STAGES = (
     "export",
     "report",
 )
+STAGES = SELECTION_STAGES
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +76,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument(
+        "--select-on-validation",
+        action="store_true",
+        help="Run the Octree/VBGS profile sweeps and select profiles on validation views.",
+    )
     parser.add_argument("--start-at", choices=STAGES, default="prepare")
     parser.add_argument("--stop-after", choices=STAGES, default="report")
     parser.add_argument("--gpu", default=None)
@@ -85,6 +101,13 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def effective_config(args: argparse.Namespace) -> dict[str, Any]:
     config = copy.deepcopy(load_config(args.config))
+    selection = config.get("selection")
+    if not isinstance(selection, dict):
+        raise ValueError("Experiment config must contain a selection object")
+    selection["mode"] = "validation" if args.select_on_validation else "configured-default"
+    dynamic_masking = config.get("dynamic_masking", {})
+    if not isinstance(dynamic_masking, dict) or dynamic_masking.get("enabled") is not False:
+        raise ValueError("Uncertainty-Evaluation only supports dynamic_masking.enabled: false")
     dataset = config["datasets"][args.dataset_name]
     if args.gpu is not None:
         config["runtime"]["gpu"] = args.gpu
@@ -117,6 +140,11 @@ def effective_config(args: argparse.Namespace) -> dict[str, Any]:
         for name in names:
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or name in (".", ".."):
                 raise ValueError(f"Unsafe {section} profile name: {name!r}")
+    for section, key in (("octree", "default_octree_profile"), ("fit", "default_uncertainty_profile")):
+        profile_names = {str(profile["name"]) for profile in config[section]["profiles"]}
+        default_profile = selection.get(key)
+        if default_profile not in profile_names:
+            raise ValueError(f"Configured {key} {default_profile!r} is not a {section} profile")
     return config
 
 
@@ -269,6 +297,8 @@ class Experiment:
             "prepared_metadata": str((self.root / "prepared_metadata.json").resolve()),
             "work_root": str(self.work_root),
             "octree_root": str(self.octree_root),
+            "selection_mode": self.config["selection"]["mode"],
+            "dynamic_object_masking": "disabled",
         }
         save_json(self.manifest_path, payload)
 
@@ -321,7 +351,7 @@ class Experiment:
         common = self.config["octree"]
         gpu = str(self.config["runtime"]["gpu"])
         profiles_index: list[dict[str, Any]] = []
-        for profile in common["profiles"]:
+        for profile in self.profiles_for("octree"):
             name = str(profile["name"])
             profile_dir = self.root / "octree" / name
             run_record = profile_dir / "run.json"
@@ -361,6 +391,16 @@ class Experiment:
         self._octree_index = {"profiles": profiles_index}
         if not self.args.dry_run:
             save_json(self.root / "octree_runs.json", self._octree_index)
+        if not self.args.select_on_validation:
+            self.analyze("configured-octree")
+
+    def profiles_for(self, section: str) -> list[dict[str, Any]]:
+        profiles = self.config[section]["profiles"]
+        if self.args.select_on_validation:
+            return profiles
+        key = "default_octree_profile" if section == "octree" else "default_uncertainty_profile"
+        configured_name = self.config["selection"][key]
+        return [profile for profile in profiles if profile["name"] == configured_name]
 
     def evaluate_octree_validation(self) -> None:
         index = self._octree_index or read_json(self.root / "octree_runs.json")
@@ -383,7 +423,7 @@ class Experiment:
 
     def analyze(self, phase: str) -> None:
         if (
-            phase == "uncertainty"
+            phase in ("uncertainty", "configured-uncertainty")
             and self.args.resume
             and (self.root / "selection.lock.json").exists()
         ):
@@ -398,7 +438,7 @@ class Experiment:
                 "--phase", phase,
             ],
         )
-        if self.args.dry_run and phase == "octree":
+        if self.args.dry_run and phase in ("octree", "configured-octree"):
             index = self._octree_index
             assert index is not None
             first = index["profiles"][0]
@@ -408,7 +448,7 @@ class Experiment:
                 "iteration": int(first["iterations"][-1]),
                 "model_path": first["model_path"],
             }
-        elif self.args.dry_run and phase == "uncertainty":
+        elif self.args.dry_run and phase in ("uncertainty", "configured-uncertainty"):
             selected = self.selected_octree()
             index = self._uncertainty_index
             assert index is not None
@@ -477,7 +517,7 @@ class Experiment:
     def fit_uncertainty(self) -> None:
         fit = self.config["fit"]
         index: list[dict[str, Any]] = []
-        for profile in fit["profiles"]:
+        for profile in self.profiles_for("fit"):
             name = str(profile["name"])
             output = self.work_root / "uncertainty" / name
             posterior = output / "anchor_posterior.npz"
@@ -536,6 +576,8 @@ class Experiment:
         self._uncertainty_index = {"profiles": index}
         if not self.args.dry_run:
             save_json(self.root / "uncertainty_runs.json", self._uncertainty_index)
+        if not self.args.select_on_validation:
+            self.analyze("configured-uncertainty")
 
     def evaluate_uncertainty_validation(self) -> None:
         selected = self.selected_octree()
@@ -708,6 +750,8 @@ class Experiment:
         manifest = {
             "schema_version": 1,
             "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+            "selection_mode": lock.get("selection_mode", "validation"),
+            "dynamic_object_masking": lock.get("dynamic_object_masking", "disabled"),
             "octree_profile": lock["octree_profile"],
             "uncertainty_profile": lock["uncertainty_profile"],
             "iteration": iteration,
@@ -914,11 +958,15 @@ loading and reads poses and intrinsics from `prepared/sparse/0`. Re-export with
 
     def run(self) -> None:
         self.prepare_root()
-        start = STAGES.index(self.args.start_at)
-        stop = STAGES.index(self.args.stop_after)
+        stages = SELECTION_STAGES if self.args.select_on_validation else DEFAULT_STAGES
+        for option, stage in (("--start-at", self.args.start_at), ("--stop-after", self.args.stop_after)):
+            if stage not in stages:
+                raise ValueError(f"{option} {stage!r} requires --select-on-validation")
+        start = stages.index(self.args.start_at)
+        stop = stages.index(self.args.stop_after)
         if start > stop:
             raise ValueError("--start-at must not come after --stop-after")
-        for stage in STAGES[start : stop + 1]:
+        for stage in stages[start : stop + 1]:
             if self.args.resume and self.is_complete(stage):
                 print(f"=== {stage}: already complete ===")
                 continue

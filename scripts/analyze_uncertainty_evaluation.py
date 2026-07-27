@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -29,7 +30,11 @@ from vbogs.uncertainty_evaluation import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-root", type=Path, required=True)
-    parser.add_argument("--phase", choices=("octree", "uncertainty", "report"), required=True)
+    parser.add_argument(
+        "--phase",
+        choices=("octree", "uncertainty", "configured-octree", "configured-uncertainty", "report"),
+        required=True,
+    )
     return parser.parse_args()
 
 
@@ -56,6 +61,51 @@ def save_markdown_table(path: Path, columns: list[str], rows: list[list[Any]]) -
     lines.extend("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def configured_profile(root: Path, *, section: str, selection_key: str) -> str:
+    with (root / "effective_config.yaml").open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("Effective experiment config must be a mapping")
+    profile_name = config.get("selection", {}).get(selection_key)
+    profiles = config.get(section, {}).get("profiles", [])
+    if not isinstance(profile_name, str) or not any(
+        profile.get("name") == profile_name for profile in profiles
+    ):
+        raise ValueError(f"Configured {selection_key} is not a declared {section} profile")
+    return profile_name
+
+
+def configured_octree(root: Path) -> None:
+    run_index = read_json(root / "octree_runs.json")
+    profile_name = configured_profile(
+        root, section="octree", selection_key="default_octree_profile"
+    )
+    matching = [profile for profile in run_index["profiles"] if profile["name"] == profile_name]
+    if len(matching) != 1:
+        raise ValueError(f"Expected one configured Octree run for profile {profile_name!r}")
+    profile = matching[0]
+    iterations = [int(iteration) for iteration in profile.get("iterations", [])]
+    if not iterations:
+        raise ValueError(f"Configured Octree profile {profile_name!r} has no checkpoints")
+    selected = {
+        "profile": profile_name,
+        "profile_order": 0,
+        "iteration": iterations[-1],
+        "model_path": profile["model_path"],
+    }
+    save_json(
+        root / "octree_selection.json",
+        {
+            "schema_version": 1,
+            "selection_mode": "configured-default",
+            "selection_split": None,
+            "criterion": ["configured default profile", "final recorded checkpoint"],
+            "selected": selected,
+        },
+    )
+    print(f"Using configured Octree profile {profile_name} at iteration {iterations[-1]}")
 
 
 def select_octree(root: Path) -> None:
@@ -88,6 +138,7 @@ def select_octree(root: Path) -> None:
     selected = select_octree_candidate(candidates)
     output = {
         "schema_version": 1,
+        "selection_mode": "validation",
         "selection_split": "validation",
         "criterion": [
             "highest primary mean PSNR",
@@ -127,6 +178,78 @@ def select_octree(root: Path) -> None:
     print(
         f"Selected Octree profile {selected['profile']} at iteration {selected['iteration']}"
     )
+
+
+def write_selection_lock(
+    root: Path,
+    *,
+    manifest: dict[str, Any],
+    octree: dict[str, Any],
+    selected: dict[str, Any],
+    selection_mode: str,
+) -> None:
+    model_path = Path(octree["model_path"])
+    iteration_dir = model_path / "point_cloud" / f"iteration_{int(octree['iteration'])}"
+    artifact_paths = {
+        "model_config": model_path / "config.yaml",
+        "model_iteration": iteration_dir,
+        "posterior": Path(selected["posterior_path"]),
+        "uncertainty": Path(selected["u_path"]),
+    }
+    for name, path in artifact_paths.items():
+        if not path.exists():
+            raise FileNotFoundError(f"Cannot lock missing {name} artifact: {path}")
+    hashes = {
+        name: directory_sha256(path) if path.is_dir() else file_sha256(path)
+        for name, path in artifact_paths.items()
+    }
+    lock = {
+        "schema_version": 1,
+        "dataset": manifest["dataset"],
+        "scene_id": manifest["scene_id"],
+        "config_hash": manifest["config_hash"],
+        "split_hash": manifest["split_hash"],
+        "selection_mode": selection_mode,
+        "dynamic_object_masking": "disabled",
+        "octree_profile": octree["profile"],
+        "model_path": str(model_path),
+        "iteration": int(octree["iteration"]),
+        "uncertainty_profile": selected["profile"],
+        "posterior_path": selected["posterior_path"],
+        "u_path": selected["u_path"],
+        "artifact_paths": {name: str(path) for name, path in artifact_paths.items()},
+        "artifact_hashes": hashes,
+    }
+    save_json(root / "selection.lock.json", lock, refuse_existing=True)
+
+
+def configured_uncertainty(root: Path) -> None:
+    manifest = read_json(root / "experiment_manifest.json")
+    octree = read_json(root / "octree_selection.json")["selected"]
+    run_index = read_json(root / "uncertainty_runs.json")
+    profile_name = configured_profile(
+        root, section="fit", selection_key="default_uncertainty_profile"
+    )
+    matching = [profile for profile in run_index["profiles"] if profile["name"] == profile_name]
+    if len(matching) != 1:
+        raise ValueError(f"Expected one configured uncertainty run for profile {profile_name!r}")
+    selected = {**matching[0], "profile": matching[0]["name"]}
+    selection = {
+        "schema_version": 1,
+        "selection_mode": "configured-default",
+        "selection_split": None,
+        "criterion": ["configured default profile"],
+        "selected": selected,
+    }
+    save_json(root / "uncertainty_selection.json", selection)
+    write_selection_lock(
+        root,
+        manifest=manifest,
+        octree=octree,
+        selected=selected,
+        selection_mode="configured-default",
+    )
+    print(f"Using configured uncertainty profile {profile_name} and wrote immutable lock")
 
 
 def select_uncertainty(root: Path) -> None:
@@ -181,6 +304,7 @@ def select_uncertainty(root: Path) -> None:
 
     selection = {
         "schema_version": 1,
+        "selection_mode": "validation",
         "selection_split": "validation",
         "criterion": [
             "lowest primary observed-only mean normalized AUSE over PSNR/SSIM/LPIPS (legacy fallback)",
@@ -222,37 +346,13 @@ def select_uncertainty(root: Path) -> None:
         ],
     )
 
-    model_path = Path(octree["model_path"])
-    iteration_dir = model_path / "point_cloud" / f"iteration_{int(octree['iteration'])}"
-    artifact_paths = {
-        "model_config": model_path / "config.yaml",
-        "model_iteration": iteration_dir,
-        "posterior": Path(selected["posterior_path"]),
-        "uncertainty": Path(selected["u_path"]),
-    }
-    for name, path in artifact_paths.items():
-        if not path.exists():
-            raise FileNotFoundError(f"Cannot lock missing {name} artifact: {path}")
-    hashes = {
-        name: directory_sha256(path) if path.is_dir() else file_sha256(path)
-        for name, path in artifact_paths.items()
-    }
-    lock = {
-        "schema_version": 1,
-        "dataset": manifest["dataset"],
-        "scene_id": manifest["scene_id"],
-        "config_hash": manifest["config_hash"],
-        "split_hash": manifest["split_hash"],
-        "octree_profile": octree["profile"],
-        "model_path": str(model_path),
-        "iteration": int(octree["iteration"]),
-        "uncertainty_profile": selected["profile"],
-        "posterior_path": selected["posterior_path"],
-        "u_path": selected["u_path"],
-        "artifact_paths": {name: str(path) for name, path in artifact_paths.items()},
-        "artifact_hashes": hashes,
-    }
-    save_json(root / "selection.lock.json", lock, refuse_existing=True)
+    write_selection_lock(
+        root,
+        manifest=manifest,
+        octree=octree,
+        selected=selected,
+        selection_mode="validation",
+    )
     print(f"Selected uncertainty profile {selected['profile']} and wrote immutable lock")
 
 
@@ -367,14 +467,18 @@ def report(root: Path) -> None:
     per_view = read_json(root / "test" / "per_view.json")["views"]
     make_plots(root, test, per_view, Path(lock["u_path"]))
 
+    selection_mode = str(lock.get("selection_mode", "validation"))
+    selection_label = "Configured default" if selection_mode == "configured-default" else "Validation-selected"
     lines = [
         "# Uncertainty-Evaluation Report",
         "",
         f"- Dataset: `{manifest['dataset']}`",
         f"- Scene: `{manifest['scene_id']}`",
         f"- Split hash: `{manifest['split_hash']}`",
-        f"- Selected Octree profile/checkpoint: `{octree['profile']}` / `{octree['iteration']}`",
-        f"- Selected uncertainty profile: `{uncertainty['profile']}`",
+        f"- Selection mode: `{selection_mode}`",
+        f"- Dynamic object masking: `{lock.get('dynamic_object_masking', 'disabled')}`",
+        f"- {selection_label} Octree profile/checkpoint: `{octree['profile']}` / `{octree['iteration']}`",
+        f"- {selection_label} uncertainty profile: `{uncertainty['profile']}`",
         "",
         "## Final held-out test metrics",
         "",
@@ -435,6 +539,10 @@ def main() -> None:
         select_octree(root)
     elif args.phase == "uncertainty":
         select_uncertainty(root)
+    elif args.phase == "configured-octree":
+        configured_octree(root)
+    elif args.phase == "configured-uncertainty":
+        configured_uncertainty(root)
     else:
         report(root)
 

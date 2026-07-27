@@ -7,13 +7,13 @@ Uncertainty-Evaluation measures two related but distinct properties of a VBOGS s
 1. **RGB reconstruction quality** — how closely an Octree-AnyGS render matches a held-out photograph, measured with PSNR, SSIM, and LPIPS.
 2. **Uncertainty calibration** — whether views with high alpha-normalized VBOGS uncertainty also have high held-out rendering error, measured with Spearman correlation and normalized AUSE.
 
-The experiment enforces a three-way data boundary:
+The default experiment uses a fixed production configuration and keeps dynamic
+object masking disabled. It enforces a train/test boundary:
 
 - `train` frames may create the Octree scene, sparse seed, world-point cloud, anchor buckets, and VBGS posteriors;
-- `validation` frames may select an Octree profile/checkpoint and then a VBOGS uncertainty profile;
-- `test` frames are read only after both choices are written into an immutable, hash-verified selection lock.
+- `test` frames are read only after the configured Octree checkpoint and VBGS posterior are written into an immutable, hash-verified selection lock.
 
-The selected model is not retrained with validation data. The exact validation-selected Octree checkpoint and posterior are evaluated once on test.
+Validation-driven profile selection remains available with `--select-on-validation`; only that opt-in mode renders validation frames for profile selection.
 
 ## Runtime and preflight
 
@@ -23,7 +23,7 @@ Run the experiment from the `vbogs-pipeline` container. It resolves the active `
 cd /workspace/VBOGS
 ```
 
-Confirm that the chosen KITTI-360 drive or NCore clip is present before starting. The full default sweep trains four 90k-iteration Octree scenes and performs five full-scene VBGS fits, so budget multiple GPU-hours and substantial `/data` space.
+Confirm that the chosen KITTI-360 drive or NCore clip is present before starting. The default run trains one 90k-iteration Octree scene and performs one full-scene VBGS fit, so budget GPU-hours and substantial `/data` space. The optional validation sweep is substantially more expensive.
 
 ## Dry run and smoke run
 
@@ -37,7 +37,7 @@ scripts/uncertainty-evaluation \
   --dry-run
 ```
 
-Run a reduced end-to-end smoke experiment with 16 selected frames, one 2k-iteration Octree profile, three uncertainty profiles, at most 200k bucketed points, and four views per held-out split:
+Run a reduced end-to-end smoke experiment with 16 selected frames, one 2k-iteration Octree profile, one VBGS fit, at most 200k bucketed points, and four test views:
 
 ```bash
 scripts/uncertainty-evaluation \
@@ -47,17 +47,16 @@ scripts/uncertainty-evaluation \
   --smoke
 ```
 
-NCore uses the same interface:
+Run the requested unmasked NCore default experiment:
 
 ```bash
 scripts/uncertainty-evaluation \
   --dataset-name nvidia_ncore \
-  --scene-id <clip_uuid> \
-  --run-id smoke-01 \
-  --smoke
+  --scene-id a9bdfee9-b1bd-42a2-945c-a1fffcb8f8bc \
+  --run-id ncore-a9bdfee9-unmasked-default
 ```
 
-Use repeated `--camera-id` options to replace the NCore camera list in the experiment config.
+This command does not pass dynamic-mask inputs to preparation or point export, and image metrics use no dynamic-object/alpha image mask. Use repeated `--camera-id` options to replace the NCore camera list in the experiment config.
 
 ## Full run
 
@@ -68,7 +67,7 @@ scripts/uncertainty-evaluation \
   --run-id full-01
 ```
 
-The default profile definitions are in `configs/experiments/uncertainty-evaluation.yaml`. The Octree sweep changes resolution, base layer, or visibility pruning one factor at a time around the production profile. Every saved 10k checkpoint is evaluated. The uncertainty sweep changes mixture capacity, the observed-anchor point threshold, or the ELBO growth tolerance around the PLAN.md defaults.
+The default profile definitions are in `configs/experiments/uncertainty-evaluation.yaml`: `production` Octree (90k iterations, explicit 3D, resolution 2, base layer 10, visibility threshold 0.01) and `baseline` VBGS (`K_MAX=40`, 20-point threshold, ELBO tolerance 0.01). The final production checkpoint and baseline raw `U.npy` are hash-locked before test evaluation.
 
 Override common run controls without editing the config:
 
@@ -83,6 +82,20 @@ scripts/uncertainty-evaluation \
   --max-frames 400
 ```
 
+## Optional validation-driven selection
+
+Add `--select-on-validation` to run the original profile sweep and choose the Octree checkpoint and uncertainty profile using validation views:
+
+```bash
+scripts/uncertainty-evaluation \
+  --dataset-name nvidia_ncore \
+  --scene-id a9bdfee9-b1bd-42a2-945c-a1fffcb8f8bc \
+  --run-id ncore-a9bdfee9-validation-selection \
+  --select-on-validation
+```
+
+This mode trains all configured Octree profiles, evaluates their saved checkpoints on validation, fits all configured VBGS profiles for the chosen Octree checkpoint, and then evaluates those profiles on validation. The Octree sweep changes resolution, base layer, or visibility pruning one factor at a time around the production profile. Every saved 10k checkpoint is evaluated. The uncertainty sweep changes mixture capacity, the observed-anchor point threshold, or the ELBO growth tolerance around the PLAN.md defaults.
+
 ## Resume and stage control
 
 Every completed stage writes a marker under `.stages/`. Resume requires the original run ID and refuses to continue if the effective config hash, dataset, scene, or prepared split differs:
@@ -95,26 +108,26 @@ scripts/uncertainty-evaluation \
   --resume
 ```
 
-To run a bounded part of the state machine, use `--start-at` and `--stop-after`. The stages are:
+To run a bounded part of the default state machine, use `--start-at` and `--stop-after`. The stages are:
 
 ```text
 prepare
 octree-train
-octree-validation
-octree-select
 points
 bucket
 uncertainty-fit
-uncertainty-validation
-uncertainty-select
 test
 export
 report
 ```
 
+`octree-validation`, `octree-select`, `uncertainty-validation`, and `uncertainty-select` require `--select-on-validation`.
+
 Do not start at `test` without the existing experiment manifest and `selection.lock.json`. The test stage re-hashes the selected config, checkpoint directory, posterior, and `U.npy` before rendering.
 
-## Selection rules
+## Validation selection rules
+
+The following rules apply only with `--select-on-validation`.
 
 Octree selection uses primary-camera validation views. KITTI’s primary camera is `image_00`; NCore uses `primary_camera_id` from prepared metadata. Candidates are ordered by:
 
@@ -144,10 +157,10 @@ Important files are:
 experiment_manifest.json
 effective_config.yaml
 prepared_metadata.json
-validation/octree_metrics.md
-validation/uncertainty_metrics.md
-octree_selection.json
-uncertainty_selection.json
+validation/octree_metrics.md          # opt-in validation selection only
+validation/uncertainty_metrics.md     # opt-in validation selection only
+octree_selection.json                 # configured defaults or validation winner
+uncertainty_selection.json            # configured defaults or validation winner
 selection.lock.json
 test/summary.json
 test/per_view.json
@@ -159,7 +172,7 @@ report.md
 
 ## Exported scene and uncertainty
 
-The `export` stage copies the validation-selected splat and uncertainty into the report
+The `export` stage copies the configured-default or validation-selected splat and uncertainty into the report
 directory so a single download is enough to visualize the run locally:
 
 ```text
