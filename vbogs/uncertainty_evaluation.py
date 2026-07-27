@@ -18,6 +18,7 @@ import numpy as np
 
 
 METRICS = ("PSNR", "SSIM", "LPIPS")
+STATIC_METRICS = tuple(f"{metric}_static" for metric in METRICS)
 SPLITS = ("train", "validation", "test")
 
 
@@ -278,14 +279,18 @@ def ause(predicted: Sequence[float], oracle: Sequence[float]) -> float:
 
 def normalized_errors(rows: Sequence[dict[str, Any]], metric: str) -> tuple[np.ndarray | None, str | None]:
     values = np.asarray([float(row[metric]) for row in rows], dtype=np.float64)
+    values = values[np.isfinite(values)]
+    base_metric = metric.removesuffix("_static")
+    if values.size < 2:
+        return None, f"{metric} has fewer than two finite views; omitted from calibration"
     low = float(np.min(values))
     high = float(np.max(values))
     span = high - low
     if not np.isfinite(span) or span <= 0.0:
         return None, f"{metric} is constant on the selected views; omitted from calibration"
-    if metric in ("PSNR", "SSIM"):
+    if base_metric in ("PSNR", "SSIM"):
         return (high - values) / span, None
-    if metric == "LPIPS":
+    if base_metric == "LPIPS":
         return (values - low) / span, None
     raise ValueError(f"Unsupported metric: {metric}")
 
@@ -308,15 +313,25 @@ def view_score_fields(
 
 
 def calibration_summary(
-    rows: Sequence[dict[str, Any]], score_key: str = "uncertainty_score"
+    rows: Sequence[dict[str, Any]],
+    score_key: str = "uncertainty_score",
+    metric_keys: Sequence[str] = METRICS,
 ) -> dict[str, Any]:
     if not rows:
         return {"count": 0, "metrics": {}, "mean_normalized_AUSE": math.nan, "mean_spearman": math.nan, "warnings": ["No views"]}
-    uncertainty = np.asarray([float(row[score_key]) for row in rows], dtype=np.float64)
     metrics: dict[str, Any] = {}
     warnings: list[str] = []
-    for metric in METRICS:
-        errors, warning = normalized_errors(rows, metric)
+    for metric in metric_keys:
+        metric_rows = [
+            row
+            for row in rows
+            if row.get(score_key) is not None
+            and row.get(metric) is not None
+            and np.isfinite(float(row[score_key]))
+            and np.isfinite(float(row[metric]))
+        ]
+        uncertainty = np.asarray([float(row[score_key]) for row in metric_rows], dtype=np.float64)
+        errors, warning = normalized_errors(metric_rows, metric)
         if warning:
             warnings.append(warning)
             continue
@@ -352,6 +367,20 @@ def evaluation_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
             for metric in METRICS
         }
         payload: dict[str, Any] = {"view_count": len(group_rows), "metrics": metrics}
+        if group_rows and any(row.get("PSNR_static") is not None for row in group_rows):
+            payload["static_metrics"] = {
+                metric: summarize_values(
+                    float(row[metric])
+                    for row in group_rows
+                    if row.get(metric) is not None
+                )
+                for metric in STATIC_METRICS
+            }
+            payload["static_pixel_fraction"] = summarize_values(
+                float(row["static_pixel_fraction"])
+                for row in group_rows
+                if row.get("static_pixel_fraction") is not None
+            )
         if group_rows and all(row.get("uncertainty_score") is not None for row in group_rows):
             payload["uncertainty_score"] = summarize_values(
                 float(row["uncertainty_score"]) for row in group_rows
@@ -360,6 +389,12 @@ def evaluation_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         if group_rows and all(row.get("uncertainty_score_observed") is not None for row in group_rows):
             payload["calibration_observed"] = calibration_summary(
                 group_rows, score_key="uncertainty_score_observed"
+            )
+        if group_rows and all(row.get("uncertainty_score_static") is not None for row in group_rows):
+            payload["calibration_static"] = calibration_summary(
+                group_rows,
+                score_key="uncertainty_score_static",
+                metric_keys=STATIC_METRICS,
             )
         if group_rows and all(row.get("frame_id") is not None for row in group_rows):
             payload["frame_id_null"] = calibration_summary(group_rows, score_key="frame_id")

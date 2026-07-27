@@ -75,3 +75,9 @@ def test_build_config_can_disable_octree_eval_split(tmp_path):
     cfg = build_config(args)
 
     assert cfg["model_params"]["eval"] is False
+
+
+def test_build_config_enables_native_alpha_masks_when_requested(tmp_path):
+    args = make_args(tmp_path)
+    args.use_masks = True
+    assert build_config(args)["model_params"]["add_mask"] is True

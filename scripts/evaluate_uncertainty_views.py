@@ -25,7 +25,9 @@ from scripts.render_uncertainty_views import (
     load_uncertainty,
 )
 from vbogs.dataset_splits import load_split_metadata, metadata_cameras_for_split
+from vbogs.dynamic_masking import load_manifest, mask_path
 from vbogs.uncertainty_evaluation import (
+    directory_sha256,
     evaluation_summary,
     evaluation_views,
     file_sha256,
@@ -45,6 +47,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--u-path", type=Path, default=None)
     parser.add_argument("--mask-path", type=Path, default=None)
+    parser.add_argument(
+        "--image-mask-root",
+        type=Path,
+        default=None,
+        help=(
+            "Dynamic-mask artifact root used for static-region metrics. This is "
+            "distinct from --mask-path, which remains the per-anchor observed mask."
+        ),
+    )
     parser.add_argument("--resolution", type=int, default=2)
     parser.add_argument("--max-views", type=int, default=0)
     parser.add_argument("--save-images", action=argparse.BooleanOptionalAction, default=False)
@@ -83,6 +94,85 @@ def metric_values(render, ground_truth, lpips_model) -> dict[str, float]:
         "SSIM": float(ssim(render_batch, gt_batch).mean().item()),
         # Match the upstream Octree evaluator: LPIPS receives clamped [0, 1] RGB.
         "LPIPS": float(lpips_model(render_batch, gt_batch).mean().item()),
+    }
+
+
+def load_static_mask_for_evaluation(mask_root: Path, image_name: str, source_shape: tuple[int, int], target_shape: tuple[int, int]):
+    """Load a strict binary source-resolution mask and resize for rendering."""
+
+    path = mask_path(mask_root, image_name)
+    if not path.is_file():
+        raise FileNotFoundError(f"Dynamic mask missing for {image_name}: {path}")
+    with Image.open(path) as image:
+        raw = np.asarray(image.convert("L"))
+    if raw.shape != source_shape:
+        raise ValueError(f"Dynamic mask {path} has shape {raw.shape}, expected {source_shape}")
+    values = set(np.unique(raw).tolist())
+    if not values.issubset({0, 255}):
+        raise ValueError(f"Dynamic mask {path} must be binary 0/255, found {sorted(values)}")
+    if raw.shape != target_shape:
+        raw = np.asarray(
+            Image.fromarray(raw).resize((target_shape[1], target_shape[0]), Image.Resampling.NEAREST)
+        )
+    return raw == 255
+
+
+def static_metric_values(render, ground_truth, static_mask, lpips_model) -> dict[str, float | int]:
+    """Metrics restricted to confirmed static pixels.
+
+    SSIM uses only output locations whose full 11x11 receptive field is static.
+    LPIPS is evaluated over deterministic non-overlapping all-static 64px tiles.
+    """
+
+    import torch
+    import torch.nn.functional as F
+    from utils.loss_utils import create_window
+
+    if static_mask.ndim != 2 or tuple(static_mask.shape) != tuple(render.shape[-2:]):
+        raise ValueError("Static mask must match rendered image height and width")
+    mask = static_mask.to(device=render.device, dtype=render.dtype)
+    static_pixels = int(mask.sum().item())
+    if static_pixels == 0:
+        raise ValueError("Static mask contains no static pixels")
+    error = (render - ground_truth).pow(2)
+    mse = (error * mask.unsqueeze(0)).sum() / (mask.sum() * render.shape[0])
+    psnr = float("inf") if float(mse) == 0.0 else float(-10.0 * torch.log10(mse).item())
+
+    render_batch = render.contiguous().unsqueeze(0)
+    gt_batch = ground_truth.contiguous().unsqueeze(0)
+    window = create_window(11, int(render.shape[0])).to(device=render.device, dtype=render.dtype)
+    # Recreate the upstream SSIM map so a complete static support can be selected.
+    mu1 = F.conv2d(render_batch, window, padding=5, groups=render.shape[0])
+    mu2 = F.conv2d(gt_batch, window, padding=5, groups=render.shape[0])
+    sigma1 = F.conv2d(render_batch * render_batch, window, padding=5, groups=render.shape[0]) - mu1.pow(2)
+    sigma2 = F.conv2d(gt_batch * gt_batch, window, padding=5, groups=render.shape[0]) - mu2.pow(2)
+    sigma12 = F.conv2d(render_batch * gt_batch, window, padding=5, groups=render.shape[0]) - mu1 * mu2
+    ssim_map = ((2 * mu1 * mu2 + 0.01**2) * (2 * sigma12 + 0.03**2)) / ((mu1.pow(2) + mu2.pow(2) + 0.01**2) * (sigma1 + sigma2 + 0.03**2))
+    support = F.conv2d(mask[None, None], torch.ones((1, 1, 11, 11), device=render.device, dtype=render.dtype), padding=5)
+    valid_ssim = support[0, 0] == 121
+    ssim_static = float("nan")
+    if bool(valid_ssim.any()):
+        ssim_static = float(ssim_map[0, :, valid_ssim].mean().item())
+
+    tiles_render = []
+    tiles_gt = []
+    tile_size = 64
+    height, width = mask.shape
+    for top in range(0, height - tile_size + 1, tile_size):
+        for left in range(0, width - tile_size + 1, tile_size):
+            tile_mask = mask[top : top + tile_size, left : left + tile_size]
+            if bool(torch.all(tile_mask > 0)):
+                tiles_render.append(render[:, top : top + tile_size, left : left + tile_size])
+                tiles_gt.append(ground_truth[:, top : top + tile_size, left : left + tile_size])
+    lpips_static = float("nan")
+    if tiles_render:
+        lpips_static = float(lpips_model(torch.stack(tiles_render), torch.stack(tiles_gt)).mean().item())
+    return {
+        "PSNR_static": psnr,
+        "SSIM_static": ssim_static,
+        "LPIPS_static": lpips_static,
+        "static_pixel_fraction": float(mask.mean().item()),
+        "static_lpips_tile_count": len(tiles_render),
     }
 
 
@@ -175,6 +265,10 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths = image_paths(output_dir) if args.save_images else None
     prepared_images = metadata_path.parent / "images"
+    image_mask_root = args.image_mask_root.resolve() if args.image_mask_root is not None else None
+    image_mask_manifest = None
+    if image_mask_root is not None:
+        image_mask_manifest = load_manifest(image_mask_root)
 
     rows: list[dict[str, Any]] = []
     with torch.no_grad():
@@ -201,6 +295,19 @@ def main() -> None:
                 )
 
             values = metric_values(rendered, ground_truth, lpips_model)
+            static_mask = None
+            static_values: dict[str, float | int] = {}
+            if image_mask_root is not None:
+                with Image.open(prepared_images / descriptor.image_name) as source_image:
+                    source_shape = (source_image.height, source_image.width)
+                static_mask_np = load_static_mask_for_evaluation(
+                    image_mask_root,
+                    descriptor.image_name,
+                    source_shape,
+                    (int(rendered.shape[1]), int(rendered.shape[2])),
+                )
+                static_mask = torch.from_numpy(static_mask_np)
+                static_values = static_metric_values(rendered, ground_truth, static_mask, lpips_model)
             row: dict[str, Any] = {
                 **descriptor.to_json(),
                 "index": index,
@@ -214,6 +321,8 @@ def main() -> None:
                 "observed_uncertainty_sum": None,
                 "uncertainty_score_observed": None,
                 "unobserved_fraction": None,
+                "uncertainty_score_static": None,
+                **static_values,
             }
 
             heatmap = None
@@ -236,6 +345,17 @@ def main() -> None:
                         "uncertainty_score": uncertainty_sum / (alpha_sum + 1.0e-8),
                     }
                 )
+                if static_mask is not None:
+                    static_mask_device = static_mask.to(device=unc_image.device, dtype=unc_image.dtype)
+                    static_alpha_sum = float((alpha_image * static_mask_device).sum().item())
+                    static_uncertainty_sum = float((unc_image * static_mask_device).sum().item())
+                    row.update(
+                        {
+                            "static_alpha_sum": static_alpha_sum,
+                            "static_uncertainty_sum": static_uncertainty_sum,
+                            "uncertainty_score_static": static_uncertainty_sum / (static_alpha_sum + 1.0e-8),
+                        }
+                    )
                 if observed_mask is not None:
                     observed_image, _ = render_scalar(
                         camera, gaussians, pipe, observed_mask, loaded_iteration
@@ -288,6 +408,9 @@ def main() -> None:
         "uncertainty_sha256": file_sha256(uncertainty_path) if uncertainty_path else None,
         "mask_path": str(observed_mask_path) if observed_mask_path else None,
         "mask_sha256": file_sha256(observed_mask_path) if observed_mask_path else None,
+        "image_mask_root": str(image_mask_root) if image_mask_root else None,
+        "image_mask_sha256": directory_sha256(image_mask_root) if image_mask_root else None,
+        "image_mask_manifest": image_mask_manifest,
         "view_count": len(rows),
     }
     save_json(output_dir / "per_view.json", {**provenance, "views": rows})

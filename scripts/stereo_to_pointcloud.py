@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.data_layout import resolve_kitti360_path
 from vbogs.dataset_splits import frames_for_split, load_split_metadata
+from vbogs.dynamic_masking import read_static_mask
 
 
 @dataclass(frozen=True)
@@ -287,6 +288,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Random seed used when `--max-points-per-frame` subsamples outputs.",
     )
+    parser.add_argument(
+        "--dynamic-mask-root",
+        type=Path,
+        default=None,
+        help="Optional dynamic-mask artifact; black pixels are excluded before unprojection.",
+    )
     return parser.parse_args()
 
 
@@ -464,6 +471,7 @@ def build_validity_mask(
     disparity_right: np.ndarray,
     left_gray: np.ndarray,
     args: argparse.Namespace,
+    static_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     height, width = disparity_left.shape
     xs = np.arange(width, dtype=np.float32)[None, :].repeat(height, axis=0)
@@ -482,6 +490,10 @@ def build_validity_mask(
     )
 
     valid = disparity_valid & in_bounds & np.isfinite(sampled_right_disp) & lr_consistent & texture_valid
+    if static_mask is not None:
+        if static_mask.shape != valid.shape:
+            raise ValueError("Dynamic mask must match the stereo image shape")
+        valid &= static_mask
 
     if args.pixel_step > 1:
         ys = np.arange(height)[:, None]
@@ -619,7 +631,9 @@ def export_points(args: argparse.Namespace) -> Path:
         rgb_left = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)
 
         stereo = matcher.compute(left_gray, right_gray)
-        valid_mask = build_validity_mask(stereo.disparity_left, stereo.disparity_right, left_gray, args)
+        dynamic_mask_root = getattr(args, "dynamic_mask_root", None)
+        static_mask = read_static_mask(dynamic_mask_root, f"{frame.frame_id:010d}.png", left_gray.shape) if dynamic_mask_root else None
+        valid_mask = build_validity_mask(stereo.disparity_left, stereo.disparity_right, left_gray, args, static_mask)
         points_world, colors = unproject_to_world(
             disparity_left=stereo.disparity_left,
             rgb_image=rgb_left,
@@ -635,6 +649,7 @@ def export_points(args: argparse.Namespace) -> Path:
             {
                 "frame_id": frame.frame_id,
                 "valid_pixels": int(valid_mask.sum()),
+                "masked_dynamic_pixels": int((~static_mask).sum()) if static_mask is not None else 0,
                 "points_kept": int(points_world.shape[0]),
             }
         )
@@ -688,6 +703,7 @@ def export_points(args: argparse.Namespace) -> Path:
             "max_depth_m": args.max_depth_m,
             "lr_consistency_threshold": args.lr_consistency_threshold,
             "texture_window_size": args.texture_window_size,
+            "dynamic_mask_root": str(getattr(args, "dynamic_mask_root", None)) if getattr(args, "dynamic_mask_root", None) else None,
             "texture_threshold": args.texture_threshold,
             "pixel_step": args.pixel_step,
             "max_points_per_frame": args.max_points_per_frame,

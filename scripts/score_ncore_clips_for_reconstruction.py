@@ -73,6 +73,10 @@ NEARBY_ACTOR_RADIUS_M = 30.0
 # Below this the rig is effectively parked and consecutive frames are redundant.
 STATIONARY_SPEED_MPS = 0.5
 
+# Top fraction of the frame treated as sky for the daylight test. Validated on 14
+# hand-labelled clips: night sky value <= 68, day/dusk >= 108, with no overlap.
+SKY_BAND_FRACTION = 0.25
+
 # Sub-score weights. Static scene and parallax dominate because no amount of
 # training recovers from a dynamic scene or a degenerate baseline.
 SCORE_WEIGHTS = {
@@ -125,6 +129,14 @@ def parse_args() -> argparse.Namespace:
             "imagery and LiDAR. Works on `--mode core-only` downloads, which are ~9 MB "
             "per clip instead of ~2 GB, so the whole dataset can be triaged cheaply. "
             "Applied automatically when a clip has no camera component."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-lidar",
+        action="store_true",
+        help=(
+            "Skip LiDAR scoring even when the component is present, so clips downloaded "
+            "at different tiers are ranked on the same axes."
         ),
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
@@ -297,18 +309,27 @@ def collect_photometrics(sensor: Any, sample_count: int) -> dict[str, Any]:
     indices = np.linspace(0, frame_count - 1, num=min(sample_count, frame_count), dtype=int)
 
     brightness = []
+    sky_luma = []
     sharpness = []
     clipped = []
     for index in indices:
         image = get_image_array(sensor, int(index))
         gray = image.astype(np.float64) @ np.array([0.299, 0.587, 0.114])
         brightness.append(gray.mean())
+        # Sky band, measured as max-channel value rather than luma. Two traps:
+        # whole-frame brightness cannot tell a night snowstorm from an overcast day
+        # (snow reflects streetlight into the mid-tones), and luma weights blue at
+        # 0.114, so a clear blue sky reads darker than an overcast white one and
+        # sunny clips get penalised. Max-channel avoids both.
+        band = image[: int(image.shape[0] * SKY_BAND_FRACTION)]
+        sky_luma.append(float(band.max(axis=2).mean()))
         sharpness.append(laplacian_variance(gray))
         clipped.append(float(np.mean((gray < 5.0) | (gray > 250.0))))
 
     return {
         "brightness_mean": float(np.mean(brightness)),
         "brightness_min": float(np.min(brightness)),
+        "sky_luma_mean": float(np.mean(sky_luma)),
         "sharpness_mean": float(np.mean(sharpness)),
         "sharpness_min": float(np.min(sharpness)),
         "clipped_frac": float(np.mean(clipped)),
@@ -383,13 +404,14 @@ def score_clip(metrics: dict[str, Any]) -> dict[str, float]:
     }
 
     if photo is not None:
-        # Photometric: daylight, unclipped, and sharp.
-        exposure = plateau_score(
-            photo["brightness_mean"], low=15.0, ideal_low=60.0, ideal_high=170.0, high=235.0
+        # Photometric: daylight, unclipped, and sharp. Daylight is judged from the
+        # sky band rather than frame brightness - see collect_photometrics.
+        daylight = plateau_score(
+            photo["sky_luma_mean"], low=55.0, ideal_low=105.0, ideal_high=235.0, high=254.0
         )
         blur = unit_clamp(photo["sharpness_min"] / 150.0)
         clipping = unit_clamp(1.0 - photo["clipped_frac"] / 0.15)
-        parts["photometric"] = 0.45 * exposure + 0.35 * blur + 0.20 * clipping
+        parts["photometric"] = 0.45 * daylight + 0.35 * blur + 0.20 * clipping
 
     if lidar is not None:
         parts["geometry_seed"] = unit_clamp(lidar["points_per_frame"] / 150_000.0)
@@ -419,7 +441,11 @@ def evaluate_clip(args: argparse.Namespace, ncore_root: Path, scene_id: str) -> 
     }
     if not screening:
         metrics["photometrics"] = collect_photometrics(sensor, args.image_samples)
-        metrics["lidar"] = collect_lidar_stats(loader, args.lidar_id, args.lidar_samples)
+        # The triage tier fetches the camera component only, so LiDAR is scored
+        # when present rather than assumed. `--ignore-lidar` forces it off so a
+        # mixed pool of camera-only and full clips is ranked on identical axes.
+        if not args.ignore_lidar and args.lidar_id in set(loader.lidar_ids):
+            metrics["lidar"] = collect_lidar_stats(loader, args.lidar_id, args.lidar_samples)
     # Trajectory arrays are only needed for the derived statistics above.
     metrics["ego_motion"].pop("positions", None)
     metrics["ego_motion"].pop("timestamps_s", None)

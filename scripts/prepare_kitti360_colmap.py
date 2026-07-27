@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from vbogs.data_layout import resolve_kitti360_path
 from vbogs.dataset_splits import split_frame_indices, split_lookup
+from vbogs.dynamic_masking import load_manifest, mask_path, read_static_mask
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Random seed used for point subsampling and random fallback.",
+    )
+    parser.add_argument(
+        "--dynamic-mask-root",
+        type=Path,
+        default=None,
+        help="Optional dynamic-mask artifact. Its masks are mirrored into the prepared dataset.",
     )
     return parser.parse_args()
 
@@ -401,8 +408,13 @@ def image_to_world_points(
     max_depth_m: float,
     max_points_per_frame: int,
     rng: np.random.Generator,
+    static_mask: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     valid = np.isfinite(disparity) & (disparity > min_disparity)
+    if static_mask is not None:
+        if static_mask.shape != disparity.shape:
+            raise ValueError("Dynamic mask must match the stereo disparity shape")
+        valid &= static_mask
     ys, xs = np.nonzero(valid)
     if ys.size == 0:
         return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
@@ -459,6 +471,10 @@ def build_sparse_points_from_stereo(
         right_gray = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
         disparity = matcher.compute(left_gray, right_gray).astype(np.float32) / 16.0
         rgb_left = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)
+        mask_root = getattr(args, "dynamic_mask_root", None)
+        training_cameras = getattr(args, "training_cameras", "left")
+        image_name = f"image_00/{frame_id:010d}.png" if training_cameras == "stereo" else f"{frame_id:010d}.png"
+        static_mask = read_static_mask(mask_root, image_name, left.shape[:2]) if mask_root else None
         points_world, colors = image_to_world_points(
             disparity=disparity,
             rgb_image=rgb_left,
@@ -469,6 +485,7 @@ def build_sparse_points_from_stereo(
             max_depth_m=args.max_depth_m,
             max_points_per_frame=args.max_points_per_frame,
             rng=rng,
+            static_mask=static_mask,
         )
         if points_world.size == 0:
             continue
@@ -666,6 +683,36 @@ def materialize_training_images(
     return colmap_images, frame_records
 
 
+def materialize_dynamic_masks(
+    *,
+    frames: Sequence[Tuple[int, Path, Path, FramePose]],
+    training_cameras: str,
+    mask_root: Path | None,
+    masks_out: Path,
+    copy_mode: str,
+) -> None:
+    if mask_root is None:
+        return
+    load_manifest(mask_root)
+    for frame_id, left_path, right_path, _pose in frames:
+        filename = f"{frame_id:010d}.png"
+        names = [filename] if training_cameras == "left" else [f"image_00/{filename}", f"image_01/{filename}"]
+        for name in names:
+            source = mask_path(mask_root, name)
+            if not source.is_file():
+                raise FileNotFoundError(f"Dynamic mask missing for prepared image {name}: {source}")
+            try:
+                import cv2
+                image_path = left_path if name == filename or name.startswith("image_00/") else right_path
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                mask = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+                if image is not None and (mask is None or mask.shape != image.shape):
+                    raise ValueError(f"Dynamic mask {source} must match image {image_path}")
+            except ImportError:
+                pass
+            materialize_image(source, masks_out / name, copy_mode)
+
+
 def prepare_dataset(args: argparse.Namespace) -> Path:
     drive_root = args.raw_root / args.drive
     left_dir = drive_root / "image_00" / "data_rect"
@@ -702,6 +749,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
 
     dataset_dir = args.output_root / args.drive
     images_out = dataset_dir / "images"
+    masks_out = dataset_dir / "masks"
     sparse_out = dataset_dir / "sparse" / "0"
     ensure_empty_dir(dataset_dir)
     images_out.mkdir(parents=True, exist_ok=True)
@@ -716,6 +764,14 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         images_out=images_out,
         copy_mode=args.copy_mode,
         frame_split_by_id=frame_split_by_id,
+    )
+    mask_root = getattr(args, "dynamic_mask_root", None)
+    materialize_dynamic_masks(
+        frames=frames,
+        training_cameras=training_cameras,
+        mask_root=mask_root,
+        masks_out=masks_out,
+        copy_mode=args.copy_mode,
     )
 
     if args.seed_mode == "stereo":
@@ -745,6 +801,7 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         "max_frames": args.max_frames,
         "copy_mode": args.copy_mode,
         "seed_mode": args.seed_mode,
+        "dynamic_mask_root": str(mask_root) if mask_root else None,
         "stereo_max_points": int(points_xyz.shape[0]),
         "camera_intrinsics": camera_intrinsics,
         "right_camera_center_in_left": [

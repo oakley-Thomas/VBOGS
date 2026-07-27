@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fixed paired NCore experiment. Run inside the vbogs-pipeline container so it
+# can call the torch/JAX sibling services through scripts/run_pipeline.sh.
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/experiment-dynamic-masking [OPTIONS]
+
+Run a fixed paired comparison of unmasked and dynamic-masked Octree/VBGS.
+
+Options:
+  --scene-id ID          NCore clip (default: configured demo clip).
+  --profile NAME         smoke (48 frames, 2k iters) or production (200, 90k).
+  --config PATH          Pipeline profile.
+  --weights-path PATH    Staged Mask R-CNN weights (required).
+  --output-root PATH     Curated output parent.
+  --work-root PATH       Mutable isolated artifact parent.
+  --dynamic-mask-root P  Shared static-mask artifact root.
+  --variant NAME|all     unmasked, dynamic_masked, or all.
+  --start-at STAGE       Resume selected pipeline stage (default: prepare).
+  --stop-after STAGE     Stop after a pipeline stage (default: bundle).
+  --gpu ID --jax-device ID
+  --dry-run              Print commands only.
+  -h, --help             Show this message.
+USAGE
+}
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${repo_root}"
+
+scene_id="000da9de-0ee5-465a-9a2d-e7e91d3016bb"
+profile="smoke"
+config="configs/pipeline/dynamic_masking_ncore.yaml"
+weights_path=""
+output_root="outputs/experiments/dynamic-masking"
+work_root="data/experiments/dynamic-masking"
+dynamic_mask_root=""
+variant="all"
+start_at="prepare"
+stop_after="bundle"
+gpu="0"
+jax_device="0"
+dry_run=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --scene-id) scene_id="${2:?}"; shift 2 ;;
+    --profile) profile="${2:?}"; shift 2 ;;
+    --config) config="${2:?}"; shift 2 ;;
+    --weights-path) weights_path="${2:?}"; shift 2 ;;
+    --output-root) output_root="${2:?}"; shift 2 ;;
+    --work-root) work_root="${2:?}"; shift 2 ;;
+    --dynamic-mask-root) dynamic_mask_root="${2:?}"; shift 2 ;;
+    --variant) variant="${2:?}"; shift 2 ;;
+    --start-at) start_at="${2:?}"; shift 2 ;;
+    --stop-after) stop_after="${2:?}"; shift 2 ;;
+    --gpu) gpu="${2:?}"; shift 2 ;;
+    --jax-device) jax_device="${2:?}"; shift 2 ;;
+    --dry-run) dry_run=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "${profile}" in
+  smoke) max_frames=48; iterations=2000 ;;
+  production) max_frames=200; iterations=90000 ;;
+  *) echo "--profile must be smoke or production" >&2; exit 2 ;;
+esac
+case "${variant}" in all|unmasked|dynamic_masked) ;; *) echo "Unknown variant: ${variant}" >&2; exit 2;; esac
+if [ -z "${weights_path}" ]; then echo "--weights-path is required" >&2; exit 2; fi
+if [ -z "${dynamic_mask_root}" ]; then dynamic_mask_root="data/dynamic_masks/nvidia_ncore/${scene_id}/${profile}"; fi
+
+if [ $((max_frames % 8)) -ne 0 ]; then echo "Profile frame count must be divisible by llffhold=8" >&2; exit 2; fi
+
+resolve_torch_container() {
+  local project="${VBOGS_COMPOSE_PROJECT:-}"
+  if [ -z "${project}" ] && [ -n "${HOSTNAME:-}" ]; then
+    project="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "${HOSTNAME}" 2>/dev/null || true)"
+  fi
+  local args=(--filter label=com.docker.compose.service=vbogs-torch --filter status=running)
+  if [ -n "${project}" ] && [ "${project}" != "<no value>" ]; then args+=(--filter "label=com.docker.compose.project=${project}"); fi
+  local ids
+  ids="$(docker ps -q "${args[@]}")"
+  if [ "$(printf '%s\n' "${ids}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+    echo "Expected exactly one running vbogs-torch container" >&2; return 1
+  fi
+  printf '%s\n' "${ids}"
+}
+
+run_pipeline() {
+  local selected_variant="$1" first="$2" last="$3" model_path="${4:-}"
+  local workspace="${work_root}/${scene_id}/${profile}/${selected_variant}"
+  local run_root="${output_root}/${scene_id}/${profile}/${selected_variant}"
+  local cmd=(scripts/run_pipeline.sh --config "${config}" --dataset-name nvidia_ncore --scene-id "${scene_id}"
+    --camera-id camera_front_wide_120fov --camera-id camera_front_tele_30fov
+    --frame-step 2 --max-frames "${max_frames}" --iterations "${iterations}" --llffhold 8
+    --gpu "${gpu}" --jax-device "${jax_device}" --artifact-root "${workspace}" --run-output-root "${run_root}"
+    --start-at "${first}" --stop-after "${last}")
+  if [ "${selected_variant}" = "dynamic_masked" ]; then
+    cmd+=(--dynamic-mask-enabled --dynamic-mask-root "${dynamic_mask_root}" --dynamic-mask-weights-path "${weights_path}")
+  fi
+  if [ -n "${model_path}" ]; then cmd+=(--model-path "${model_path}"); fi
+  if [ "${dry_run}" = true ]; then printf '+'; printf ' %q' "${cmd[@]}"; printf '\n'; else "${cmd[@]}"; fi
+}
+
+build_masks() {
+  local cmd=(scripts/run_pipeline.sh --config "${config}" --dataset-name nvidia_ncore --scene-id "${scene_id}"
+    --camera-id camera_front_wide_120fov --camera-id camera_front_tele_30fov
+    --frame-step 2 --max-frames "${max_frames}" --dynamic-mask-enabled
+    --dynamic-mask-root "${dynamic_mask_root}" --dynamic-mask-weights-path "${weights_path}"
+    --start-at dynamic-mask --stop-after dynamic-mask)
+  if [ "${dry_run}" = true ]; then printf '+'; printf ' %q' "${cmd[@]}"; printf '\n'; else "${cmd[@]}"; fi
+}
+
+evaluate_variant() {
+  local selected_variant="$1" model_path="$2" iteration="$3"
+  local workspace="${work_root}/${scene_id}/${profile}/${selected_variant}"
+  local run_dir="${output_root}/${scene_id}/${profile}/${selected_variant}/${scene_id}"
+  local cmd=(python scripts/evaluate_uncertainty_views.py --dataset-name nvidia_ncore --scene-id "${scene_id}"
+    --model-path "${model_path}" --iteration "${iteration}" --selection-metadata "${workspace}/colmap/${scene_id}/metadata.json"
+    --split test --output-dir "${run_dir}/evaluation/static_test" --u-path "${workspace}/m4/${scene_id}/U.npy"
+    --image-mask-root "${dynamic_mask_root}" --resolution 2 --save-images)
+  if [ "${dry_run}" = true ]; then printf '+ docker exec -i -w /workspace/VBOGS <vbogs-torch>'; printf ' %q' "${cmd[@]}"; printf '\n'; return; fi
+  local torch_container
+  torch_container="$(resolve_torch_container)"
+  docker exec -i -w /workspace/VBOGS "${torch_container}" "${cmd[@]}"
+}
+
+stage_index() {
+  local names=(dynamic-mask prepare train stereo bucket fit inspect uncertainty map-viz render nbv nbv-viz bundle)
+  local index
+  for index in "${!names[@]}"; do
+    if [ "${names[index]}" = "$1" ]; then printf '%s\n' "${index}"; return 0; fi
+  done
+  echo "Unknown pipeline stage: $1" >&2
+  return 1
+}
+
+start_index="$(stage_index "${start_at}")"
+stop_index="$(stage_index "${stop_after}")"
+if [ "${start_index}" -gt "${stop_index}" ]; then
+  echo "--start-at must not be later than --stop-after" >&2
+  exit 2
+fi
+if [ "${start_index}" -le "$(stage_index prepare)" ]; then build_masks; fi
+variants=(unmasked dynamic_masked)
+if [ "${variant}" != all ]; then variants=("${variant}"); fi
+for selected_variant in "${variants[@]}"; do
+  echo "=== dynamic-masking ${profile}: ${scene_id} :: ${selected_variant} ==="
+  workspace="${work_root}/${scene_id}/${profile}/${selected_variant}"
+  if [ "${start_at}" = "dynamic-mask" ] && [ "${stop_after}" = "dynamic-mask" ]; then
+    continue
+  fi
+  if [ "${start_at}" = "prepare" ] || [ "${start_at}" = "dynamic-mask" ]; then
+    if [ "${stop_after}" = "prepare" ]; then
+      run_pipeline "${selected_variant}" prepare prepare
+      continue
+    fi
+    run_pipeline "${selected_variant}" prepare train
+  elif [ "${start_at}" = "train" ]; then
+    run_pipeline "${selected_variant}" train train
+  fi
+  if [ "${stop_index}" -le "$(stage_index train)" ]; then
+    continue
+  fi
+  record="${workspace}/train_run.json"
+  if [ "${dry_run}" = true ]; then
+    model_path="<${selected_variant}-model-path>"
+    model_iteration="<${selected_variant}-iteration>"
+  else
+    model_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["model_path"])' "${record}")"
+    model_iteration="$(python3 -c 'import json,sys; values=json.load(open(sys.argv[1]))["iterations"]; print(max(values))' "${record}")"
+  fi
+  post_train_start="${start_at}"
+  if [ "${start_index}" -le "$(stage_index train)" ]; then post_train_start="stereo"; fi
+  if [ "${start_index}" -gt "$(stage_index uncertainty)" ]; then
+    run_pipeline "${selected_variant}" "${post_train_start}" "${stop_after}" "${model_path}"
+  elif [ "${stop_index}" -lt "$(stage_index uncertainty)" ]; then
+    run_pipeline "${selected_variant}" "${post_train_start}" "${stop_after}" "${model_path}"
+  else
+    run_pipeline "${selected_variant}" "${post_train_start}" uncertainty "${model_path}"
+    evaluate_variant "${selected_variant}" "${model_path}" "${model_iteration}"
+    if [ "${stop_index}" -gt "$(stage_index uncertainty)" ]; then
+      run_pipeline "${selected_variant}" map-viz "${stop_after}" "${model_path}"
+    fi
+  fi
+done
+
+if [ "${variant}" = all ] && [ "${stop_after}" = bundle ]; then
+  analysis_root="${output_root}/${scene_id}/${profile}"
+  analysis_cmd=(python scripts/analyze_dynamic_masking_experiment.py --experiment-root "${analysis_root}" --scene-id "${scene_id}" --dynamic-mask-root "${dynamic_mask_root}")
+  if [ "${dry_run}" = true ]; then printf '+ docker exec -i -w /workspace/VBOGS <vbogs-torch>'; printf ' %q' "${analysis_cmd[@]}"; printf '\n'; else
+    torch_container="$(resolve_torch_container)"
+    docker exec -i -w /workspace/VBOGS "${torch_container}" "${analysis_cmd[@]}"
+  fi
+fi

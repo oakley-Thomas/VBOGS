@@ -128,10 +128,12 @@ interchangeably.
 
 \section{Stage 1: Train the Scene}
 
-Stage 1 is unchanged from upstream Octree-AnyGS. The scene is trained from
-posed RGB frames prepared in a COLMAP-style layout. Stereo is not used as a
-training signal for this stage; dataset-specific depth or LiDAR observations
-are used later to build the 6D point cloud.
+Stage 1 uses upstream Octree-AnyGS with an adapter-produced static-region
+alpha mask. Confirmed moving actors have alpha zero, so their pixels do not
+contribute to the RGB supervision or downstream sparse seed. The scene is
+trained from posed RGB frames prepared in a COLMAP-style layout. Stereo is not
+used as a training signal for this stage; dataset-specific depth or LiDAR
+observations are used later to build the 6D point cloud.
 
 \begin{lstlisting}
 scene = Octree_AnyGS.train(input_data, gaussian_type=3DGS)
@@ -165,6 +167,12 @@ cloud:
   \qquad
   c_n \in \R^3.
 \]
+
+The same static-region mask is applied before unprojection. For KITTI-360 it
+rejects masked stereo pixels; for NCore it rejects points in confirmed moving
+cuboids and camera colors sampled through masked pixels. Candidates without
+enough temporal evidence remain valid deliberately: this is a
+confirmed-mover filter, not a ``remove every vehicle'' semantic filter.
 
 \begin{lstlisting}
 points_world = []                                # (N, 6) = xyz + rgb

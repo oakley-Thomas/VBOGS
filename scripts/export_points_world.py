@@ -44,6 +44,7 @@ from vbogs.ncore_adapter import (
     write_ply,
 )
 from vbogs.dataset_splits import load_split_metadata, records_for_split
+from vbogs.dynamic_masking import filter_moving_cuboid_points, read_static_mask
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,6 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speckle-range", type=int, default=2)
     parser.add_argument("--disp12-max-diff", type=int, default=1)
     parser.add_argument("--random-seed", type=int, default=0)
+    parser.add_argument("--dynamic-mask-root", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -200,6 +202,7 @@ def sample_camera_colors_pinhole(
     image_rgb: np.ndarray,
     camera: PinholeCamera,
     c2w: np.ndarray,
+    static_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     points_world = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
     w2c = np.linalg.inv(np.asarray(c2w, dtype=np.float64).reshape(4, 4))
@@ -212,6 +215,11 @@ def sample_camera_colors_pinhole(
     ui = np.rint(u).astype(np.int64)
     vi = np.rint(v).astype(np.int64)
     valid &= (ui >= 0) & (ui < image_rgb.shape[1]) & (vi >= 0) & (vi < image_rgb.shape[0])
+    if static_mask is not None:
+        if static_mask.shape != image_rgb.shape[:2]:
+            raise ValueError("Dynamic mask must match NCore camera image shape")
+        valid_indices = np.nonzero(valid)[0]
+        valid[valid_indices] &= static_mask[vi[valid_indices], ui[valid_indices]]
 
     colors = np.zeros((points_world.shape[0], 3), dtype=np.uint8)
     if np.any(valid):
@@ -226,6 +234,8 @@ def color_points_from_cameras(
     timestamp_us: int,
     camera_ids: Sequence[str],
     default_color: int = 160,
+    dynamic_mask_root: Path | None = None,
+    image_names: dict[str, str] | None = None,
 ) -> tuple[np.ndarray, int, list[dict[str, Any]]]:
     colors = np.full((points_world.shape[0], 3), default_color, dtype=np.uint8)
     missing = np.ones(points_world.shape[0], dtype=bool)
@@ -234,12 +244,17 @@ def color_points_from_cameras(
         sensor = loader.get_camera_sensor(camera_id)
         frame_index = closest_frame_index(sensor, timestamp_us)
         image_rgb = get_image_array(sensor, frame_index)
+        image_name = (image_names or {}).get(
+            camera_id, f"{camera_id}/{camera_id}_{frame_index:010d}_{frame_index:010d}.png"
+        )
+        static_mask = read_static_mask(dynamic_mask_root, image_name, image_rgb.shape[:2]) if dynamic_mask_root else None
         spec = camera_spec(sensor, camera_id, image_rgb, camera_model_id=camera_idx)
         sampled, valid = sample_camera_colors_pinhole(
             points_world=points_world,
             image_rgb=image_rgb,
             camera=spec,
             c2w=get_sensor_c2w(sensor, frame_index),
+            static_mask=static_mask,
         )
         assign = missing & valid
         colors[assign] = sampled[assign]
@@ -279,6 +294,19 @@ def ncore_frame_indices_for_split(
     return selected_frame_indices(sensor, frame_step, max_frames)
 
 
+def ncore_camera_image_names(selection_metadata: dict[str, Any], timestamp_us: int) -> dict[str, str]:
+    """Resolve prepared image names for a LiDAR timestamp, including non-primary cameras."""
+    records = selection_metadata.get("frame_records", [])
+    if not records:
+        return {}
+    record = min(records, key=lambda item: abs(int(item.get("timestamp_us", 0)) - int(timestamp_us)))
+    return {
+        str(camera_id): str(camera["image_name"])
+        for camera_id, camera in record.get("cameras", {}).items()
+        if isinstance(camera, dict) and camera.get("image_name")
+    }
+
+
 def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Path:
     scene = scene_id(args)
     camera_ids = parse_id_list(args.camera_ids, DEFAULT_CAMERA_IDS)
@@ -292,6 +320,7 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         max_frames=args.max_frames,
     )
     rng = np.random.default_rng(args.random_seed)
+    dynamic_mask_root = getattr(args, "dynamic_mask_root", None)
 
     all_xyz: list[np.ndarray] = []
     all_rgb: list[np.ndarray] = []
@@ -302,6 +331,8 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         timestamp_us = get_frame_timestamp_us(lidar_sensor, frame_index)
         xyz = get_lidar_points_world(lidar_sensor, frame_index)
         source_count = int(xyz.shape[0])
+        dynamic_keep = filter_moving_cuboid_points(xyz, dynamic_mask_root, timestamp_us)
+        xyz = xyz[dynamic_keep]
         if args.max_points_per_frame > 0 and xyz.shape[0] > args.max_points_per_frame:
             keep = rng.choice(xyz.shape[0], size=args.max_points_per_frame, replace=False)
             xyz = xyz[keep]
@@ -311,6 +342,8 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
             points_world=xyz,
             timestamp_us=timestamp_us,
             camera_ids=camera_ids,
+            dynamic_mask_root=dynamic_mask_root,
+            image_names=ncore_camera_image_names(selection_metadata, timestamp_us),
         )
         all_xyz.append(xyz.astype(np.float32, copy=False))
         all_rgb.append(colors)
@@ -320,6 +353,7 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
                 "frame_id": int(frame_index),
                 "timestamp_us": int(timestamp_us),
                 "source_points": source_count,
+                "masked_dynamic_points": int(source_count - dynamic_keep.sum()),
                 "points_kept": int(xyz.shape[0]),
                 "colored_points": colored_count,
                 "camera_color_stats": color_stats,
@@ -339,6 +373,7 @@ def export_lidar_points_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         "frame_step": args.frame_step,
         "max_frames": args.max_frames,
         "max_points_per_frame": args.max_points_per_frame,
+        "dynamic_mask_root": str(dynamic_mask_root) if dynamic_mask_root else None,
         "frame_stats": frame_stats,
     }
     return write_points_artifact(
@@ -406,8 +441,13 @@ def unproject_rectified_to_world(
     pixel_step: int,
     max_points_per_frame: int,
     rng: np.random.Generator,
+    static_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     valid = np.isfinite(disparity) & (disparity > min_disparity)
+    if static_mask is not None:
+        if static_mask.shape != valid.shape:
+            raise ValueError("Rectified dynamic mask must match disparity")
+        valid &= static_mask
     if pixel_step > 1:
         yy = np.arange(disparity.shape[0])[:, None]
         xx = np.arange(disparity.shape[1])[None, :]
@@ -468,6 +508,7 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
     )
     matcher = stereo_to_pointcloud.build_matcher(args)
     rng = np.random.default_rng(args.random_seed)
+    dynamic_mask_root = getattr(args, "dynamic_mask_root", None)
 
     all_xyz: list[np.ndarray] = []
     all_rgb: list[np.ndarray] = []
@@ -494,6 +535,14 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
         left_gray = cv2.cvtColor(left_rect, cv2.COLOR_RGB2GRAY)
         right_gray = cv2.cvtColor(right_rect, cv2.COLOR_RGB2GRAY)
         stereo = matcher.compute(left_gray, right_gray)
+        static_mask = None
+        if dynamic_mask_root:
+            source_name = f"{left_id}/{left_id}_{left_index:010d}_{left_index:010d}.png"
+            source_static = read_static_mask(dynamic_mask_root, source_name, left_rgb.shape[:2]).astype(np.uint8)
+            static_mask = cv2.remap(source_static, *cv2.initUndistortRectifyMap(
+                np.array([[left_cam.fx, 0.0, left_cam.cx], [0.0, left_cam.fy, left_cam.cy], [0.0, 0.0, 1.0]]),
+                np.zeros((5, 1)), r1, p1, (left_cam.width, left_cam.height), cv2.CV_32FC1
+            ), interpolation=cv2.INTER_NEAREST).astype(bool)
         points_world, colors = unproject_rectified_to_world(
             disparity=stereo.disparity_left,
             left_rect_rgb=left_rect,
@@ -506,6 +555,7 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
             pixel_step=args.pixel_step,
             max_points_per_frame=args.max_points_per_frame,
             rng=rng,
+            static_mask=static_mask,
         )
         frame_stats.append(
             {
@@ -515,6 +565,7 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
                 "right_frame_index": int(right_index),
                 "timestamp_us": int(timestamp_us),
                 "points_kept": int(points_world.shape[0]),
+                "masked_dynamic_pixels": int((~static_mask).sum()) if static_mask is not None else 0,
             }
         )
         print(f"[ncore-camera-depth] frame {left_index}: kept={points_world.shape[0]}")
@@ -536,6 +587,7 @@ def export_camera_depth_from_loader(args: argparse.Namespace, loader: Any) -> Pa
             "max_depth_m": args.max_depth_m,
             "pixel_step": args.pixel_step,
             "max_points_per_frame": args.max_points_per_frame,
+            "dynamic_mask_root": str(dynamic_mask_root) if dynamic_mask_root else None,
         },
         "frame_stats": frame_stats,
     }

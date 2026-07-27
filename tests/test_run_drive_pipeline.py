@@ -82,6 +82,45 @@ def test_run_output_root_keeps_explicit_stage_output_override():
     assert "outputs/v1_0/drive_sync/views" not in render_step.command
 
 
+def test_artifact_root_isolates_every_mutable_stage_path_and_records_training_run():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name", "nvidia_ncore", "--scene-id", "clip", "--artifact-root", "data/experiments/pair/unmasked",
+            "--model-path", "data/experiments/pair/unmasked/octree/clip/run",
+        ]
+    )
+    by_name = {step.name: step for step in build_steps(args)}
+    root = "data/experiments/pair/unmasked"
+    assert flag_values(by_name["prepare"].command, "--output-root") == [f"{root}/colmap"]
+    assert flag_values(by_name["train"].command, "--dataset-path") == [f"{root}/colmap/clip"]
+    assert flag_values(by_name["train"].command, "--output-root") == [f"{root}/octree"]
+    assert flag_values(by_name["train"].command, "--run-record") == [f"{root}/train_run.json"]
+    assert flag_values(by_name["stereo"].command, "--output-root") == [f"{root}/points_world"]
+    assert flag_values(by_name["bucket"].command, "--output-root") == [f"{root}/m4/clip"]
+    assert flag_values(by_name["bundle"].command, "--bucket-root") == [f"{root}/m4/clip"]
+
+
+def test_dynamic_masking_pair_runner_smoke_dry_run_uses_shared_masks_and_isolated_arms():
+    import subprocess
+
+    completed = subprocess.run(
+        [
+            "scripts/experiment-dynamic-masking",
+            "--weights-path", "/workspace/VBOGS/data/models/maskrcnn_resnet50_fpn_v2.pth",
+            "--dry-run",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    assert completed.stdout.count("--start-at dynamic-mask --stop-after dynamic-mask") == 1
+    assert "smoke/unmasked" in completed.stdout
+    assert "smoke/dynamic_masked" in completed.stdout
+    assert "--image-mask-root data/dynamic_masks/nvidia_ncore" in completed.stdout
+
+
 def test_render_step_forwards_resolution_override():
     parser = build_parser({})
     args = parser.parse_args(
@@ -366,6 +405,25 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
     assert "data/m4/clip_001/U.npy" in by_name["render"].command
     assert "clip_001" in by_name["bundle"].command
     assert "--viewer-export-iteration" in by_name["bundle"].command
+
+
+def test_enabled_dynamic_mask_stage_precedes_prepare_and_is_forwarded():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name", "kitti360", "--scene-id", "drive_sync",
+            "--dynamic-mask-enabled", "--dynamic-mask-weights-path", "/data/models/maskrcnn.pth",
+        ]
+    )
+    steps = {step.name: step for step in build_steps(args)}
+
+    assert list(steps)[0] == "dynamic-mask"
+    assert steps["dynamic-mask"].command[:4] == (
+        "python", "scripts/build_dynamic_masks.py", "--dataset-name", "kitti360"
+    )
+    assert "--dynamic-mask-root" in steps["prepare"].command
+    assert "--use-masks" in steps["train"].command
+    assert "--dynamic-mask-root" in steps["stereo"].command
 
 
 def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():

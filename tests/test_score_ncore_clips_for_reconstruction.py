@@ -145,11 +145,65 @@ def build_metrics(*, moving, nearby, path_m, yaw_deg, brightness, sharpness, sta
         "dynamic_actors": {"moving_tracks": moving, "nearby_moving_tracks": nearby},
         "photometrics": {
             "brightness_mean": brightness,
+            "sky_luma_mean": brightness,
             "sharpness_min": sharpness,
             "clipped_frac": 0.0,
         },
         "lidar": {"points_per_frame": 300_000.0, "median_range_m": 12.0},
     }
+
+
+def test_night_snowstorm_is_not_mistaken_for_daylight():
+    """Frame brightness cannot separate these two; the sky band must.
+
+    Both are ~78 mean luma. The night snowstorm only looks bright because snow
+    reflects streetlight into the mid-tones, so scoring on brightness_mean rated
+    it as daylight.
+    """
+    common = dict(moving=1, nearby=1, path_m=100.0, yaw_deg=100.0, sharpness=60.0)
+    day = build_metrics(brightness=79.0, **common)
+    night_snow = build_metrics(brightness=76.0, **common)
+    day["photometrics"]["sky_luma_mean"] = 107.8
+    night_snow["photometrics"]["sky_luma_mean"] = 68.4
+
+    assert score_clip(day)["photometric"] > score_clip(night_snow)["photometric"]
+    assert score_clip(day)["total"] > score_clip(night_snow)["total"]
+
+
+def test_sunny_blue_sky_is_not_penalised_as_night():
+    """Luma weights blue at 0.114, so a clear blue sky reads darker than overcast.
+
+    Scoring the sky band on luma rated a bright sunny clip at 71 - below the night
+    threshold - while an overcast day scored 104. Max-channel value fixes it, and
+    this pins the sunny clip above the night snowstorm it was previously losing to.
+    """
+    common = dict(moving=6, nearby=1, path_m=100.0, yaw_deg=100.0, sharpness=60.0)
+    sunny = build_metrics(brightness=71.0, **common)
+    night_snow = build_metrics(brightness=76.0, **common)
+    sunny["photometrics"]["sky_luma_mean"] = 126.0
+    night_snow["photometrics"]["sky_luma_mean"] = 68.4
+
+    assert score_clip(sunny)["photometric"] > score_clip(night_snow)["photometric"]
+
+
+def test_deserted_night_clip_does_not_beat_populated_daylight_clip():
+    """The screening bias that full scoring has to correct.
+
+    An empty road at 3am scores perfectly on static and view diversity precisely
+    because nobody is around to annotate. With imagery it must lose to a daylight
+    clip that carries a handful of movers.
+    """
+    night_empty = build_metrics(
+        moving=0, nearby=0, path_m=212.0, yaw_deg=99.0, brightness=25.0, sharpness=20.0
+    )
+    night_empty["photometrics"]["sky_luma_mean"] = 4.4
+    day_busy = build_metrics(
+        moving=14, nearby=9, path_m=173.0, yaw_deg=88.0, brightness=81.0, sharpness=29.0
+    )
+    day_busy["photometrics"]["sky_luma_mean"] = 117.0
+
+    assert score_clip(night_empty)["static"] > score_clip(day_busy)["static"]
+    assert score_clip(day_busy)["total"] > score_clip(night_empty)["total"]
 
 
 def test_clean_clip_outscores_dynamic_night_clip():

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import tempfile
 import urllib.parse
@@ -234,12 +235,22 @@ def list_repo_files(repo_id: str, revision: str, token: str | None, path: str | 
             return [file_path for file_path in files if file_path.startswith(prefix)]
         return files
 
-    request = urllib.request.Request(hf_api_tree_url(repo_id, revision, path), headers=auth_headers(token))
-    with urllib.request.urlopen(request) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, list):
-        raise RuntimeError("Unexpected Hugging Face API response while listing repository files.")
-    return [item["path"] for item in payload if isinstance(item, dict) and "path" in item]
+    # The tree API caps a page at 1000 entries and advertises the next page in a
+    # `link: <...>; rel="next"` header. Without following it this silently returns
+    # a truncated repo index, which looks like a successful download of a subset.
+    paths: list[str] = []
+    url: str | None = hf_api_tree_url(repo_id, revision, path)
+    while url:
+        request = urllib.request.Request(url, headers=auth_headers(token))
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            link_header = response.headers.get("link", "")
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected Hugging Face API response while listing repository files.")
+        paths.extend(item["path"] for item in payload if isinstance(item, dict) and "path" in item)
+        next_link = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
+        url = next_link.group(1) if next_link else None
+    return paths
 
 
 def download_remote_file(

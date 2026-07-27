@@ -441,6 +441,37 @@ def test_gpu_metric_adapter_accepts_channel_permuted_tensors_when_available():
     assert values["PSNR"] == pytest.approx(20.0, abs=1.0e-5)
 
 
+def test_static_image_metrics_and_mask_loader_when_torch_is_available(tmp_path):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    from PIL import Image
+    from vbogs.dynamic_masking import write_static_mask
+    from scripts.evaluate_uncertainty_views import load_static_mask_for_evaluation, static_metric_values
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root / "Octree-AnyGS"))
+
+    class ZeroLpips:
+        def __call__(self, render, ground_truth):
+            return torch.zeros((render.shape[0],), dtype=render.dtype, device=render.device)
+
+    write_static_mask(tmp_path, "wide/frame.png", np.ones((128, 128), dtype=bool))
+    mask = load_static_mask_for_evaluation(tmp_path, "wide/frame.png", (128, 128), (64, 64))
+    assert mask.shape == (64, 64) and mask.all()
+    render = torch.zeros((3, 64, 64), dtype=torch.float32)
+    values = static_metric_values(render, render.clone(), torch.from_numpy(mask), ZeroLpips())
+    assert values["PSNR_static"] == float("inf")
+    assert values["SSIM_static"] == pytest.approx(1.0)
+    assert values["LPIPS_static"] == pytest.approx(0.0)
+    assert values["static_lpips_tile_count"] == 1
+
+    bad_path = tmp_path / "masks" / "wide" / "bad.png"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(np.full((2, 2), 127, dtype=np.uint8)).save(bad_path)
+    with pytest.raises(ValueError, match="binary"):
+        load_static_mask_for_evaluation(tmp_path, "wide/bad.png", (2, 2), (2, 2))
+
+
 @pytest.mark.parametrize("dataset,scene", [("kitti360", "drive"), ("nvidia_ncore", "clip")])
 def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
     repo_root = Path(__file__).resolve().parents[1]

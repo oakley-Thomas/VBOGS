@@ -276,6 +276,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the Torch CUDA/gsplat preflight before launching training.",
     )
+    parser.add_argument(
+        "--use-masks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Octree-AnyGS alpha masks from <dataset-path>/masks.",
+    )
     return parser.parse_args()
 
 
@@ -317,6 +323,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params["resolution"] = args.resolution
     model_params["llffhold"] = args.llffhold
     model_params["eval"] = bool(args.eval)
+    model_params["add_mask"] = bool(getattr(args, "use_masks", False))
 
     model_kwargs = model_params["model_config"]["kwargs"]
     if gaussian_type == "implicit3D":

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import scripts.prepare_kitti360_colmap as prepare_kitti
+from vbogs.dynamic_masking import write_manifest, write_static_mask
 
 
 def write_fixture_drive(root: Path, drive: str = "drive_sync") -> tuple[Path, Path, Path]:
@@ -175,3 +176,17 @@ def test_prepare_kitti360_stereo_mode_writes_two_cameras_and_right_pose(
         "image_01/0000000000.png"
     )
     assert metadata["frame_records"][1]["split"] == "test"
+
+
+def test_prepare_kitti360_materializes_dynamic_masks(tmp_path, monkeypatch):
+    patch_ply_writer(monkeypatch)
+    args = make_args(tmp_path, max_frames=1)
+    mask_root = tmp_path / "dynamic"
+    write_manifest(mask_root, {"dataset": "kitti360"})
+    write_static_mask(mask_root, "0000000000.png", np.array([[True, False], [True, True]], dtype=bool))
+    args.dynamic_mask_root = mask_root
+
+    dataset_dir = prepare_kitti.prepare_dataset(args)
+    copied = dataset_dir / "masks" / "0000000000.png"
+    assert copied.exists()
+    assert prepare_kitti.read_static_mask(dataset_dir, "0000000000.png", (2, 2)).tolist() == [[True, False], [True, True]]
