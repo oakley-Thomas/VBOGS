@@ -119,6 +119,33 @@ services:
         source: ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}
         target: /var/run/docker.sock
 
+  vbogs-web:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: KITTI-360
+        target: /workspace/VBOGS/data/KITTI-360
+      - type: volume
+        source: NVIDIA-PhysicalAI-AV-NCore
+        target: /workspace/VBOGS/data/NVIDIA-PhysicalAI-AV-NCore
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+      - type: volume
+        source: OCTREE-ANYGS
+        target: /data/OCTREE-ANYGS
+      - type: bind
+        source: ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+
   vbogs-filebrowser:
     volumes:
       - type: bind

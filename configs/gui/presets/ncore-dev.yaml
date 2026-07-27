@@ -1,0 +1,34 @@
+slug: ncore-dev
+name: NVIDIA NCore development
+description: Conservative NCore LiDAR recipe for a mounted converted clip.
+base_config: configs/pipeline/nvidia_ncore_dev.yaml
+datasets: [nvidia_ncore]
+defaults: {}
+allowed_paths:
+  - prepare.frame_step
+  - prepare.max_frames
+  - train.resolution
+  - train.iterations
+  - train.gaussian_type
+  - points.pixel_step
+  - points.max_points_per_frame
+  - bucket.max_points
+  - fit.fit_mode
+  - fit.batch_size
+  - render.resolution
+  - render.max_views
+  - nbv.max_candidates
+  - nbv.top_k
+limits:
+  prepare.frame_step: {minimum: 1, maximum: 100}
+  prepare.max_frames: {minimum: 1, maximum: 5000}
+  train.resolution: {minimum: 1, maximum: 8}
+  train.iterations: {minimum: 1000, maximum: 200000}
+  points.pixel_step: {minimum: 1, maximum: 16}
+  points.max_points_per_frame: {minimum: 1000, maximum: 1000000}
+  bucket.max_points: {minimum: 0, maximum: 100000000}
+  fit.batch_size: {minimum: 1, maximum: 20000}
+  render.resolution: {minimum: 1, maximum: 8}
+  render.max_views: {minimum: 0, maximum: 10000}
+  nbv.max_candidates: {minimum: 0, maximum: 100000}
+  nbv.top_k: {minimum: 1, maximum: 100000}

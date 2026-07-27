@@ -17,6 +17,7 @@ Services:
   vbogs-jax
   vbogs-vbgs-render
   vbogs-pipeline
+  vbogs-web
 
 Environment:
   DOCKERHUB_NAMESPACE          Docker Hub namespace/org. Default: oakleyth
@@ -25,10 +26,12 @@ Environment:
   VBOGS_LOCAL_JAX_IMAGE        Source JAX image. Default: local/vbogs-jax
   VBOGS_LOCAL_VBGS_RENDER_IMAGE Source VBGS render image. Default: local/vbogs-vbgs-render
   VBOGS_LOCAL_PIPELINE_IMAGE   Source pipeline image. Default: local/vbogs-pipeline
+  VBOGS_LOCAL_WEB_IMAGE        Source web image. Default: local/vbogs-web
   VBOGS_TORCH_PUSH_IMAGE       Destination Torch image.
   VBOGS_JAX_PUSH_IMAGE         Destination JAX image.
   VBOGS_VBGS_RENDER_PUSH_IMAGE Destination VBGS render image.
   VBOGS_PIPELINE_PUSH_IMAGE    Destination pipeline image.
+  VBOGS_WEB_PUSH_IMAGE         Destination web image.
   VBOGS_DOCKER_PUSH_ATTEMPTS   Push attempts per image. Default: 4
   VBOGS_DOCKER_PUSH_RETRY_DELAY_SECONDS
                                 Initial retry delay in seconds. Default: 20
@@ -95,14 +98,16 @@ torch_source="${VBOGS_LOCAL_TORCH_IMAGE:-local/vbogs-torch}"
 jax_source="${VBOGS_LOCAL_JAX_IMAGE:-local/vbogs-jax}"
 vbgs_render_source="${VBOGS_LOCAL_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}"
 pipeline_source="${VBOGS_LOCAL_PIPELINE_IMAGE:-local/vbogs-pipeline}"
+web_source="${VBOGS_LOCAL_WEB_IMAGE:-local/vbogs-web}"
 
 torch_target="${VBOGS_TORCH_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-torch:${image_tag}}"
 jax_target="${VBOGS_JAX_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-jax:${image_tag}}"
 vbgs_render_target="${VBOGS_VBGS_RENDER_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-vbgs-render:${image_tag}}"
 pipeline_target="${VBOGS_PIPELINE_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-pipeline:${image_tag}}"
+web_target="${VBOGS_WEB_PUSH_IMAGE:-${dockerhub_namespace}/vbogs-web:${image_tag}}"
 
 if [ "${#services[@]}" -eq 0 ]; then
-  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
+  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline vbogs-web)
 fi
 
 push_attempts="${VBOGS_DOCKER_PUSH_ATTEMPTS:-4}"
@@ -183,6 +188,9 @@ for service in "${services[@]}"; do
       ;;
     vbogs-pipeline)
       publish_image "${service}" "${pipeline_source}" "${pipeline_target}"
+      ;;
+    vbogs-web)
+      publish_image "${service}" "${web_source}" "${web_target}"
       ;;
     *)
       echo "Unknown service: ${service}" >&2

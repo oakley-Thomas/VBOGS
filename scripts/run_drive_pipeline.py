@@ -18,13 +18,16 @@ both containers.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+from datetime import datetime, timezone
 
 
 STAGES = (
@@ -340,6 +343,18 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         "--dry-run",
         action="store_true",
         help="Print the commands that would run without executing them.",
+    )
+    parser.add_argument(
+        "--event-log",
+        type=Path,
+        default=None,
+        help="Optional JSONL lifecycle-event path, used by the web scheduler.",
+    )
+    parser.add_argument(
+        "--cancel-file",
+        type=Path,
+        default=None,
+        help="Optional cancellation marker. When present, safely stops the active stage group.",
     )
     parser.add_argument(
         "--run-output-root",
@@ -1376,12 +1391,66 @@ def shell_exec_command(script: str) -> tuple[str, ...]:
     return ("sh", "-lc", script)
 
 
-def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
+def emit_event(path: Path | None, event_type: str, **payload: object) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event = {"timestamp": datetime.now(timezone.utc).isoformat(), "type": event_type, **payload}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def terminate_stage_group(prefix: Sequence[str], pid_file: Path, *, signal_name: str) -> None:
+    """Signal only the recorded process group in the selected compute container."""
+    if not pid_file.is_file() or len(prefix) < 1:
+        return
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    # exec_prefix always ends in the resolved container id/name. Passing argv
+    # directly avoids shell interpolation from run metadata.
+    subprocess.run(
+        ["docker", "exec", prefix[-1], "/bin/kill", f"-{signal_name}", f"-{pid}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run_command(
+    cmd: Sequence[str],
+    *,
+    dry_run: bool,
+    event_log: Path | None = None,
+    stage: str | None = None,
+    cancel_file: Path | None = None,
+    pid_file: Path | None = None,
+    exec_prefix_value: Sequence[str] | None = None,
+) -> None:
     printable = shlex.join(cmd)
     print(f"+ {printable}", flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    if cancel_file is not None and cancel_file.exists():
+        emit_event(event_log, "cancelled", stage=stage, before_start=True)
+        raise RuntimeError("Cancellation requested before stage start")
+    emit_event(event_log, "stage_started", stage=stage, command=list(cmd))
+    process = subprocess.Popen(cmd)
+    cancel_started: float | None = None
+    while process.poll() is None:
+        if cancel_file is not None and cancel_file.exists() and pid_file is not None and exec_prefix_value is not None:
+            if cancel_started is None:
+                cancel_started = datetime.now().timestamp()
+                emit_event(event_log, "stage_cancelling", stage=stage)
+                terminate_stage_group(exec_prefix_value, pid_file, signal_name="TERM")
+            elif datetime.now().timestamp() - cancel_started > 20:
+                terminate_stage_group(exec_prefix_value, pid_file, signal_name="KILL")
+        time.sleep(0.25)
+    if process.returncode:
+        emit_event(event_log, "stage_failed", stage=stage, exit_code=process.returncode)
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+    emit_event(event_log, "stage_completed", stage=stage)
 
 
 def build_upload_command(args: argparse.Namespace) -> list[str]:
@@ -1426,21 +1495,38 @@ def main() -> None:
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")
 
-    for step in steps:
-        print(f"\n=== {step.name} ({step.service}) ===", flush=True)
-        run_command([*exec_prefix(args, step.service), *step.command], dry_run=args.dry_run)
+    emit_event(args.event_log, "run_started", dataset=args.dataset_name, scene=scene_id_arg(args), stages=[step.name for step in steps])
+    try:
+        for step in steps:
+            print(f"\n=== {step.name} ({step.service}) ===", flush=True)
+            prefix = exec_prefix(args, step.service)
+            pid_file = None
+            command: Sequence[str] = step.command
+            if args.cancel_file is not None:
+                pid_file = args.cancel_file.parent / f"{step.name}.pid"
+                command = (
+                    "python", "scripts/run_pipeline_stage.py", "--pid-file", str(pid_file), "--", *step.command,
+                )
+            run_command(
+                [*prefix, *command], dry_run=args.dry_run, event_log=args.event_log,
+                stage=step.name, cancel_file=args.cancel_file, pid_file=pid_file, exec_prefix_value=prefix,
+            )
 
-    if args.upload_google_drive:
-        print("\n=== upload (vbogs-pipeline) ===", flush=True)
-        run_command(build_upload_command(args), dry_run=args.dry_run)
-
+        if args.upload_google_drive:
+            print("\n=== upload (vbogs-pipeline) ===", flush=True)
+            run_command(build_upload_command(args), dry_run=args.dry_run, event_log=args.event_log, stage="upload")
+    except Exception as exc:
+        emit_event(args.event_log, "run_failed", error=str(exc))
+        raise
     print("\nPipeline completed.")
+    emit_event(args.event_log, "run_completed")
 
 
 if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as exc:
+        # event_log is best-effort because argument parsing may itself fail.
         sys.exit(exc.returncode)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
