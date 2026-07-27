@@ -290,10 +290,29 @@ def normalized_errors(rows: Sequence[dict[str, Any]], metric: str) -> tuple[np.n
     raise ValueError(f"Unsupported metric: {metric}")
 
 
-def calibration_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def view_score_fields(
+    uncertainty_sum: float,
+    observed_uncertainty_sum: float,
+    observed_sum: float,
+    alpha_sum: float,
+    eps: float = 1.0e-8,
+) -> dict[str, float]:
+    """CPU-testable observed-only uncertainty score fields for one render."""
+
+    return {
+        "observed_sum": float(observed_sum),
+        "observed_uncertainty_sum": float(observed_uncertainty_sum),
+        "uncertainty_score_observed": float(observed_uncertainty_sum / (observed_sum + eps)),
+        "unobserved_fraction": float(np.clip(1.0 - observed_sum / (alpha_sum + eps), 0.0, 1.0)),
+    }
+
+
+def calibration_summary(
+    rows: Sequence[dict[str, Any]], score_key: str = "uncertainty_score"
+) -> dict[str, Any]:
     if not rows:
         return {"count": 0, "metrics": {}, "mean_normalized_AUSE": math.nan, "mean_spearman": math.nan, "warnings": ["No views"]}
-    uncertainty = np.asarray([float(row["uncertainty_score"]) for row in rows], dtype=np.float64)
+    uncertainty = np.asarray([float(row[score_key]) for row in rows], dtype=np.float64)
     metrics: dict[str, Any] = {}
     warnings: list[str] = []
     for metric in METRICS:
@@ -338,6 +357,16 @@ def evaluation_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 float(row["uncertainty_score"]) for row in group_rows
             )
             payload["calibration"] = calibration_summary(group_rows)
+        if group_rows and all(row.get("uncertainty_score_observed") is not None for row in group_rows):
+            payload["calibration_observed"] = calibration_summary(
+                group_rows, score_key="uncertainty_score_observed"
+            )
+        if group_rows and all(row.get("frame_id") is not None for row in group_rows):
+            payload["frame_id_null"] = calibration_summary(group_rows, score_key="frame_id")
+        if group_rows and all(row.get("unobserved_fraction") is not None for row in group_rows):
+            payload["unobserved_fraction"] = summarize_values(
+                float(row["unobserved_fraction"]) for row in group_rows
+            )
         result["groups"][name] = payload
     return result
 
@@ -364,7 +393,8 @@ def select_uncertainty_candidate(candidates: Sequence[dict[str, Any]]) -> dict[s
         raise ValueError("No uncertainty validation candidates were provided")
 
     def key(candidate: dict[str, Any]) -> tuple[Any, ...]:
-        calibration = candidate["summary"]["groups"]["primary"].get("calibration", {})
+        primary = candidate["summary"]["groups"]["primary"]
+        calibration = primary.get("calibration_observed") or primary.get("calibration", {})
         objective = float(calibration.get("mean_normalized_AUSE", math.nan))
         correlation = float(calibration.get("mean_spearman", math.nan))
         if not np.isfinite(objective):
@@ -374,7 +404,9 @@ def select_uncertainty_candidate(candidates: Sequence[dict[str, Any]]) -> dict[s
         return objective, -correlation, int(candidate["profile_order"])
 
     selected = min(candidates, key=key)
-    objective = selected["summary"]["groups"]["primary"]["calibration"]["mean_normalized_AUSE"]
+    primary = selected["summary"]["groups"]["primary"]
+    calibration = primary.get("calibration_observed") or primary.get("calibration", {})
+    objective = calibration["mean_normalized_AUSE"]
     if not np.isfinite(objective):
         raise ValueError("Every uncertainty candidate has an invalid calibration objective")
     return selected

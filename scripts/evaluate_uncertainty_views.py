@@ -30,6 +30,7 @@ from vbogs.uncertainty_evaluation import (
     evaluation_views,
     file_sha256,
     split_fingerprint,
+    view_score_fields,
 )
 
 
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=("validation", "test"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--u-path", type=Path, default=None)
+    parser.add_argument("--mask-path", type=Path, default=None)
     parser.add_argument("--resolution", type=int, default=2)
     parser.add_argument("--max-views", type=int, default=0)
     parser.add_argument("--save-images", action=argparse.BooleanOptionalAction, default=False)
@@ -152,11 +154,22 @@ def main() -> None:
     lpips_model = lpips.LPIPS(net="vgg").cuda().eval()
     uncertainty = None
     uncertainty_path = None
+    observed_mask = None
+    observed_mask_path = None
     vmin = vmax = None
     if args.u_path is not None:
         uncertainty_path = args.u_path.resolve()
         uncertainty = load_uncertainty(uncertainty_path, int(gaussians.get_anchor.shape[0]))
         vmin, vmax = choose_scale(uncertainty, None, None)
+        candidate_mask_path = args.mask_path
+        if candidate_mask_path is None:
+            sibling = uncertainty_path.with_name("observed_mask.npy")
+            candidate_mask_path = sibling if sibling.exists() else None
+        if candidate_mask_path is not None:
+            observed_mask_path = candidate_mask_path.resolve()
+            observed_mask = load_uncertainty(
+                observed_mask_path, int(gaussians.get_anchor.shape[0])
+            ).to(dtype=uncertainty.dtype)
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,6 +210,10 @@ def main() -> None:
                 "alpha_sum": None,
                 "uncertainty_sum": None,
                 "uncertainty_score": None,
+                "observed_sum": None,
+                "observed_uncertainty_sum": None,
+                "uncertainty_score_observed": None,
+                "unobserved_fraction": None,
             }
 
             heatmap = None
@@ -219,6 +236,21 @@ def main() -> None:
                         "uncertainty_score": uncertainty_sum / (alpha_sum + 1.0e-8),
                     }
                 )
+                if observed_mask is not None:
+                    observed_image, _ = render_scalar(
+                        camera, gaussians, pipe, observed_mask, loaded_iteration
+                    )
+                    observed_unc_image, _ = render_scalar(
+                        camera, gaussians, pipe, uncertainty * observed_mask, loaded_iteration
+                    )
+                    row.update(
+                        view_score_fields(
+                            uncertainty_sum,
+                            float(observed_unc_image.sum().item()),
+                            float(observed_image.sum().item()),
+                            alpha_sum,
+                        )
+                    )
                 if saved_paths is not None:
                     display_uncertainty = torch.zeros_like(unc_image)
                     visible = alpha_image > 0
@@ -243,7 +275,7 @@ def main() -> None:
 
     summary = evaluation_summary(rows)
     provenance = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": args.dataset_name,
         "scene_id": args.scene_id,
         "split": args.split,
@@ -254,6 +286,8 @@ def main() -> None:
         "split_hash": split_fingerprint(metadata),
         "uncertainty_path": str(uncertainty_path) if uncertainty_path else None,
         "uncertainty_sha256": file_sha256(uncertainty_path) if uncertainty_path else None,
+        "mask_path": str(observed_mask_path) if observed_mask_path else None,
+        "mask_sha256": file_sha256(observed_mask_path) if observed_mask_path else None,
         "view_count": len(rows),
     }
     save_json(output_dir / "per_view.json", {**provenance, "views": rows})

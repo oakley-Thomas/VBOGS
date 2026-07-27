@@ -482,6 +482,8 @@ class Experiment:
             output = self.work_root / "uncertainty" / name
             posterior = output / "anchor_posterior.npz"
             u_path = output / "U.npy"
+            kl_path = output / "U_kl.npy"
+            observed_mask_path = output / "observed_mask.npy"
             if not (self.args.resume and posterior.exists()):
                 command = [
                     "python", "scripts/fit_anchors.py",
@@ -503,13 +505,15 @@ class Experiment:
                     "--elbo-improvement-tol", str(profile["elbo_improvement_tol"]),
                 ]
                 self.runner.run(JAX_SERVICE, command)
-            if not (self.args.resume and u_path.exists()):
+            if not (self.args.resume and u_path.exists() and kl_path.exists() and observed_mask_path.exists()):
                 command = [
                     "python", "scripts/compute_uncertainty.py",
                     "--drive", self.args.scene_id,
                     "--bucket-root", container_path(self.work_root / "bucket"),
                     "--posterior", container_path(posterior),
                     "--output", container_path(u_path),
+                    "--kl-output", container_path(kl_path),
+                    "--observed-mask-output", container_path(observed_mask_path),
                     "--components-output", container_path(output / "uncertainty_components.npz"),
                     "--metadata-output", container_path(output / "uncertainty_metadata.json"),
                     "--histogram-output", container_path(output / "uncertainty_histogram.png"),
@@ -520,6 +524,13 @@ class Experiment:
                     "name": name,
                     "posterior_path": str(posterior),
                     "u_path": str(u_path),
+                }
+            )
+            index.append(
+                {
+                    "name": f"{name}-kl",
+                    "posterior_path": str(posterior),
+                    "u_path": str(kl_path),
                 }
             )
         self._uncertainty_index = {"profiles": index}
@@ -573,6 +584,7 @@ class Experiment:
         ]
         if u_path is not None:
             command.extend(["--u-path", container_path(u_path)])
+            command.extend(["--mask-path", container_path(u_path.with_name("observed_mask.npy"))])
         command.append("--save-images" if save_images else "--no-save-images")
         return command
 

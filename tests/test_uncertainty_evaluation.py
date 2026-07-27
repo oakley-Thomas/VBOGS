@@ -23,6 +23,7 @@ from vbogs.uncertainty_evaluation import (
     split_fingerprint,
     validate_split_integrity,
     verify_selection_lock,
+    view_score_fields,
 )
 from scripts.analyze_uncertainty_evaluation import report, select_octree, select_uncertainty
 
@@ -138,6 +139,35 @@ def test_normalized_errors_omits_constant_metric():
     assert "PSNR" not in calibration_summary(rows)["metrics"]
 
 
+def test_calibration_summary_honors_score_key_and_evaluation_adds_observed_baselines():
+    rows = [
+        {
+            "is_primary": True, "frame_id": index, "PSNR": psnr, "SSIM": ssim, "LPIPS": lpips,
+            "uncertainty_score": legacy, "uncertainty_score_observed": observed,
+            "unobserved_fraction": 0.25,
+        }
+        for index, (psnr, ssim, lpips, legacy, observed) in enumerate(
+            [(30.0, 0.9, 0.1, 3.0, 1.0), (20.0, 0.7, 0.3, 1.0, 3.0)]
+        )
+    ]
+    assert calibration_summary(rows, score_key="uncertainty_score_observed")["mean_spearman"] == pytest.approx(1.0)
+    summary = evaluation_summary(rows)["groups"]["primary"]
+    assert "calibration_observed" in summary
+    assert "frame_id_null" in summary
+    assert summary["unobserved_fraction"]["mean"] == pytest.approx(0.25)
+    rows[1]["uncertainty_score_observed"] = None
+    assert "calibration_observed" not in evaluation_summary(rows)["groups"]["primary"]
+
+
+def test_view_score_fields_handles_zero_mass_and_clamps_coverage():
+    fields = view_score_fields(10.0, 4.0, 2.0, 5.0)
+    assert fields["uncertainty_score_observed"] == pytest.approx(2.0)
+    assert fields["unobserved_fraction"] == pytest.approx(0.6)
+    zero = view_score_fields(0.0, 0.0, 0.0, 0.0)
+    assert zero["uncertainty_score_observed"] == 0.0
+    assert zero["unobserved_fraction"] == 1.0
+
+
 def test_octree_selection_uses_declared_lexicographic_order():
     def candidate(name, order, iteration, psnr, ssim, lpips):
         return {
@@ -188,6 +218,22 @@ def test_uncertainty_selection_uses_ause_then_spearman_then_order():
         [candidate("a", 0, 0.2, 0.9), candidate("b", 1, 0.1, 0.5), candidate("c", 2, 0.1, 0.4)]
     )
     assert selected["profile"] == "b"
+
+
+def test_uncertainty_selection_prefers_observed_calibration_and_falls_back_to_legacy():
+    def candidate(name, order, legacy, observed=None):
+        primary = {"calibration": {"mean_normalized_AUSE": legacy, "mean_spearman": 0.5}}
+        if observed is not None:
+            primary["calibration_observed"] = {
+                "mean_normalized_AUSE": observed,
+                "mean_spearman": 0.5,
+            }
+        return {"profile": name, "profile_order": order, "summary": {"groups": {"primary": primary}}}
+
+    selected = select_uncertainty_candidate(
+        [candidate("legacy", 0, 0.01), candidate("observed", 1, 0.9, observed=0.005)]
+    )
+    assert selected["profile"] == "observed"
 
 
 def test_selection_lock_hashes_files_and_directories(tmp_path):
@@ -277,6 +323,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
                 "SSIM": 0.9,
                 "LPIPS": 0.1,
                 "uncertainty_score": scores[0],
+                "uncertainty_score_observed": scores[0],
+                "unobserved_fraction": 0.25,
+                "frame_id": 0,
             },
             {
                 "view_id": "v1",
@@ -285,6 +334,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
                 "SSIM": 0.7,
                 "LPIPS": 0.3,
                 "uncertainty_score": scores[1],
+                "uncertainty_score_observed": scores[1],
+                "unobserved_fraction": 0.25,
+                "frame_id": 1,
             },
         ]
         evaluation = tmp_path / "validation" / "uncertainty" / name
@@ -306,6 +358,8 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
     select_uncertainty(tmp_path)
     lock = json.loads((tmp_path / "selection.lock.json").read_text(encoding="utf-8"))
     assert lock["uncertainty_profile"] == "good"
+    metrics = (tmp_path / "validation" / "uncertainty_metrics.md").read_text(encoding="utf-8")
+    assert "Observed mean normalized AUSE" in metrics
     with pytest.raises(FileExistsError, match="immutable"):
         select_uncertainty(tmp_path)
 
@@ -317,6 +371,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
             "SSIM": 0.9,
             "LPIPS": 0.1,
             "uncertainty_score": 1.0,
+            "uncertainty_score_observed": 1.0,
+            "unobserved_fraction": 0.25,
+            "frame_id": 0,
         },
         {
             "view_id": "t1",
@@ -325,6 +382,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
             "SSIM": 0.7,
             "LPIPS": 0.3,
             "uncertainty_score": 3.0,
+            "uncertainty_score_observed": 3.0,
+            "unobserved_fraction": 0.25,
+            "frame_id": 1,
         },
     ]
     test_root = tmp_path / "test"
@@ -333,9 +393,15 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
     (test_root / "summary.json").write_text(
         json.dumps(evaluation_summary(test_rows)), encoding="utf-8"
     )
+    pytest.importorskip("matplotlib")
     report(tmp_path)
     assert (tmp_path / "report.md").exists()
+    report_text = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Observed AUSE" in report_text
+    assert "Frame-id null rho" in report_text
+    assert "Mean unobserved fraction" in report_text
     assert (tmp_path / "plots" / "test_calibration_scatter.png").exists()
+    assert (tmp_path / "plots" / "test_calibration_scatter_legacy.png").exists()
 
 
 def test_reference_psnr_matches_known_unit_range_value():

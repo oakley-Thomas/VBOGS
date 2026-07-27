@@ -1014,6 +1014,26 @@ def main() -> None:
             active_rows = rows_for_growth
             cur_k = next_k
 
+    # Persist the actual factory priors once, in minimal broadcastable shapes.
+    # This lets downstream KL scoring remain correct if the factory changes.
+    prior_template = make_batched_volume_delta_mixture(
+        key=jr.PRNGKey(args.seed),
+        n_components=args.k_max,
+        mean_init=jnp.zeros((1, args.k_max, 6, 1), dtype=jnp.float32),
+        n_anchors=1,
+        MultivariateNormal=MultivariateNormal,
+        Multinomial=Multinomial,
+        Mixture=Mixture,
+        DeltaMixture=DeltaMixture,
+        ArrayDict=ArrayDict,
+        position_event_shape=(3, 1),
+        beta=0,
+        learning_rate=1,
+    )
+    prior_alpha = np.asarray(prior_template.mixture.prior.prior_alpha[0], dtype=np.float32)
+    prior_spatial = prior_template.mixture.likelihood
+    prior_delta = prior_template.delta
+
     np.savez_compressed(
         posterior_path,
         is_observed=is_observed,
@@ -1044,6 +1064,21 @@ def main() -> None:
         initial_delta_kappa=initial_delta_kappa,
         initial_delta_u=initial_delta_u,
         initial_delta_n=initial_delta_n,
+        # Priors are global for a fit; one component is enough because NumPy
+        # KL reconstruction broadcasts these minimal shapes.
+        prior_alpha=prior_alpha,
+        prior_spatial_mean=np.asarray(prior_spatial.prior_mean[0, 0], dtype=np.float32),
+        prior_spatial_kappa=np.asarray(prior_spatial.prior_kappa[0, 0], dtype=np.float32),
+        prior_spatial_u=np.asarray(
+            jnp.linalg.inv(prior_spatial.prior_inv_u[0, 0]), dtype=np.float32
+        ),
+        prior_spatial_n=np.asarray(prior_spatial.prior_n[0, 0], dtype=np.float32),
+        prior_delta_mean=np.asarray(prior_delta.prior_mean[0, 0], dtype=np.float32),
+        prior_delta_kappa=np.asarray(prior_delta.prior_kappa[0, 0], dtype=np.float32),
+        prior_delta_u=np.asarray(
+            jnp.linalg.inv(prior_delta.prior_inv_u[0, 0]), dtype=np.float32
+        ),
+        prior_delta_n=np.asarray(prior_delta.prior_n[0, 0], dtype=np.float32),
         k_init=np.array(args.k_init, dtype=np.int16),
         k_max=np.array(args.k_max, dtype=np.int16),
         min_points_per_anchor=np.array(args.min_points_per_anchor, dtype=np.int32),

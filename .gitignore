@@ -3,6 +3,7 @@ data/*
 generated_configs/
 local_viewer_exports/
 site/
+results/*
 outputs/*
 !outputs/.gitkeep
 !outputs/experiments/
