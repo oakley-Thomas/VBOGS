@@ -117,6 +117,16 @@ def parse_args() -> argparse.Namespace:
         default=8,
         help="Number of LiDAR frames sampled for range and density stats.",
     )
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help=(
+            "Score from the core NCore file alone (ego motion + cuboids), skipping "
+            "imagery and LiDAR. Works on `--mode core-only` downloads, which are ~9 MB "
+            "per clip instead of ~2 GB, so the whole dataset can be triaged cheaply. "
+            "Applied automatically when a clip has no camera component."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(
         "--top",
@@ -163,12 +173,34 @@ def rig_to_world(loader: Any, timestamps_us: np.ndarray) -> np.ndarray:
     return poses.reshape(-1, 4, 4)
 
 
+def screening_timestamps_us(loader: Any, rate_hz: float = 10.0) -> np.ndarray:
+    """Uniform timestamps across the clip, for core-only clips with no camera.
+
+    A `--mode core-only` download has no camera component, so frame timestamps
+    have to come from the sequence interval instead. The pose graph interpolates,
+    so any sampling rate gives the same trajectory.
+    """
+    interval = loader.sequence_timestamp_interval_us
+    if hasattr(interval, "start"):
+        start, stop = int(interval.start), int(interval.stop)
+    else:
+        start, stop = int(interval[0]), int(interval[1])
+    count = max(2, int((stop - start) * 1e-6 * rate_hz))
+    # The interval is half-closed, so stop is exclusive; back off a microsecond
+    # rather than dropping a whole sample interval off the end of the trajectory.
+    return np.linspace(start, stop - 1, num=count, endpoint=True, dtype=np.uint64)
+
+
 def collect_ego_motion(loader: Any, sensor: Any, frame_step: int) -> dict[str, Any]:
-    frame_count = get_frame_count(sensor)
-    indices = list(range(frame_count))[:: max(1, frame_step)]
-    timestamps_us = np.asarray(
-        [get_frame_timestamp_us(sensor, index) for index in indices], dtype=np.uint64
-    )
+    if sensor is None:
+        timestamps_us = screening_timestamps_us(loader)
+        frame_count = 0
+    else:
+        frame_count = get_frame_count(sensor)
+        indices = list(range(frame_count))[:: max(1, frame_step)]
+        timestamps_us = np.asarray(
+            [get_frame_timestamp_us(sensor, index) for index in indices], dtype=np.uint64
+        )
 
     poses = rig_to_world(loader, timestamps_us)
     positions = poses[:, :3, 3]
@@ -316,8 +348,8 @@ def collect_lidar_stats(loader: Any, lidar_id: str, sample_count: int) -> dict[s
 def score_clip(metrics: dict[str, Any]) -> dict[str, float]:
     ego = metrics["ego_motion"]
     actors = metrics["dynamic_actors"]
-    photo = metrics["photometrics"]
-    lidar = metrics["lidar"]
+    photo = metrics.get("photometrics")
+    lidar = metrics.get("lidar")
 
     # Static scene: nearby movers are what actually break the reconstruction, so
     # they carry twice the penalty of a distant one. Decay exponentially rather
@@ -329,49 +361,65 @@ def score_clip(metrics: dict[str, Any]) -> dict[str, float]:
     static = float(math.exp(-dynamic_load / 30.0))
 
     # Parallax: baseline must be meaningful relative to how far away the scene is.
-    median_range = lidar["median_range_m"]
-    if not math.isfinite(median_range) or median_range <= 0:
-        parallax_ratio = 0.0
+    # Without LiDAR (core-only screening) fall back on absolute path length, which
+    # is a coarser proxy because it cannot tell an open road from a tight street.
+    if lidar is not None and math.isfinite(lidar["median_range_m"]) and lidar["median_range_m"] > 0:
+        parallax_ratio = ego["path_length_m"] / lidar["median_range_m"]
+        parallax = plateau_score(parallax_ratio, low=0.0, ideal_low=4.0, ideal_high=30.0, high=120.0)
     else:
-        parallax_ratio = ego["path_length_m"] / median_range
-    parallax = plateau_score(parallax_ratio, low=0.0, ideal_low=4.0, ideal_high=30.0, high=120.0)
+        parallax = plateau_score(
+            ego["path_length_m"], low=0.0, ideal_low=75.0, ideal_high=600.0, high=2000.0
+        )
     # A rig parked for most of the clip yields redundant views regardless of ratio.
     parallax *= unit_clamp(1.0 - ego["stationary_frac"])
 
     # View diversity: turns reveal occluded structure; a straight run does not.
     view_diversity = unit_clamp(ego["yaw_sweep_deg"] / 90.0)
 
-    # Photometric: daylight, unclipped, and sharp.
-    exposure = plateau_score(photo["brightness_mean"], low=15.0, ideal_low=60.0, ideal_high=170.0, high=235.0)
-    blur = unit_clamp(photo["sharpness_min"] / 150.0)
-    clipping = unit_clamp(1.0 - photo["clipped_frac"] / 0.15)
-    photometric = 0.45 * exposure + 0.35 * blur + 0.20 * clipping
-
-    geometry_seed = unit_clamp(lidar["points_per_frame"] / 150_000.0)
-
     parts = {
         "static": static,
         "parallax": parallax,
-        "photometric": photometric,
         "view_diversity": view_diversity,
-        "geometry_seed": geometry_seed,
     }
-    parts["total"] = float(sum(SCORE_WEIGHTS[key] * value for key, value in parts.items()))
+
+    if photo is not None:
+        # Photometric: daylight, unclipped, and sharp.
+        exposure = plateau_score(
+            photo["brightness_mean"], low=15.0, ideal_low=60.0, ideal_high=170.0, high=235.0
+        )
+        blur = unit_clamp(photo["sharpness_min"] / 150.0)
+        clipping = unit_clamp(1.0 - photo["clipped_frac"] / 0.15)
+        parts["photometric"] = 0.45 * exposure + 0.35 * blur + 0.20 * clipping
+
+    if lidar is not None:
+        parts["geometry_seed"] = unit_clamp(lidar["points_per_frame"] / 150_000.0)
+
+    # Renormalize over whatever axes were measurable so screening totals stay on
+    # the same 0-1 scale as full scores, rather than being capped by missing axes.
+    weight_total = sum(SCORE_WEIGHTS[key] for key in parts)
+    parts["total"] = float(
+        sum(SCORE_WEIGHTS[key] * value for key, value in parts.items()) / weight_total
+    )
     return {key: round(value, 4) for key, value in parts.items()}
 
 
 def evaluate_clip(args: argparse.Namespace, ncore_root: Path, scene_id: str) -> dict[str, Any]:
     loader = load_ncore_sequence_loader(ncore_root, scene_id)
-    sensor = loader.get_camera_sensor(args.camera_id)
+    # A core-only download exposes no sensors, so screening mode is also the
+    # automatic fallback when the requested camera is not present.
+    screening = args.screen or args.camera_id not in set(loader.camera_ids)
+    sensor = None if screening else loader.get_camera_sensor(args.camera_id)
 
-    metrics = {
+    metrics: dict[str, Any] = {
         "scene_id": scene_id,
-        "camera_id": args.camera_id,
+        "camera_id": None if screening else args.camera_id,
+        "screening": screening,
         "ego_motion": collect_ego_motion(loader, sensor, args.pose_frame_step),
         "dynamic_actors": collect_dynamic_actors(loader),
-        "photometrics": collect_photometrics(sensor, args.image_samples),
-        "lidar": collect_lidar_stats(loader, args.lidar_id, args.lidar_samples),
     }
+    if not screening:
+        metrics["photometrics"] = collect_photometrics(sensor, args.image_samples)
+        metrics["lidar"] = collect_lidar_stats(loader, args.lidar_id, args.lidar_samples)
     # Trajectory arrays are only needed for the derived statistics above.
     metrics["ego_motion"].pop("positions", None)
     metrics["ego_motion"].pop("timestamps_s", None)
@@ -389,16 +437,20 @@ def format_table(results: Sequence[dict[str, Any]]) -> str:
         scores = result["scores"]
         ego = result["ego_motion"]
         actors = result["dynamic_actors"]
-        photo = result["photometrics"]
+        photo = result.get("photometrics")
         notes = (
             f"path={ego['path_length_m']:.0f}m yaw={ego['yaw_sweep_deg']:.0f}deg "
-            f"movers={actors['moving_tracks']}({actors['nearby_moving_tracks']} near) "
-            f"lum={photo['brightness_mean']:.0f}"
+            f"movers={actors['moving_tracks']}({actors['nearby_moving_tracks']} near)"
         )
+        notes += f" lum={photo['brightness_mean']:.0f}" if photo else " [screened]"
+
+        def cell(name: str) -> str:
+            return f"{scores[name]:>7.3f}" if name in scores else f"{'-':>7}"
+
         lines.append(
             f"{rank:<5}{result['scene_id']:<40}{scores['total']:>7.3f}{scores['static']:>8.3f}"
-            f"{scores['parallax']:>7.3f}{scores['photometric']:>7.3f}"
-            f"{scores['view_diversity']:>7.3f}{scores['geometry_seed']:>7.3f}  {notes}"
+            f"{cell('parallax')}{cell('photometric')}"
+            f"{cell('view_diversity')}{cell('geometry_seed')}  {notes}"
         )
     return "\n".join(lines)
 
