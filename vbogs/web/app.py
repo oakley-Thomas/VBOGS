@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -28,6 +29,7 @@ STAGES = (
     "dynamic-mask", "prepare", "train", "stereo", "bucket", "fit", "inspect",
     "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle",
 )
+DELETABLE_RUN_STATUSES = frozenset({"queued", "cancelled", "completed", "failed", "interrupted"})
 PROXY_USER: ContextVar[str | None] = ContextVar("vbogs_proxy_user", default=None)
 
 
@@ -178,6 +180,30 @@ def _artifact_index(run: dict[str, Any], limit: int = 250) -> list[str]:
             if len(files) >= limit:
                 break
     return files
+
+
+def run_storage_paths(run: dict[str, Any], *, data_root: Path, output_root: Path) -> tuple[Path, Path]:
+    """Return the two run-owned storage roots after strict path validation."""
+
+    run_id = str(run["id"])
+    expected_workspace = data_root.resolve() / "runs" / run_id
+    expected_output = output_root.resolve() / run_id
+    workspace = Path(str(run["workspace_path"]))
+    output = Path(str(run["output_path"]))
+    if workspace.resolve() != expected_workspace or output.resolve() != expected_output:
+        raise WebError("Run storage paths do not match this GUI run")
+    for path in (workspace, output):
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise WebError("Run storage root is not a regular directory")
+    return workspace, output
+
+
+def remove_run_storage(run: dict[str, Any], *, data_root: Path, output_root: Path) -> None:
+    """Delete only the workspace and output directories owned by one GUI run."""
+
+    for path in run_storage_paths(run, data_root=data_root, output_root=output_root):
+        if path.exists():
+            shutil.rmtree(path)
 
 
 def _render_container() -> str:
@@ -411,6 +437,45 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         resumed = store.requeue(run_id, start_at=start_at, stop_after=stop_after)
         scheduler.notify()
         return resumed
+
+    @app.delete("/api/runs/{run_id}")
+    async def delete_run(run_id: str, request: Request, x_forwarded_user: str | None = Header(default=None)):
+        principal = identity(x_forwarded_user)
+        run = run_or_404(run_id)
+        authorize_owner(principal, run)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=422, detail="Expected a JSON confirmation object") from exc
+        if not isinstance(payload, dict) or payload.get("confirm_run_id") != run_id:
+            raise HTTPException(status_code=422, detail="Type the exact run ID to confirm deletion")
+        if run["status"] not in DELETABLE_RUN_STATUSES:
+            raise HTTPException(status_code=409, detail="Only queued, cancelled, completed, failed, or interrupted runs may be deleted")
+
+        async with app.state.viewer_lock:
+            run = run_or_404(run_id)
+            if run["status"] not in DELETABLE_RUN_STATUSES:
+                raise HTTPException(status_code=409, detail="Run status changed before deletion completed")
+            try:
+                run_storage_paths(run, data_root=data_root, output_root=output_root)
+            except WebError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            active_viewer = store.viewer()
+            if active_viewer and active_viewer.get("run_id") == run_id:
+                try:
+                    _stop_shared_viewer()
+                except (OSError, subprocess.CalledProcessError, WebError) as exc:
+                    raise HTTPException(status_code=503, detail=f"Could not stop shared viewer: {exc}") from exc
+                store.clear_viewer()
+            try:
+                remove_run_storage(run, data_root=data_root, output_root=output_root)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"Could not delete run storage: {exc}") from exc
+            deleted = store.delete_run(run_id, allowed_statuses=DELETABLE_RUN_STATUSES)
+        if deleted is None:
+            raise HTTPException(status_code=409, detail="Run status changed before deletion completed")
+        scheduler.notify()
+        return {"id": run_id, "deleted": True}
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(run_id: str, after: int = 0, x_forwarded_user: str | None = Header(default=None)):

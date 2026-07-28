@@ -21,6 +21,7 @@ type Preset = { slug: string; name: string; datasets: string[] };
 type Navigate = (path: string) => void;
 
 const stages = ["prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle"];
+const deletableStatuses = new Set(["queued", "cancelled", "completed", "failed", "interrupted"]);
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -62,7 +63,7 @@ function RunTable({ runs, selected, onSelect, empty }: { runs: Run[]; selected: 
   </table>;
 }
 
-function RunDetail({ selected, catalogRuns, openViewer, onRefresh }: { selected: Run | null; catalogRuns: Run[]; openViewer: (runId: string) => void; onRefresh: () => Promise<void> }) {
+function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: { selected: Run | null; catalogRuns: Run[]; openViewer: (runId: string) => void; onRefresh: () => Promise<void>; onDeleted: () => void }) {
   const [detail, setDetail] = useState<any>(null);
   const [notice, setNotice] = useState("");
   const [tick, setTick] = useState(0);
@@ -103,6 +104,22 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh }: { selected:
       setNotice(String(error));
     }
   };
+  const deleteRun = async () => {
+    if (!selected) return;
+    const confirmation = window.prompt(`This permanently deletes ${selected.id} and all of its files. Type the run ID to continue:`);
+    if (confirmation === null) return;
+    if (confirmation !== selected.id) {
+      setNotice("Run ID did not match; nothing was deleted.");
+      return;
+    }
+    try {
+      await api<{ id: string; deleted: boolean }>(`/runs/${selected.id}`, { method: "DELETE", body: JSON.stringify({ confirm_run_id: confirmation }) });
+      onDeleted();
+      await onRefresh();
+    } catch (error) {
+      setNotice(String(error));
+    }
+  };
 
   return <section className="card detail">
     <h2>Run detail</h2>
@@ -116,6 +133,7 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh }: { selected:
         {["failed", "cancelled", "interrupted"].includes(selected.status) && <button onClick={() => void action("resume")}>Resume</button>}
         {selected.status === "completed" && <a href={`/api/runs/${selected.id}/artifacts/run_manifest.json`} target="_blank" rel="noreferrer">Manifest</a>}
         {selected.status === "completed" && <button onClick={() => openViewer(selected.id)}>View scene</button>}
+        {deletableStatuses.has(selected.status) && <button className="danger" onClick={() => void deleteRun()}>Delete run</button>}
       </div>
       {selected.status === "completed" && <div className="compare">
         <select value={compareWith} onChange={event => setCompareWith(event.target.value)}>
@@ -196,7 +214,7 @@ function Console({ navigate }: { navigate: Navigate }) {
         <button className="primary">Queue run</button>
       </form>{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
       <section className="card runs"><div className="card-heading"><div><h2>Active queue</h2><p className="muted">Queued and in-progress runs only.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No queued or active runs." /></section>
-      <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} />
+      <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />
     </section>
   </main>;
 }
@@ -213,7 +231,7 @@ function CompletedRuns({ navigate }: { navigate: Navigate }) {
     {notice && <p className="notice">{notice}</p>}
     <section className="catalog-grid">
       <section className="card runs"><div className="card-heading"><div><h2>Completed training runs</h2><p className="muted">Browse finished VBOGS scenes and outputs.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No completed training runs yet." /></section>
-      <RunDetail selected={selected} catalogRuns={runs} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} />
+      <RunDetail selected={selected} catalogRuns={runs} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />
     </section>
   </main>;
 }

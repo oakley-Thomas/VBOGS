@@ -26,12 +26,27 @@ header receive `401`; do not expose the service directly to the Internet.
 to a comma-separated allowlist to make all other authenticated users
 view-only.
 
-Build the web image alongside the normal stack images:
+For a local checkout, build and start the console with the development overlay.
+It bind-mounts the working tree into `/workspace/VBOGS`, so the Python service
+uses the same local source as the freshly built browser bundle:
 
 ```bash
-docker compose --project-directory . -f docker/compose/compose.yml build vbogs-web
-docker compose --project-directory . -f docker/compose/compose.yml up -d vbogs-web
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  build --no-cache vbogs-web
+docker compose --project-directory . \
+  -f docker/compose/compose.yml \
+  -f docker/compose/dev.yml \
+  up -d --force-recreate vbogs-web
 ```
+
+Using `compose.yml` alone mounts the shared `vbogs-repo` volume instead. That
+is for pull-only/Portainer deployments and must first be populated with
+`vbogs-bootstrap-repo` from `vbogs-pipeline`. An empty shared volume makes
+`vbogs-web` exit because `scripts/serve_vbogs_web.py` is unavailable. Do not
+bootstrap a local stack just to test uncommitted changes: it fetches the Git
+reference, not the host working tree.
 
 ## Operating runs
 
@@ -52,6 +67,13 @@ Completed training results are kept in the separate **Trained runs** catalog,
 where operators can browse artifacts, compare completed scenes, and open the
 viewer. The active run detail streams pipeline lifecycle events and reads the
 run-local log.
+
+Queued, cancelled, completed, failed, and interrupted runs can be permanently
+deleted from their detail panel. The operator must type the exact run ID to
+confirm; deletion removes both `data/gui/runs/<run-id>/` and
+`outputs/gui/runs/<run-id>/` along with the console record and event history.
+Starting, running, and cancelling runs must be cancelled and reach an eligible
+state before they can be removed.
 
 Completed runs expose **View scene** as soon as the run has both
 `artifacts/train_run.json` and `artifacts/m4/<scene>/U.npy`; a bundle export is

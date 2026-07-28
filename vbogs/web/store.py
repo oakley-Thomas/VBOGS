@@ -182,6 +182,16 @@ class RunStore:
         self.add_event(run_id, "requeued", {"start_at": start_at, "stop_after": stop_after})
         return self.get_run(run_id)
 
+    def delete_run(self, run_id: str, *, allowed_statuses: frozenset[str]) -> dict[str, Any] | None:
+        """Delete a run and its event history if it remains in an allowed state."""
+        with self._transaction() as connection:
+            record = self._run(connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
+            if record is None or record["status"] not in allowed_statuses:
+                return None
+            connection.execute("DELETE FROM run_events WHERE run_id = ?", (run_id,))
+            connection.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        return record
+
     def add_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int:
         with self._transaction() as connection:
             cursor = connection.execute(

@@ -49,3 +49,14 @@ def test_store_lists_only_requested_statuses(tmp_path):
 
     assert [run["id"] for run in store.list_runs(statuses=("queued", "starting", "running", "cancelling"))] == ["run-active"]
     assert [run["id"] for run in store.list_runs(statuses=("completed",))] == ["run-completed"]
+
+
+def test_store_deletes_allowed_run_and_its_events(tmp_path):
+    store = RunStore(tmp_path / "control.sqlite3")
+    store.create_run(make_record(tmp_path))
+
+    deleted = store.delete_run("run-123456789abc", allowed_statuses=frozenset({"queued"}))
+
+    assert deleted is not None
+    assert store.get_run("run-123456789abc") is None
+    assert store.events("run-123456789abc") == []
