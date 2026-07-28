@@ -10,6 +10,7 @@ from scripts.run_drive_pipeline import (
     build_upload_command,
     build_steps,
     load_config_defaults,
+    model_path_from_train_record,
     selected_steps,
 )
 
@@ -99,6 +100,31 @@ def test_artifact_root_isolates_every_mutable_stage_path_and_records_training_ru
     assert flag_values(by_name["stereo"].command, "--output-root") == [f"{root}/points_world"]
     assert flag_values(by_name["bucket"].command, "--output-root") == [f"{root}/m4/clip"]
     assert flag_values(by_name["bundle"].command, "--bucket-root") == [f"{root}/m4/clip"]
+
+
+def test_downstream_run_uses_model_recorded_by_its_training_stage(tmp_path):
+    parser = build_parser({})
+    workspace = tmp_path / "workspace"
+    model = workspace / "octree" / "clip" / "trained"
+    model.mkdir(parents=True)
+    (model / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    (workspace / "train_run.json").write_text(
+        '{"model_path": "' + str(model) + '"}\n', encoding="utf-8"
+    )
+    args = parser.parse_args(
+        [
+            "--dataset-name", "nvidia_ncore", "--scene-id", "clip",
+            "--artifact-root", str(workspace), "--start-at", "bucket",
+        ]
+    )
+
+    assert model_path_from_train_record(args) == model.resolve()
+    args.model_path = model_path_from_train_record(args)
+    by_name = {step.name: step for step in build_steps(args)}
+
+    assert flag_values(by_name["bucket"].command, "--model-path") == [str(model.resolve())]
+    assert flag_values(by_name["render"].command, "--model-path") == [str(model.resolve())]
+    assert flag_values(by_name["nbv"].command, "--model-path") == [str(model.resolve())]
 
 
 def test_dynamic_masking_pair_runner_smoke_dry_run_uses_shared_masks_and_isolated_arms():

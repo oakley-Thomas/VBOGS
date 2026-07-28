@@ -905,6 +905,23 @@ def artifact_paths(args: argparse.Namespace, scene: str) -> dict[str, Path]:
     }
 
 
+def model_path_from_train_record(args: argparse.Namespace) -> Path | None:
+    """Return this run's trained model recorded by the train stage, if present."""
+
+    scene = scene_id_arg(args)
+    record_path = artifact_paths(args, scene)["train_record"]
+    if record_path is None or not record_path.is_file():
+        return None
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        model_path = Path(str(record["model_path"])).resolve()
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Invalid training run record: {record_path}") from exc
+    if not (model_path / "config.yaml").is_file():
+        raise RuntimeError(f"Training run record has no usable model: {model_path}")
+    return model_path
+
+
 def derived_output_dir(
     explicit: Path | None,
     base_dir: Path | None,
@@ -1487,6 +1504,9 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
 def main() -> None:
     args = parse_args()
     require_container_runtime()
+    train_index = STAGES.index("train")
+    if args.model_path is None and STAGES.index(args.start_at) > train_index:
+        args.model_path = model_path_from_train_record(args)
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
     print(f"Dataset: {args.dataset_name}")
@@ -1497,7 +1517,7 @@ def main() -> None:
 
     emit_event(args.event_log, "run_started", dataset=args.dataset_name, scene=scene_id_arg(args), stages=[step.name for step in steps])
     try:
-        for step in steps:
+        for index, step in enumerate(steps):
             print(f"\n=== {step.name} ({step.service}) ===", flush=True)
             prefix = exec_prefix(args, step.service)
             pid_file = None
@@ -1511,6 +1531,15 @@ def main() -> None:
                 [*prefix, *command], dry_run=args.dry_run, event_log=args.event_log,
                 stage=step.name, cancel_file=args.cancel_file, pid_file=pid_file, exec_prefix_value=prefix,
             )
+            if step.name == "train" and args.model_path is None and not args.dry_run:
+                args.model_path = model_path_from_train_record(args)
+                if args.model_path is None:
+                    raise RuntimeError("Training completed without writing a model_path run record")
+                refreshed = {
+                    value.name: value
+                    for value in selected_steps(build_steps(args), args.start_at, args.stop_after)
+                }
+                steps[index + 1 :] = [refreshed[value.name] for value in steps[index + 1 :]]
 
         if args.upload_google_drive:
             print("\n=== upload (vbogs-pipeline) ===", flush=True)
