@@ -58,10 +58,21 @@ class RunStore:
                     run_id TEXT,
                     gpu_id TEXT,
                     owner TEXT,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'idle',
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    error TEXT
                 );
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(viewer_state)")}
+            for name, definition in (
+                ("status", "TEXT NOT NULL DEFAULT 'idle'"),
+                ("revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("error", "TEXT"),
+            ):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE viewer_state ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
@@ -185,17 +196,37 @@ class RunStore:
             )
             return cursor.rowcount
 
-    def set_viewer(self, run_id: str | None, gpu_id: str | None, owner: str | None) -> None:
+    def set_viewer(self, run_id: str, gpu_id: str, owner: str) -> dict[str, Any]:
         with self._transaction() as connection:
+            row = connection.execute("SELECT revision FROM viewer_state WHERE singleton = 1").fetchone()
+            revision = int(row["revision"]) + 1 if row else 1
             connection.execute(
-                """INSERT INTO viewer_state(singleton, run_id, gpu_id, owner, updated_at)
-                   VALUES (1, ?, ?, ?, ?)
+                """INSERT INTO viewer_state(singleton, run_id, gpu_id, owner, updated_at, status, revision, error)
+                   VALUES (1, ?, ?, ?, ?, 'active', ?, NULL)
                    ON CONFLICT(singleton) DO UPDATE SET run_id = excluded.run_id,
-                     gpu_id = excluded.gpu_id, owner = excluded.owner, updated_at = excluded.updated_at""",
-                (run_id, gpu_id, owner, utc_now()),
+                     gpu_id = excluded.gpu_id, owner = excluded.owner, updated_at = excluded.updated_at,
+                     status = excluded.status, revision = excluded.revision, error = NULL""",
+                (run_id, gpu_id, owner, utc_now(), revision),
             )
+        return self.viewer() or {}
+
+    def clear_viewer(self) -> dict[str, Any]:
+        with self._transaction() as connection:
+            row = connection.execute("SELECT revision FROM viewer_state WHERE singleton = 1").fetchone()
+            revision = int(row["revision"]) + 1 if row else 1
+            connection.execute(
+                """INSERT INTO viewer_state(singleton, run_id, gpu_id, owner, updated_at, status, revision, error)
+                   VALUES (1, NULL, NULL, NULL, ?, 'idle', ?, NULL)
+                   ON CONFLICT(singleton) DO UPDATE SET run_id = NULL, gpu_id = NULL, owner = NULL,
+                     updated_at = excluded.updated_at, status = excluded.status,
+                     revision = excluded.revision, error = NULL""",
+                (utc_now(), revision),
+            )
+        return self.viewer() or {}
 
     def viewer(self) -> dict[str, Any] | None:
         with self._connect() as connection:
-            row = connection.execute("SELECT run_id, gpu_id, owner, updated_at FROM viewer_state WHERE singleton = 1").fetchone()
+            row = connection.execute(
+                "SELECT run_id, gpu_id, owner, updated_at, status, revision, error FROM viewer_state WHERE singleton = 1"
+            ).fetchone()
         return dict(row) if row else None

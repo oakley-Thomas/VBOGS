@@ -109,7 +109,8 @@ The compose stack reads these frequently used variables:
 | `VBOGS_TORCH_MAX_JOBS` | Torch build parallelism |
 | `VBOGS_RENDER_CUDA_ARCH_LIST` | CUDA arch list for the base VBGS render image. Can also be set with `scripts/build_stack_serial.sh --render-cuda-arch-list`. |
 | `VBOGS_RENDER_MAX_JOBS` | Base VBGS render image build parallelism |
-| `VBOGS_RENDER_VIEWER_HOST_BIND` | Host bind address for the browser viewer served from `vbogs-vbgs-render`, default `0.0.0.0` |
+| `VBOGS_RENDER_VIEWER_HOST_BIND` | Host bind address for the standalone debug viewer served from `vbogs-vbgs-render`, default `127.0.0.1` |
+| `VBOGS_GUI_RENDER_INTERNAL_URL` | Internal renderer origin used by the authenticated Web Console, default `http://vbogs-vbgs-render:8070` |
 | `VBOGS_RENDER_VIEWER_HOST_PORT` | Host HTTP port for the browser viewer served from `vbogs-vbgs-render`, default `8071` |
 | `VBOGS_GDRIVE_UPLOAD` | Enable post-run Google Drive upload |
 | `VBOGS_FILEBROWSER_IMAGE` | File Browser sidecar image, default `filebrowser/filebrowser:v2-s6` |

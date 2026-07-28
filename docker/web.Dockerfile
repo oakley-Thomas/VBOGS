@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     docker.io python3 python3-pip python3-yaml && \
     rm -rf /var/lib/apt/lists/*
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
-    python -m pip install --no-cache-dir "fastapi==0.115.14" "uvicorn[standard]==0.34.3"
+    python -m pip install --no-cache-dir "fastapi==0.115.14" "uvicorn[standard]==0.34.3" "httpx==0.28.1" "websockets==15.0.1"
 WORKDIR /workspace/VBOGS
 COPY --from=frontend /src/web/dist /opt/vbogs-web-dist
 ENV PYTHONPATH=/workspace/VBOGS

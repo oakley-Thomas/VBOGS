@@ -133,7 +133,7 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONPATH: /workspace/VBOGS:/workspace/VBOGS/Octree-AnyGS:/workspace/VBOGS/vbgs:/workspace/gaussian-splatting
     ports:
-      - "${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}:8070"
+      - "${VBOGS_RENDER_VIEWER_HOST_BIND:-127.0.0.1}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}:8070"
     volumes:
       - *vbogs-repo-mount
       - *vbogs-data-mount
@@ -222,6 +222,7 @@ services:
       VBOGS_AUTH_USER_HEADER: ${VBOGS_AUTH_USER_HEADER:-X-Forwarded-User}
       VBOGS_GUI_ADMINS: ${VBOGS_GUI_ADMINS:-}
       VBOGS_GUI_VIEWERS: ${VBOGS_GUI_VIEWERS:-}
+      VBOGS_GUI_RENDER_INTERNAL_URL: ${VBOGS_GUI_RENDER_INTERNAL_URL:-http://vbogs-vbgs-render:8070}
     ports:
       - "${VBOGS_WEB_HOST_BIND:-127.0.0.1}:${VBOGS_WEB_HOST_PORT:-8090}:8090"
     volumes:

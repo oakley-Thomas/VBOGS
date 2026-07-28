@@ -627,7 +627,7 @@ def test_vbgs_render_service_publishes_viewer_port():
         compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
         render = service_block(compose_text, "vbogs-vbgs-render")
 
-        assert "VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0" in render
+        assert "VBOGS_RENDER_VIEWER_HOST_BIND:-127.0.0.1" in render
         assert "VBOGS_RENDER_VIEWER_HOST_PORT:-8071" in render
         assert ":8070" in render
         assert expected_pythonpath in render
@@ -695,8 +695,9 @@ def test_portainer_compose_uses_portainer_config():
     assert "target: /workspace/VBOGS/outputs" in portainer_local_compose
     assert "VBOGS_FILEBROWSER_IMAGE=filebrowser/filebrowser:v2-s6" in stack_env
     assert "VBOGS_FILEBROWSER_HOST_PORT=8088" in stack_env
-    assert "VBOGS_RENDER_VIEWER_HOST_BIND=0.0.0.0" in stack_env
+    assert "VBOGS_RENDER_VIEWER_HOST_BIND=127.0.0.1" in stack_env
     assert "VBOGS_RENDER_VIEWER_HOST_PORT=8071" in stack_env
+    assert "VBOGS_GUI_RENDER_INTERNAL_URL=http://vbogs-vbgs-render:8070" in stack_env
     assert "VBOGS_TRANSFER_AUTHORIZED_KEYS" not in stack_env
     assert "VBOGS_PIPELINE_AUTORUN" not in stack_env
     assert "VBOGS_PIPELINE_ARGS" not in stack_env

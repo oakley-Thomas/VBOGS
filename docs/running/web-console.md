@@ -50,6 +50,16 @@ recorded process group of the active stage only, not a shared service
 container. The run detail page streams pipeline lifecycle events and reads the
 run-local log.
 
-Completed runs can be compared in pairs. An administrator can select one
-completed portable bundle for the shared realtime viewer; this reserves its
-GPU slot and replaces the existing shared viewer session.
+Completed runs expose **View scene** as soon as the run has both
+`artifacts/train_run.json` and `artifacts/m4/<scene>/U.npy`; a bundle export is
+preferred when available but is not required. The full-page viewer is served
+inside the authenticated console and keeps the chosen scene on one shared GPU.
+Any operator may load or stop a scene. Loading a different run requires an
+explicit replacement confirmation and reserves the first available configured
+GPU slot.
+
+The console proxies renderer HTTP and WebSocket requests through
+`VBOGS_GUI_RENDER_INTERNAL_URL` (default
+`http://vbogs-vbgs-render:8070`). The renderer's host port now binds to
+`127.0.0.1` by default; set `VBOGS_RENDER_VIEWER_HOST_BIND=0.0.0.0` only for a
+separate trusted-network debug viewer.
