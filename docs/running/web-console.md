@@ -47,7 +47,10 @@ and upload/credential settings are never accepted from the browser.
 Each GPU named by `VBOGS_GUI_GPU_IDS` has one FIFO pipeline slot. Runs can be
 cancelled or resumed from a valid later stage; cancellation signals the
 recorded process group of the active stage only, not a shared service
-container. The run detail page streams pipeline lifecycle events and reads the
+container. The **Experiments** page shows only queued and in-progress work.
+Completed training results are kept in the separate **Trained runs** catalog,
+where operators can browse artifacts, compare completed scenes, and open the
+viewer. The active run detail streams pipeline lifecycle events and reads the
 run-local log.
 
 Completed runs expose **View scene** as soon as the run has both

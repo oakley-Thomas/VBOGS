@@ -320,9 +320,17 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         return scheduler.slots()
 
     @app.get("/api/runs")
-    async def runs(x_forwarded_user: str | None = Header(default=None)):
+    async def runs(scope: str = "all", x_forwarded_user: str | None = Header(default=None)):
         identity(x_forwarded_user)
-        return store.list_runs()
+        scopes = {
+            "all": None,
+            "active": ("queued", "starting", "running", "cancelling"),
+            "completed": ("completed",),
+            "recoverable": ("failed", "cancelled", "interrupted"),
+        }
+        if scope not in scopes:
+            raise HTTPException(status_code=422, detail="scope must be one of: all, active, completed, recoverable")
+        return store.list_runs(statuses=scopes[scope])
 
     @app.post("/api/runs")
     async def create_run(request: Request, x_forwarded_user: str | None = Header(default=None)):

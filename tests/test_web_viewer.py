@@ -122,3 +122,26 @@ def test_console_viewer_loads_ready_run_and_proxies_only_for_authenticated_user(
         assert metadata.json() == {"path": "/api/metadata", "method": "GET"}
         stopped = client.delete("/api/viewer", headers=headers)
         assert stopped.json()["status"] == "idle"
+
+
+def test_runs_api_separates_active_queue_from_completed_catalog(tmp_path):
+    from fastapi.testclient import TestClient
+
+    app = web_app.create_app(root=Path(__file__).resolve().parents[1], store_path=tmp_path / "control.sqlite3")
+    active = {
+        **run_record(tmp_path, status="queued"),
+        "dataset": "kitti360", "preset": "kitti360-dev", "start_at": "prepare", "stop_after": "bundle",
+        "created_at": "2026-01-01T00:00:00+00:00", "config_path": str(tmp_path / "config.yaml"),
+        "command": ["scripts/run_pipeline.sh"],
+    }
+    completed = {**active, "id": "run-completed", "workspace_path": str(tmp_path / "completed-workspace")}
+    app.state.store.create_run(active)
+    app.state.store.create_run(completed)
+    app.state.store.transition(active["id"], "starting", gpu_id="0")
+    app.state.store.transition(completed["id"], "completed")
+    headers = {"X-Forwarded-User": "operator@example.test"}
+
+    with TestClient(app) as client:
+        assert [run["id"] for run in client.get("/api/runs?scope=active", headers=headers).json()] == [active["id"]]
+        assert [run["id"] for run in client.get("/api/runs?scope=completed", headers=headers).json()] == [completed["id"]]
+        assert client.get("/api/runs?scope=unknown", headers=headers).status_code == 422

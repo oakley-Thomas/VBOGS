@@ -122,9 +122,19 @@ class RunStore:
         with self._connect() as connection:
             return self._run(connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
 
-    def list_runs(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_runs(self, limit: int = 100, *, statuses: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+        """List newest runs, optionally limited to an explicit status set."""
+        if statuses is not None and not statuses:
+            return []
+        query = "SELECT * FROM runs"
+        values: list[Any] = []
+        if statuses is not None:
+            query += f" WHERE status IN ({', '.join('?' for _ in statuses)})"
+            values.extend(statuses)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        values.append(limit)
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+            rows = connection.execute(query, values).fetchall()
         return [self._run(row) for row in rows if row is not None]
 
     def queued_runs(self) -> list[dict[str, Any]]:

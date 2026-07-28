@@ -39,3 +39,13 @@ def test_store_marks_active_runs_interrupted_after_restart(tmp_path):
     store.transition("run-123456789abc", "running", gpu_id="0")
     assert store.mark_active_interrupted() == 1
     assert store.get_run("run-123456789abc")["status"] == "interrupted"
+
+
+def test_store_lists_only_requested_statuses(tmp_path):
+    store = RunStore(tmp_path / "control.sqlite3")
+    store.create_run(make_record(tmp_path, "run-active"))
+    store.create_run(make_record(tmp_path, "run-completed"))
+    store.transition("run-completed", "completed")
+
+    assert [run["id"] for run in store.list_runs(statuses=("queued", "starting", "running", "cancelling"))] == ["run-active"]
+    assert [run["id"] for run in store.list_runs(statuses=("completed",))] == ["run-completed"]
