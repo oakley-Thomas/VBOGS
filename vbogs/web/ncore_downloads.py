@@ -1,4 +1,4 @@
-"""Serialized, persisted NCore downloads for the authenticated web console."""
+"""Serialized NCore downloads with browser-supplied, volatile credentials."""
 
 from __future__ import annotations
 
@@ -18,28 +18,26 @@ NCORE_SCENE_RE = re.compile(
 
 
 class NCoreDownloadManager:
-    """Run one full-clip transfer at a time without exposing its credential."""
+    """Run one full-clip transfer at a time without persisting credentials."""
 
     def __init__(
         self,
         store: RunStore,
         *,
-        token: str | None,
         ncore_root: Path = DEFAULT_NCORE_ROOT,
-        catalog_ttl_seconds: float = 900.0,
         catalog_loader: Callable[[str], list[str]] | None = None,
         downloader: Callable[..., bool] = download_full_scene,
     ):
         self.store = store
-        self.token = token
         self.ncore_root = ncore_root
-        self.catalog_ttl_seconds = catalog_ttl_seconds
         self.catalog_loader = catalog_loader or self._load_catalog
         self.downloader = downloader
         self.task: asyncio.Task[None] | None = None
         self.loop_task: asyncio.Task[None] | None = None
         self.wake = asyncio.Event()
-        self.catalog_cache: tuple[float, list[str]] | None = None
+        # Deliberately in-memory only. A restart interrupts queued work because
+        # no submitted credential is recovered from disk or configuration.
+        self._credentials: dict[str, str] = {}
 
     def start(self) -> None:
         self.store.mark_active_downloads_interrupted()
@@ -52,26 +50,26 @@ class NCoreDownloadManager:
             self.task.cancel()
         await asyncio.gather(*(task for task in (self.loop_task, self.task) if task), return_exceptions=True)
 
-    def _require_token(self) -> str:
-        if not self.token:
-            raise ValueError("NCore downloads are not configured. Set VBOGS_NCORE_HF_TOKEN on the web service.")
-        return self.token
+    @staticmethod
+    def _require_token(token: str | None) -> str:
+        value = (token or "").strip()
+        if not value:
+            raise ValueError("Paste a Hugging Face read token to search or download NCore clips.")
+        return value
 
     def _load_catalog(self, token: str) -> list[str]:
         return discover_scene_ids(list_repo_files(DEFAULT_REPO_ID, "main", token))
 
-    async def catalog(self, *, query: str = "", limit: int = 100) -> list[str]:
-        token = self._require_token()
-        now = asyncio.get_running_loop().time()
-        if self.catalog_cache is None or now - self.catalog_cache[0] >= self.catalog_ttl_seconds:
-            scenes = await asyncio.to_thread(self.catalog_loader, token)
-            self.catalog_cache = (now, sorted(set(scenes)))
+    async def catalog(self, *, token: str | None, query: str = "", limit: int = 100) -> list[str]:
+        """List only clips authorized by this request's submitted token."""
+
+        scenes = sorted(set(await asyncio.to_thread(self.catalog_loader, self._require_token(token))))
         needle = query.strip().lower()
-        selected = (scene for scene in self.catalog_cache[1] if not needle or needle in scene.lower())
+        selected = (scene for scene in scenes if not needle or needle in scene.lower())
         return list(selected)[:max(1, min(limit, 500))]
 
-    def enqueue(self, *, scene_id: str, owner: str) -> dict:
-        self._require_token()
+    def enqueue(self, *, scene_id: str, owner: str, token: str | None) -> dict:
+        credential = self._require_token(token)
         if not NCORE_SCENE_RE.fullmatch(scene_id):
             raise ValueError("NCore clip ID must be a UUID from the authorized catalog.")
         if self.store.active_download_for_scene(scene_id):
@@ -79,13 +77,15 @@ class NCoreDownloadManager:
         record = self.store.create_download({
             "id": f"ncore-{uuid.uuid4().hex[:12]}", "owner": owner, "scene_id": scene_id, "created_at": utc_now(),
         })
+        self._credentials[record["id"]] = credential
         self.wake.set()
         return record
 
-    def _safe(self, message: object) -> str:
+    def _safe(self, message: object, *credentials: str | None) -> str:
         text = str(message).replace("\x00", " ")
-        if self.token:
-            text = text.replace(self.token, "[redacted]")
+        for credential in (*self._credentials.values(), *credentials):
+            if credential:
+                text = text.replace(credential, "[redacted]")
         return text[:4000]
 
     def _progress(self, download_id: str, message: str) -> None:
@@ -106,8 +106,10 @@ class NCoreDownloadManager:
                 pass
 
     async def _run(self, download: dict) -> None:
+        token: str | None = None
         try:
-            token = self._require_token()
+            token = self._credentials.get(download["id"])
+            token = self._require_token(token)
             completed = await asyncio.to_thread(
                 self.downloader, download["scene_id"], token=token, ncore_root=self.ncore_root,
                 progress=lambda message: self._progress(download["id"], message),
@@ -119,8 +121,9 @@ class NCoreDownloadManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = self._safe(exc)
+            error = self._safe(exc, token)
             self.store.transition_download(download["id"], "failed", error=error)
             self.store.add_download_event(download["id"], f"Download failed: {error}")
         finally:
+            self._credentials.pop(download["id"], None)
             self.wake.set()

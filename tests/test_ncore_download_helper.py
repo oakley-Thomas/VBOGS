@@ -57,7 +57,8 @@ def test_download_manager_redacts_token_and_marks_restart_interrupted(tmp_path):
     assert store.mark_active_downloads_interrupted() == 1
     assert store.get_download(record["id"])["status"] == "interrupted"
 
-    manager = NCoreDownloadManager(store, token="hf-super-secret", ncore_root=tmp_path)
+    manager = NCoreDownloadManager(store, ncore_root=tmp_path)
+    manager.enqueue(scene_id=SCENE_ID, owner="operator", token="hf-super-secret")
     manager._progress(record["id"], "Bearer hf-super-secret was rejected")
     assert "hf-super-secret" not in store.download_events(record["id"])[-1]["message"]
 
@@ -71,7 +72,7 @@ def test_download_manager_serializes_queued_downloads(tmp_path, monkeypatch):
         completed.append(scene_id)
         return True
 
-    manager = NCoreDownloadManager(store, token="hf-token", ncore_root=tmp_path, downloader=fake_download)
+    manager = NCoreDownloadManager(store, ncore_root=tmp_path, downloader=fake_download)
 
     async def inline_to_thread(function, *args, **kwargs):
         return function(*args, **kwargs)
@@ -79,10 +80,10 @@ def test_download_manager_serializes_queued_downloads(tmp_path, monkeypatch):
     monkeypatch.setattr(asyncio, "to_thread", inline_to_thread)
 
     async def exercise():
-        manager.enqueue(scene_id=SCENE_ID, owner="operator")
-        other = "11b769dd-b4fa-4d88-ba4e-e6a230ff0c66"
-        manager.enqueue(scene_id=other, owner="operator")
         manager.start()
+        manager.enqueue(scene_id=SCENE_ID, owner="operator", token="hf-token")
+        other = "11b769dd-b4fa-4d88-ba4e-e6a230ff0c66"
+        manager.enqueue(scene_id=other, owner="operator", token="hf-token")
         for _ in range(50):
             if len(completed) == 2:
                 break
@@ -96,16 +97,14 @@ def test_download_manager_serializes_queued_downloads(tmp_path, monkeypatch):
 
 def test_download_manager_rejects_duplicate_active_scene(tmp_path):
     store = RunStore(tmp_path / "control.sqlite3")
-    manager = NCoreDownloadManager(store, token="hf-token", ncore_root=tmp_path)
-    manager.enqueue(scene_id=SCENE_ID, owner="operator")
+    manager = NCoreDownloadManager(store, ncore_root=tmp_path)
+    manager.enqueue(scene_id=SCENE_ID, owner="operator", token="hf-token")
     with pytest.raises(ValueError, match="already"):
-        manager.enqueue(scene_id=SCENE_ID, owner="operator")
+        manager.enqueue(scene_id=SCENE_ID, owner="operator", token="hf-token")
 
 
-def test_compose_exposes_backend_token_to_web_service_only():
+def test_compose_does_not_configure_an_ncore_token():
     for compose_name in ("compose.yml", "deploy.yml"):
         text = (REPO_ROOT / "docker" / "compose" / compose_name).read_text(encoding="utf-8")
-        assert sum(line.lstrip().startswith("VBOGS_NCORE_HF_TOKEN:") for line in text.splitlines()) == 1
-        web_service = text.split("  vbogs-web:", 1)[1].split("  vbogs-filebrowser:", 1)[0]
-        assert "VBOGS_NCORE_HF_TOKEN: ${VBOGS_NCORE_HF_TOKEN:-}" in web_service
+        assert "VBOGS_NCORE_HF_TOKEN" not in text
     assert "VBOGS_NCORE_HF_TOKEN=" not in (REPO_ROOT / "configs" / "docker" / "stack.env").read_text(encoding="utf-8")

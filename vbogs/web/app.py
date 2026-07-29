@@ -280,10 +280,7 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     store = RunStore(db_path)
     presets = load_presets(project_root / "configs" / "gui" / "presets", project_root)
     scheduler = Scheduler(store, gpu_ids(), subprocess_runner)
-    ncore_downloads = NCoreDownloadManager(
-        store,
-        token=os.environ.get("VBOGS_NCORE_HF_TOKEN"),
-    )
+    ncore_downloads = NCoreDownloadManager(store)
     app = FastAPI(title="VBOGS Web Experiment Console")
     app.state.store = store
     app.state.scheduler = scheduler
@@ -351,11 +348,14 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         return json.loads(clips_to_json(clips))
 
     @app.get("/api/ncore/catalog")
-    async def ncore_catalog(query: str = "", limit: int = 100, x_forwarded_user: str | None = Header(default=None)):
+    async def ncore_catalog(
+        query: str = "", limit: int = 100, x_forwarded_user: str | None = Header(default=None),
+        hf_token: str | None = Header(default=None, alias="X-VBOGS-HF-Token"),
+    ):
         principal = identity(x_forwarded_user)
         try:
             require_role(principal, "operator")
-            scene_ids = await ncore_downloads.catalog(query=query, limit=limit)
+            scene_ids = await ncore_downloads.catalog(token=hf_token, query=query, limit=limit)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, NCoreDownloadError) as exc:
@@ -381,13 +381,16 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
             if not isinstance(payload, dict):
                 raise WebError("Expected a JSON object")
             scene_id = str(payload["scene_id"])
-            catalog = await ncore_downloads.catalog(query=scene_id, limit=2)
+            hf_token = request.headers.get("X-VBOGS-HF-Token")
+            catalog = await ncore_downloads.catalog(token=hf_token, query=scene_id, limit=2)
             if scene_id not in catalog:
                 raise WebError("Select a clip from the authorized NCore catalog")
             local = {clip.scene_id: clip.status for clip in list_dataset_clips(dataset_name="nvidia_ncore")}
             if local.get(scene_id) == "ready":
                 raise WebError("This clip is already ready for the NCore reconstruction pipeline")
-            return JSONResponse(ncore_downloads.enqueue(scene_id=scene_id, owner=principal["user"]), status_code=201)
+            return JSONResponse(
+                ncore_downloads.enqueue(scene_id=scene_id, owner=principal["user"], token=hf_token), status_code=201,
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (KeyError, ValueError, WebError, NCoreDownloadError) as exc:

@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import "./ncore.css";
@@ -35,8 +35,8 @@ const deletableStatuses = new Set(["queued", "cancelled", "completed", "failed",
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
     ...options,
+    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
   });
   if (!response.ok) {
     throw new Error((await response.json().catch(() => ({ detail: response.statusText }))).detail || response.statusText);
@@ -207,34 +207,53 @@ function Log({ runId, tick }: { runId: string; tick: number }) {
 }
 
 function NCoreDownloads({ onDatasetRefresh }: { onDatasetRefresh: () => Promise<void> }) {
+  const [hfToken, setHfToken] = useState("");
   const [query, setQuery] = useState("");
   const [clips, setClips] = useState<NCoreClip[]>([]);
   const [selected, setSelected] = useState("");
   const [downloads, setDownloads] = useState<NCoreDownload[]>([]);
   const [events, setEvents] = useState<any[]>([]);
-  const [notice, setNotice] = useState("");
+  const [catalogNotice, setCatalogNotice] = useState("");
+  const [downloadNotice, setDownloadNotice] = useState("");
+  const [startingDownload, setStartingDownload] = useState(false);
+  const startingDownloadRef = useRef(false);
+  const refreshVersionRef = useRef(0);
+  const tokenHeaders = () => ({ "X-VBOGS-HF-Token": hfToken.trim() });
 
-  const refreshDownloads = async () => {
+  const refreshDownloads = async (reportError = true) => {
+    const refreshVersion = ++refreshVersionRef.current;
     try {
       const jobs = await api<NCoreDownload[]>("/ncore/downloads");
+      if (refreshVersion !== refreshVersionRef.current) return;
       setDownloads(jobs);
       const active = jobs.find(job => job.status === "running") || jobs[0];
-      if (active) setEvents((await api<{ events: any[] }>(`/ncore/downloads/${active.id}/log`)).events);
-      else setEvents([]);
+      if (active) {
+        const log = await api<{ events: any[] }>(`/ncore/downloads/${active.id}/log`);
+        if (refreshVersion !== refreshVersionRef.current) return;
+        setEvents(log.events);
+      } else setEvents([]);
       if (jobs.some(job => job.status === "completed")) await onDatasetRefresh();
-    } catch (error) { setNotice(String(error)); }
+    } catch (error) {
+      if (refreshVersion === refreshVersionRef.current && reportError) setDownloadNotice(String(error));
+    }
   };
 
   useEffect(() => {
+    if (!hfToken.trim()) {
+      setClips([]);
+      setSelected("");
+      setCatalogNotice("");
+      return;
+    }
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ query, limit: "100" });
-      void api<{ clips: NCoreClip[] }>(`/ncore/catalog?${params}`).then(result => {
+      void api<{ clips: NCoreClip[] }>(`/ncore/catalog?${params}`, { headers: tokenHeaders() }).then(result => {
         setClips(result.clips);
-        setNotice("");
-      }).catch(error => setNotice(String(error)));
+        setCatalogNotice("");
+      }).catch(error => setCatalogNotice(String(error)));
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, hfToken]);
   useEffect(() => {
     void refreshDownloads();
     const timer = window.setInterval(() => void refreshDownloads(), 2500);
@@ -242,26 +261,39 @@ function NCoreDownloads({ onDatasetRefresh }: { onDatasetRefresh: () => Promise<
   }, []);
 
   const start = async () => {
-    if (!selected) return;
+    if (!selected || startingDownloadRef.current) return;
+    startingDownloadRef.current = true;
+    setStartingDownload(true);
+    setDownloadNotice("Submitting this clip for download…");
     try {
-      const job = await api<NCoreDownload>("/ncore/downloads", { method: "POST", body: JSON.stringify({ scene_id: selected }) });
-      setNotice(`Queued ${job.scene_id}`);
+      const job = await api<NCoreDownload>("/ncore/downloads", { method: "POST", headers: tokenHeaders(), body: JSON.stringify({ scene_id: selected }) });
+      setDownloads(current => [job, ...current.filter(existing => existing.id !== job.id)]);
+      setDownloadNotice(`Download for ${job.scene_id} is queued. It will switch to running when the download worker starts it.`);
+      setHfToken("");
       setSelected("");
-      await refreshDownloads();
-    } catch (error) { setNotice(String(error)); }
+      // Reconcile status and log output without delaying the confirmation.
+      void refreshDownloads(false);
+    } catch (error) {
+      setDownloadNotice(String(error));
+    } finally {
+      startingDownloadRef.current = false;
+      setStartingDownload(false);
+    }
   };
   const active = downloads.some(job => ["queued", "running"].includes(job.status));
 
-  return <section className="ncore-downloads">
+  return <section className="ncore-downloads" aria-busy={startingDownload}>
     <h2>NCore downloads</h2>
-    <p className="muted">Select one authorized clip. The server downloads all camera, LiDAR, and core components needed for reconstruction.</p>
-    {notice && <p className="notice">{notice}</p>}
-    <label>Search NCore catalog<input value={query} onChange={event => setQuery(event.target.value)} placeholder="Clip UUID" /></label>
+    <p className="muted">Paste a Hugging Face read token accepted for NCore. It is used for this download then cleared from the browser, and is never saved in the console database or server configuration.</p>
+    {catalogNotice && <p className="notice" role="status">{catalogNotice}</p>}
+    {downloadNotice && <p className="notice" role="status">{downloadNotice}</p>}
+    <label>Hugging Face token<input type="password" autoComplete="off" value={hfToken} onChange={event => { setHfToken(event.target.value); setSelected(""); }} placeholder="hf_…" /></label>
+    <label>Search NCore catalog<input disabled={!hfToken.trim()} value={query} onChange={event => setQuery(event.target.value)} placeholder="Clip UUID" /></label>
     <label>Available clip<select value={selected} onChange={event => setSelected(event.target.value)}>
       <option value="">Select a missing or partial clip</option>
       {clips.map(clip => <option key={clip.scene_id} value={clip.scene_id} disabled={clip.status === "ready"}>{clip.scene_id} — {clip.status}</option>)}
     </select></label>
-    <button className="primary" type="button" disabled={!selected || active} onClick={() => void start()}>{active ? "Download in progress" : "Download full clip"}</button>
+    <button className="primary" type="button" disabled={!hfToken.trim() || !selected || active || startingDownload} onClick={() => void start()}>{startingDownload ? "Queueing download…" : active ? "Download in progress" : "Download full clip"}</button>
     <div className="download-history">
       {downloads.slice(0, 4).map(job => <p key={job.id}><span className={`status ${job.status}`}>{job.status}</span> {job.scene_id}{job.error && <small className="error">{job.error}</small>}</p>)}
     </div>
@@ -276,14 +308,19 @@ function Console({ navigate }: { navigate: Navigate }) {
   const [datasets, setDatasets] = useState<any[]>([]);
   const [selected, setSelected] = useState<Run | null>(null);
   const [notice, setNotice] = useState("");
+  const [queueing, setQueueing] = useState(false);
+  const queueingRef = useRef(false);
+  const refreshVersionRef = useRef(0);
   const [form, setForm] = useState({ dataset: "kitti360", scene_id: "", preset: "kitti360-dev", start_at: "prepare", stop_after: "bundle", advanced_yaml: "" });
-  const refresh = async () => {
+  const refresh = async (reportError = true) => {
+    const refreshVersion = ++refreshVersionRef.current;
     try {
       const [active, recoverable] = await Promise.all([api<Run[]>("/runs?scope=active"), api<Run[]>("/runs?scope=recoverable")]);
+      if (refreshVersion !== refreshVersionRef.current) return;
       setRuns(active);
       setRecoverableRuns(recoverable);
     } catch (error) {
-      setNotice(String(error));
+      if (refreshVersion === refreshVersionRef.current && reportError) setNotice(String(error));
     }
   };
   const refreshDatasets = async () => {
@@ -302,27 +339,39 @@ function Console({ navigate }: { navigate: Navigate }) {
   const scenes = useMemo(() => datasets.filter(dataset => dataset.dataset === form.dataset), [datasets, form.dataset]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    // React state updates are asynchronous, so this also catches rapid
+    // double-clicks before the disabled button is rendered.
+    if (queueingRef.current) return;
+    queueingRef.current = true;
+    setQueueing(true);
+    setNotice("Submitting your run to the queue…");
     try {
       const run = await api<Run>("/runs", { method: "POST", body: JSON.stringify(form) });
+      setRuns(current => [run, ...current.filter(existing => existing.id !== run.id)]);
       setSelected(run);
-      setNotice(`Queued ${run.id}`);
-      await refresh();
+      setNotice(`Run ${run.id} is queued and now appears in the active queue.`);
+      // Reconcile in the background so confirmation is never delayed by a
+      // second network request.
+      void refresh(false);
     } catch (error) {
       setNotice(String(error));
+    } finally {
+      queueingRef.current = false;
+      setQueueing(false);
     }
   };
 
   return <main>
     <Header title="Experiments" navigate={navigate} />
-    {notice && <p className="notice">{notice}</p>}
+    {notice && <p className="notice" role="status">{notice}</p>}
     <section className="grid">
-      <aside className="card"><h2>New run</h2><form onSubmit={submit}>
+      <aside className="card"><h2>New run</h2><form onSubmit={submit} aria-busy={queueing}>
         <label>Dataset<select value={form.dataset} onChange={event => setForm({ ...form, dataset: event.target.value, preset: event.target.value === "nvidia_ncore" ? "ncore-dev" : "kitti360-dev" })}><option value="kitti360">KITTI-360</option><option value="nvidia_ncore">NVIDIA NCore</option></select></label>
         <label>Mounted scene<select required value={form.scene_id} onChange={event => setForm({ ...form, scene_id: event.target.value })}><option value="">Select a discovered scene</option>{scenes.map(scene => <option key={scene.scene_id} value={scene.scene_id}>{scene.scene_id} — {scene.status}</option>)}</select></label>
         <label>Recipe<select value={form.preset} onChange={event => setForm({ ...form, preset: event.target.value })}>{presets.filter(preset => preset.datasets.includes(form.dataset)).map(preset => <option key={preset.slug} value={preset.slug}>{preset.name}</option>)}</select></label>
         <div className="two"><label>Start<select value={form.start_at} onChange={event => setForm({ ...form, start_at: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label><label>Stop<select value={form.stop_after} onChange={event => setForm({ ...form, stop_after: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label></div>
         <label>Advanced safe YAML<textarea placeholder={"train:\n  iterations: 30000"} value={form.advanced_yaml} onChange={event => setForm({ ...form, advanced_yaml: event.target.value })} /></label>
-        <button className="primary">Queue run</button>
+        <button className="primary" disabled={queueing}>{queueing ? "Queueing run…" : "Queue run"}</button>
       </form>{form.dataset === "nvidia_ncore" && <NCoreDownloads onDatasetRefresh={refreshDatasets} />}{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
       <section className="card runs"><div className="card-heading"><div><h2>Active queue</h2><p className="muted">Queued and in-progress runs only.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No queued or active runs." /></section>
       <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />

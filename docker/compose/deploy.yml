@@ -188,8 +188,6 @@ services:
       VBOGS_GUI_ADMINS: ${VBOGS_GUI_ADMINS:-}
       VBOGS_GUI_VIEWERS: ${VBOGS_GUI_VIEWERS:-}
       VBOGS_GUI_RENDER_INTERNAL_URL: ${VBOGS_GUI_RENDER_INTERNAL_URL:-http://vbogs-vbgs-render:8070}
-      # Set in the deployment environment/Portainer secret store; never commit a token.
-      VBOGS_NCORE_HF_TOKEN: ${VBOGS_NCORE_HF_TOKEN:-}
     ports:
       - "${VBOGS_WEB_HOST_BIND:-127.0.0.1}:${VBOGS_WEB_HOST_PORT:-8090}:8090"
     volumes:

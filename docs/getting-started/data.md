@@ -54,12 +54,14 @@ Face user access token with read access.
 
 ### Web Console download helper
 
-For the Web Experiment Console, set `VBOGS_NCORE_HF_TOKEN` as a deployment or
-Portainer secret on the `vbogs-web` service. The console never sends this token
-to browsers or stores it in download records/logs. Operators can then search the
-authorized catalog and download one pipeline-ready full clip at a time from the
-NVIDIA NCore panel. Do not add the token to this repository or to
-`configs/docker/stack.env`.
+For the Web Experiment Console, each operator pastes their own Hugging Face
+read token in the NVIDIA NCore panel. The token is sent only with the catalog
+and download requests, then cleared from browser state after queueing; the
+worker retains it only in volatile memory while that download is pending or
+running. It is never written to server configuration, the database, download
+records, or logs. A web-service restart interrupts queued or running downloads;
+submit the clip again with a token to resume from already downloaded components.
+Do not add a token to this repository or to `configs/docker/stack.env`.
 
 Run the downloader from the interactive `vbogs-pipeline` container shell. Keep
 the token in your shell or deployment secrets; do not commit it to the repo.

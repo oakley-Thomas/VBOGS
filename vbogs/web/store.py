@@ -357,7 +357,7 @@ class RunStore:
         with self._transaction() as connection:
             cursor = connection.execute(
                 "UPDATE ncore_downloads SET status = 'interrupted', finished_at = ?, error = ? "
-                "WHERE status = 'running'",
-                (utc_now(), "Web service restarted; resubmit to resume completed components."),
+                "WHERE status IN ('queued', 'running')",
+                (utc_now(), "Web service restarted; resubmit with a Hugging Face token to resume completed components."),
             )
         return cursor.rowcount
