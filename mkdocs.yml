@@ -30,6 +30,7 @@ nav:
       - Environments: getting-started/environments.md
       - Download and View Artifacts: getting-started/local-artifact-viewing.md
       - Render Server API: running/realtime-viewer.md
+      - Web Experiment Console: running/web-console.md
   - Experiments:
       - 3D Baseline Drive Sweep: experiments/experiment02.md
       - Stereo Training Comparison: experiments/experiment03.md

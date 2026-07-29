@@ -10,6 +10,7 @@ from scripts.run_drive_pipeline import (
     build_upload_command,
     build_steps,
     load_config_defaults,
+    model_path_from_train_record,
     selected_steps,
 )
 
@@ -80,6 +81,70 @@ def test_run_output_root_keeps_explicit_stage_output_override():
 
     assert "outputs/custom_views" in render_step.command
     assert "outputs/v1_0/drive_sync/views" not in render_step.command
+
+
+def test_artifact_root_isolates_every_mutable_stage_path_and_records_training_run():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name", "nvidia_ncore", "--scene-id", "clip", "--artifact-root", "data/experiments/pair/unmasked",
+            "--model-path", "data/experiments/pair/unmasked/octree/clip/run",
+        ]
+    )
+    by_name = {step.name: step for step in build_steps(args)}
+    root = "data/experiments/pair/unmasked"
+    assert flag_values(by_name["prepare"].command, "--output-root") == [f"{root}/colmap"]
+    assert flag_values(by_name["train"].command, "--dataset-path") == [f"{root}/colmap/clip"]
+    assert flag_values(by_name["train"].command, "--output-root") == [f"{root}/octree"]
+    assert flag_values(by_name["train"].command, "--run-record") == [f"{root}/train_run.json"]
+    assert flag_values(by_name["stereo"].command, "--output-root") == [f"{root}/points_world"]
+    assert flag_values(by_name["bucket"].command, "--output-root") == [f"{root}/m4/clip"]
+    assert flag_values(by_name["bundle"].command, "--bucket-root") == [f"{root}/m4/clip"]
+
+
+def test_downstream_run_uses_model_recorded_by_its_training_stage(tmp_path):
+    parser = build_parser({})
+    workspace = tmp_path / "workspace"
+    model = workspace / "octree" / "clip" / "trained"
+    model.mkdir(parents=True)
+    (model / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    (workspace / "train_run.json").write_text(
+        '{"model_path": "' + str(model) + '"}\n', encoding="utf-8"
+    )
+    args = parser.parse_args(
+        [
+            "--dataset-name", "nvidia_ncore", "--scene-id", "clip",
+            "--artifact-root", str(workspace), "--start-at", "bucket",
+        ]
+    )
+
+    assert model_path_from_train_record(args) == model.resolve()
+    args.model_path = model_path_from_train_record(args)
+    by_name = {step.name: step for step in build_steps(args)}
+
+    assert flag_values(by_name["bucket"].command, "--model-path") == [str(model.resolve())]
+    assert flag_values(by_name["render"].command, "--model-path") == [str(model.resolve())]
+    assert flag_values(by_name["nbv"].command, "--model-path") == [str(model.resolve())]
+
+
+def test_dynamic_masking_pair_runner_smoke_dry_run_uses_shared_masks_and_isolated_arms():
+    import subprocess
+
+    completed = subprocess.run(
+        [
+            "scripts/experiment-dynamic-masking",
+            "--weights-path", "/workspace/VBOGS/data/models/maskrcnn_resnet50_fpn_v2.pth",
+            "--dry-run",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    assert completed.stdout.count("--start-at dynamic-mask --stop-after dynamic-mask") == 1
+    assert "smoke/unmasked" in completed.stdout
+    assert "smoke/dynamic_masked" in completed.stdout
+    assert "--image-mask-root data/dynamic_masks/nvidia_ncore" in completed.stdout
 
 
 def test_render_step_forwards_resolution_override():
@@ -154,6 +219,16 @@ def test_train_step_forwards_gaussian_type():
 
     gaussian_type_index = train_step.command.index("--gaussian-type")
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
+
+
+def test_train_step_forwards_internal_progress_path_only_to_train():
+    parser = build_parser({})
+    args = parser.parse_args(["--drive", "drive_sync", "--progress-path", "data/gui/runs/run-a/training_progress.json"])
+    steps = {step.name: step for step in build_steps(args)}
+
+    train = steps["train"].command
+    assert train[train.index("--progress-path") + 1] == "data/gui/runs/run-a/training_progress.json"
+    assert all("--progress-path" not in step.command for name, step in steps.items() if name != "train")
 
 
 def test_train_step_forwards_explicit_port_override():
@@ -368,6 +443,25 @@ def test_nvidia_ncore_pipeline_dispatches_prepare_and_points():
     assert "--viewer-export-iteration" in by_name["bundle"].command
 
 
+def test_enabled_dynamic_mask_stage_precedes_prepare_and_is_forwarded():
+    parser = build_parser({})
+    args = parser.parse_args(
+        [
+            "--dataset-name", "kitti360", "--scene-id", "drive_sync",
+            "--dynamic-mask-enabled", "--dynamic-mask-weights-path", "/data/models/maskrcnn.pth",
+        ]
+    )
+    steps = {step.name: step for step in build_steps(args)}
+
+    assert list(steps)[0] == "dynamic-mask"
+    assert steps["dynamic-mask"].command[:4] == (
+        "python", "scripts/build_dynamic_masks.py", "--dataset-name", "kitti360"
+    )
+    assert "--dynamic-mask-root" in steps["prepare"].command
+    assert "--use-masks" in steps["train"].command
+    assert "--dynamic-mask-root" in steps["stereo"].command
+
+
 def test_nvidia_ncore_config_camera_ids_forward_to_prepare_and_points():
     defaults = load_config_defaults(REPO_ROOT / "configs/pipeline/nvidia_ncore_dev.yaml")
     parser = build_parser(defaults)
@@ -569,7 +663,7 @@ def test_vbgs_render_service_publishes_viewer_port():
         compose_text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
         render = service_block(compose_text, "vbogs-vbgs-render")
 
-        assert "VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0" in render
+        assert "VBOGS_RENDER_VIEWER_HOST_BIND:-127.0.0.1" in render
         assert "VBOGS_RENDER_VIEWER_HOST_PORT:-8071" in render
         assert ":8070" in render
         assert expected_pythonpath in render
@@ -637,8 +731,9 @@ def test_portainer_compose_uses_portainer_config():
     assert "target: /workspace/VBOGS/outputs" in portainer_local_compose
     assert "VBOGS_FILEBROWSER_IMAGE=filebrowser/filebrowser:v2-s6" in stack_env
     assert "VBOGS_FILEBROWSER_HOST_PORT=8088" in stack_env
-    assert "VBOGS_RENDER_VIEWER_HOST_BIND=0.0.0.0" in stack_env
+    assert "VBOGS_RENDER_VIEWER_HOST_BIND=127.0.0.1" in stack_env
     assert "VBOGS_RENDER_VIEWER_HOST_PORT=8071" in stack_env
+    assert "VBOGS_GUI_RENDER_INTERNAL_URL=http://vbogs-vbgs-render:8070" in stack_env
     assert "VBOGS_TRANSFER_AUTHORIZED_KEYS" not in stack_env
     assert "VBOGS_PIPELINE_AUTORUN" not in stack_env
     assert "VBOGS_PIPELINE_ARGS" not in stack_env

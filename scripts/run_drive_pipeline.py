@@ -7,8 +7,8 @@ operator entrypoint from inside ``vbogs-pipeline`` so it can resolve sibling
 containers and call ``docker exec`` through the mounted Docker socket.
 The framework boundary stays explicit:
 
-- `vbogs-torch` runs dataset prep, Octree-AnyGS training, stereo export, and
-  point-to-anchor bucketing.
+- `vbogs-torch` runs dynamic masking, dataset prep, Octree-AnyGS training,
+  stereo export, and point-to-anchor bucketing.
 - `vbogs-jax` runs per-anchor VBGS fitting and fit inspection.
 
 Data moves only through the shared stack mounts available at the same paths in
@@ -18,16 +18,20 @@ both containers.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+from datetime import datetime, timezone
 
 
 STAGES = (
+    "dynamic-mask",
     "prepare",
     "train",
     "stereo",
@@ -71,6 +75,13 @@ CONFIG_KEY_MAP = {
         "copy_mode": "copy_mode",
         "training_cameras": "training_cameras",
         "seed_mode": "seed_mode",
+    },
+    "masking": {
+        "enabled": "dynamic_mask_enabled",
+        "mask_root": "dynamic_mask_root",
+        "weights_path": "dynamic_mask_weights_path",
+        "score_threshold": "dynamic_mask_score_threshold",
+        "dilation_pixels": "dynamic_mask_dilation_pixels",
     },
     "train": {
         "gpu": "gpu",
@@ -334,6 +345,24 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Print the commands that would run without executing them.",
     )
     parser.add_argument(
+        "--event-log",
+        type=Path,
+        default=None,
+        help="Optional JSONL lifecycle-event path, used by the web scheduler.",
+    )
+    parser.add_argument(
+        "--progress-path",
+        type=Path,
+        default=None,
+        help="Optional run-local training-progress JSON path, used by the web scheduler.",
+    )
+    parser.add_argument(
+        "--cancel-file",
+        type=Path,
+        default=None,
+        help="Optional cancellation marker. When present, safely stops the active stage group.",
+    )
+    parser.add_argument(
         "--run-output-root",
         type=Path,
         default=None,
@@ -341,6 +370,53 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
             "Optional root for curated run outputs. When set, stage outputs are "
             "derived under `<root>/<drive>/`."
         ),
+    )
+    artifact_group = parser.add_argument_group("isolated artifact roots")
+    artifact_group.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional workspace root for all mutable stage artifacts. It derives "
+            "colmap/, points_world/, m4/, octree/, and train_run.json below this "
+            "directory, so paired experiments cannot overwrite one another."
+        ),
+    )
+    artifact_group.add_argument(
+        "--prepared-root",
+        type=Path,
+        default=None,
+        help="Prepared COLMAP root; defaults to /data/COLMAP or <artifact-root>/colmap.",
+    )
+    artifact_group.add_argument(
+        "--points-root",
+        type=Path,
+        default=None,
+        help="points_world root; defaults to data/points_world or <artifact-root>/points_world.",
+    )
+    artifact_group.add_argument(
+        "--bucket-root",
+        type=Path,
+        default=None,
+        help="M4/M5 directory for this scene; defaults to data/m4/<scene> or <artifact-root>/m4/<scene>.",
+    )
+    artifact_group.add_argument(
+        "--octree-output-root",
+        type=Path,
+        default=None,
+        help="Octree-AnyGS output root; defaults to /data/OCTREE-ANYGS or <artifact-root>/octree.",
+    )
+    artifact_group.add_argument(
+        "--train-output-config",
+        type=Path,
+        default=None,
+        help="Explicit generated Octree config path; defaults below --artifact-root when set.",
+    )
+    artifact_group.add_argument(
+        "--train-run-record",
+        type=Path,
+        default=None,
+        help="Optional JSON record emitted by training with the exact Octree model path.",
     )
     parser.add_argument(
         "--skip-local-viewer-export",
@@ -426,6 +502,12 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         choices=("symlink", "copy"),
         default="symlink",
     )
+    mask_group = parser.add_argument_group("dynamic-object masking")
+    mask_group.add_argument("--dynamic-mask-enabled", action=argparse.BooleanOptionalAction, default=False)
+    mask_group.add_argument("--dynamic-mask-root", type=Path, default=None)
+    mask_group.add_argument("--dynamic-mask-weights-path", type=Path, default=None)
+    mask_group.add_argument("--dynamic-mask-score-threshold", type=float, default=0.7)
+    mask_group.add_argument("--dynamic-mask-dilation-pixels", type=int, default=5)
     prep_group.add_argument(
         "--training-cameras",
         choices=("left", "stereo"),
@@ -783,6 +865,69 @@ def run_output_dir(args: argparse.Namespace) -> Path | None:
     return Path(args.run_output_root) / scene_id_arg(args)
 
 
+def artifact_paths(args: argparse.Namespace, scene: str) -> dict[str, Path]:
+    """Resolve mutable pipeline paths without changing legacy defaults."""
+
+    workspace = Path(args.artifact_root) if args.artifact_root is not None else None
+    prepared_root = (
+        Path(args.prepared_root)
+        if args.prepared_root is not None
+        else (workspace / "colmap" if workspace is not None else Path("/data/COLMAP"))
+    )
+    points_root = (
+        Path(args.points_root)
+        if args.points_root is not None
+        else (workspace / "points_world" if workspace is not None else Path("data/points_world"))
+    )
+    bucket_root = (
+        Path(args.bucket_root)
+        if args.bucket_root is not None
+        else (workspace / "m4" / scene if workspace is not None else Path("data/m4") / scene)
+    )
+    octree_root = (
+        Path(args.octree_output_root)
+        if args.octree_output_root is not None
+        else (workspace / "octree" if workspace is not None else Path("/data/OCTREE-ANYGS"))
+    )
+    train_config = (
+        Path(args.train_output_config)
+        if args.train_output_config is not None
+        else (workspace / "train_config.yaml" if workspace is not None else None)
+    )
+    train_record = (
+        Path(args.train_run_record)
+        if args.train_run_record is not None
+        else (workspace / "train_run.json" if workspace is not None else None)
+    )
+    return {
+        "prepared_root": prepared_root,
+        "dataset_path": prepared_root / scene,
+        "points_root": points_root,
+        "points_dir": points_root / scene,
+        "bucket_root": bucket_root,
+        "octree_root": octree_root,
+        "train_config": train_config,
+        "train_record": train_record,
+    }
+
+
+def model_path_from_train_record(args: argparse.Namespace) -> Path | None:
+    """Return this run's trained model recorded by the train stage, if present."""
+
+    scene = scene_id_arg(args)
+    record_path = artifact_paths(args, scene)["train_record"]
+    if record_path is None or not record_path.is_file():
+        return None
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        model_path = Path(str(record["model_path"])).resolve()
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Invalid training run record: {record_path}") from exc
+    if not (model_path / "config.yaml").is_file():
+        raise RuntimeError(f"Training run record has no usable model: {model_path}")
+    return model_path
+
+
 def derived_output_dir(
     explicit: Path | None,
     base_dir: Path | None,
@@ -797,9 +942,11 @@ def derived_output_dir(
 
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     scene = scene_id_arg(args)
-    dataset_path = f"/data/COLMAP/{scene}"
-    selection_metadata = f"{dataset_path}/metadata.json"
-    bucket_root = f"data/m4/{scene}"
+    artifacts = artifact_paths(args, scene)
+    dataset_path = artifacts["dataset_path"]
+    selection_metadata = dataset_path / "metadata.json"
+    dynamic_mask_root = args.dynamic_mask_root or Path("data/dynamic_masks") / args.dataset_name / scene
+    bucket_root = artifacts["bucket_root"]
     run_dir = run_output_dir(args)
     map_viz_output_dir = derived_output_dir(
         args.map_viz_output_dir,
@@ -820,6 +967,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             str(args.frame_step),
             "--max-frames",
             str(args.max_frames),
+            "--output-root",
+            str(artifacts["prepared_root"]),
             "--copy-mode",
             args.copy_mode,
             "--training-cameras",
@@ -827,6 +976,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             "--seed-mode",
             "stereo" if args.seed_mode == "lidar" else args.seed_mode,
             *maybe_path_args(args),
+            *maybe_option("--dynamic-mask-root", dynamic_mask_root if args.dynamic_mask_enabled else None),
         )
     else:
         prepare_cmd = (
@@ -838,6 +988,8 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             str(args.frame_step),
             "--max-frames",
             str(args.max_frames),
+            "--output-root",
+            str(artifacts["prepared_root"]),
             "--copy-mode",
             args.copy_mode,
             "--seed-mode",
@@ -846,17 +998,20 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             args.ncore_lidar_id,
             *maybe_option("--ncore-root", args.ncore_root),
             *camera_id_args(args.camera_ids),
+            *maybe_option("--dynamic-mask-root", dynamic_mask_root if args.dynamic_mask_enabled else None),
         )
 
     train_cmd = (
         "python",
         "scripts/train_octree_anygs.py",
         "--dataset-path",
-        dataset_path,
+        str(dataset_path),
         "--scene-name",
         scene,
         "--dataset-name",
         args.dataset_name,
+        "--output-root",
+        str(artifacts["octree_root"]),
         "--gpu",
         str(args.gpu),
         "--resolution",
@@ -874,6 +1029,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         str(args.base_layer),
         "--visible-threshold",
         str(args.visible_threshold),
+        *( ("--use-masks",) if args.dynamic_mask_enabled else ()),
+        *maybe_option("--output-config", artifacts["train_config"]),
+        *maybe_option("--run-record", artifacts["train_record"]),
+        *maybe_option("--progress-path", args.progress_path),
         *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
         *(("--skip-stack-check",) if args.skip_stack_check else ()),
@@ -889,7 +1048,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--point-source",
         effective_point_source(args),
         "--selection-metadata",
-        selection_metadata,
+        str(selection_metadata),
+        "--output-root",
+        str(artifacts["points_root"]),
         "--frame-split",
         args.frame_split,
         "--matcher",
@@ -906,6 +1067,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *camera_id_args(args.camera_ids),
         *maybe_option("--camera-depth-pair", args.camera_depth_pair),
         *maybe_option("--lidar-id", args.ncore_lidar_id),
+        *maybe_option("--dynamic-mask-root", dynamic_mask_root if args.dynamic_mask_enabled else None),
     )
 
     bucket_cmd = (
@@ -913,6 +1075,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "scripts/bucket_points.py",
         "--drive",
         scene,
+        "--points-world",
+        str(artifacts["points_dir"] / "points_world.npz"),
+        "--output-root",
+        str(bucket_root),
         "--iteration",
         str(args.bucket_iteration),
         "--point-chunk-size",
@@ -929,6 +1095,10 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         scene,
         "--device",
         str(args.jax_device),
+        "--bucket-root",
+        str(bucket_root),
+        "--output-root",
+        str(bucket_root),
         "--fit-mode",
         args.fit_mode,
         "--batch-size",
@@ -951,9 +1121,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--drive",
         scene,
         "--bucket-root",
-        bucket_root,
+        str(bucket_root),
         "--posterior",
-        f"{bucket_root}/{posterior_name}",
+        str(bucket_root / posterior_name),
         "--top-k",
         str(args.inspect_top_k),
         "--sample-points",
@@ -968,9 +1138,9 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--drive",
         scene,
         "--bucket-root",
-        bucket_root,
+        str(bucket_root),
         "--posterior",
-        f"{bucket_root}/{posterior_name}",
+        str(bucket_root / posterior_name),
         *maybe_option("--u-max", args.uncertainty_u_max),
         *(("--no-histogram",) if args.uncertainty_no_histogram else ()),
     )
@@ -981,11 +1151,11 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "--drive",
         scene,
         "--bucket-root",
-        bucket_root,
+        str(bucket_root),
         "--posterior",
-        f"{bucket_root}/{posterior_name}",
+        str(bucket_root / posterior_name),
         "--selection-metadata",
-        selection_metadata,
+        str(selection_metadata),
         "--percentile-low",
         str(args.map_viz_percentile_low),
         "--percentile-high",
@@ -1006,13 +1176,13 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         scene,
         *maybe_option("--model-path", args.model_path),
         "--uncertainty",
-        f"{bucket_root}/U.npy",
+        str(bucket_root / "U.npy"),
         "--iteration",
         str(args.bucket_iteration),
         "--split",
         args.render_split,
         "--selection-metadata",
-        selection_metadata,
+        str(selection_metadata),
         *maybe_option("--resolution", args.render_resolution),
         "--max-views",
         str(args.render_max_views),
@@ -1030,13 +1200,13 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         scene,
         *maybe_option("--model-path", args.model_path),
         "--u-path",
-        f"{bucket_root}/U.npy",
+        str(bucket_root / "U.npy"),
         "--iteration",
         str(args.bucket_iteration),
         "--candidate-source",
         args.nbv_candidate_source,
         "--selection-metadata",
-        selection_metadata,
+        str(selection_metadata),
         "--max-candidates",
         str(args.nbv_max_candidates),
         "--top-k",
@@ -1061,6 +1231,14 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         "scripts/bundle_run_outputs.py",
         "--drive",
         scene,
+        "--points-root",
+        str(artifacts["points_root"]),
+        "--bucket-root",
+        str(bucket_root),
+        "--colmap-root",
+        str(artifacts["prepared_root"]),
+        "--octree-output-root",
+        str(artifacts["octree_root"]),
         *maybe_option("--run-output-dir", run_dir),
         *maybe_option("--model-path", args.model_path),
         *maybe_option("--map-viz-output-dir", map_viz_output_dir),
@@ -1071,7 +1249,23 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *(("--skip-local-viewer-export",) if args.skip_local_viewer_export else ()),
     )
 
-    return [
+    dynamic_step: list[PipelineStep] = []
+    if args.dynamic_mask_enabled:
+        if args.dynamic_mask_weights_path is None:
+            raise ValueError("--dynamic-mask-weights-path is required when --dynamic-mask-enabled")
+        dynamic_cmd = (
+            "python", "scripts/build_dynamic_masks.py", "--dataset-name", args.dataset_name,
+            "--scene-id", scene, "--mask-root", str(dynamic_mask_root),
+            "--weights-path", str(args.dynamic_mask_weights_path),
+            "--score-threshold", str(args.dynamic_mask_score_threshold),
+            "--dilation-pixels", str(args.dynamic_mask_dilation_pixels),
+            "--frame-step", str(args.frame_step), "--max-frames", str(args.max_frames),
+            *maybe_path_args(args), *maybe_option("--ncore-root", args.ncore_root),
+            *camera_id_args(args.camera_ids),
+            *( ("--training-cameras", args.training_cameras) if args.dataset_name == "kitti360" else ()),
+        )
+        dynamic_step.append(PipelineStep("dynamic-mask", TORCH_SERVICE, dynamic_cmd))
+    return dynamic_step + [
         PipelineStep("prepare", TORCH_SERVICE, prepare_cmd),
         PipelineStep("train", TORCH_SERVICE, train_cmd),
         PipelineStep("stereo", TORCH_SERVICE, point_cmd),
@@ -1221,12 +1415,66 @@ def shell_exec_command(script: str) -> tuple[str, ...]:
     return ("sh", "-lc", script)
 
 
-def run_command(cmd: Sequence[str], *, dry_run: bool) -> None:
+def emit_event(path: Path | None, event_type: str, **payload: object) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event = {"timestamp": datetime.now(timezone.utc).isoformat(), "type": event_type, **payload}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def terminate_stage_group(prefix: Sequence[str], pid_file: Path, *, signal_name: str) -> None:
+    """Signal only the recorded process group in the selected compute container."""
+    if not pid_file.is_file() or len(prefix) < 1:
+        return
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    # exec_prefix always ends in the resolved container id/name. Passing argv
+    # directly avoids shell interpolation from run metadata.
+    subprocess.run(
+        ["docker", "exec", prefix[-1], "/bin/kill", f"-{signal_name}", f"-{pid}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run_command(
+    cmd: Sequence[str],
+    *,
+    dry_run: bool,
+    event_log: Path | None = None,
+    stage: str | None = None,
+    cancel_file: Path | None = None,
+    pid_file: Path | None = None,
+    exec_prefix_value: Sequence[str] | None = None,
+) -> None:
     printable = shlex.join(cmd)
     print(f"+ {printable}", flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    if cancel_file is not None and cancel_file.exists():
+        emit_event(event_log, "cancelled", stage=stage, before_start=True)
+        raise RuntimeError("Cancellation requested before stage start")
+    emit_event(event_log, "stage_started", stage=stage, command=list(cmd))
+    process = subprocess.Popen(cmd)
+    cancel_started: float | None = None
+    while process.poll() is None:
+        if cancel_file is not None and cancel_file.exists() and pid_file is not None and exec_prefix_value is not None:
+            if cancel_started is None:
+                cancel_started = datetime.now().timestamp()
+                emit_event(event_log, "stage_cancelling", stage=stage)
+                terminate_stage_group(exec_prefix_value, pid_file, signal_name="TERM")
+            elif datetime.now().timestamp() - cancel_started > 20:
+                terminate_stage_group(exec_prefix_value, pid_file, signal_name="KILL")
+        time.sleep(0.25)
+    if process.returncode:
+        emit_event(event_log, "stage_failed", stage=stage, exit_code=process.returncode)
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+    emit_event(event_log, "stage_completed", stage=stage)
 
 
 def build_upload_command(args: argparse.Namespace) -> list[str]:
@@ -1263,6 +1511,9 @@ def build_upload_command(args: argparse.Namespace) -> list[str]:
 def main() -> None:
     args = parse_args()
     require_container_runtime()
+    train_index = STAGES.index("train")
+    if args.model_path is None and STAGES.index(args.start_at) > train_index:
+        args.model_path = model_path_from_train_record(args)
     steps = selected_steps(build_steps(args), args.start_at, args.stop_after)
 
     print(f"Dataset: {args.dataset_name}")
@@ -1271,21 +1522,50 @@ def main() -> None:
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")
 
-    for step in steps:
-        print(f"\n=== {step.name} ({step.service}) ===", flush=True)
-        run_command([*exec_prefix(args, step.service), *step.command], dry_run=args.dry_run)
-
+    run_stages = [step.name for step in steps]
     if args.upload_google_drive:
-        print("\n=== upload (vbogs-pipeline) ===", flush=True)
-        run_command(build_upload_command(args), dry_run=args.dry_run)
+        run_stages.append("upload")
+    emit_event(args.event_log, "run_started", dataset=args.dataset_name, scene=scene_id_arg(args), stages=run_stages)
+    try:
+        for index, step in enumerate(steps):
+            print(f"\n=== {step.name} ({step.service}) ===", flush=True)
+            prefix = exec_prefix(args, step.service)
+            pid_file = None
+            command: Sequence[str] = step.command
+            if args.cancel_file is not None:
+                pid_file = args.cancel_file.parent / f"{step.name}.pid"
+                command = (
+                    "python", "scripts/run_pipeline_stage.py", "--pid-file", str(pid_file), "--", *step.command,
+                )
+            run_command(
+                [*prefix, *command], dry_run=args.dry_run, event_log=args.event_log,
+                stage=step.name, cancel_file=args.cancel_file, pid_file=pid_file, exec_prefix_value=prefix,
+            )
+            if step.name == "train" and args.model_path is None and not args.dry_run:
+                args.model_path = model_path_from_train_record(args)
+                if args.model_path is None:
+                    raise RuntimeError("Training completed without writing a model_path run record")
+                refreshed = {
+                    value.name: value
+                    for value in selected_steps(build_steps(args), args.start_at, args.stop_after)
+                }
+                steps[index + 1 :] = [refreshed[value.name] for value in steps[index + 1 :]]
 
+        if args.upload_google_drive:
+            print("\n=== upload (vbogs-pipeline) ===", flush=True)
+            run_command(build_upload_command(args), dry_run=args.dry_run, event_log=args.event_log, stage="upload")
+    except Exception as exc:
+        emit_event(args.event_log, "run_failed", error=str(exc))
+        raise
     print("\nPipeline completed.")
+    emit_event(args.event_log, "run_completed")
 
 
 if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as exc:
+        # event_log is best-effort because argument parsing may itself fail.
         sys.exit(exc.returncode)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

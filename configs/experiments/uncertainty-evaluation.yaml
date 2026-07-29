@@ -9,6 +9,16 @@ runtime:
   gpu: "0"
   jax_device: 0
 
+# The standard experiment is a single fixed, unmasked run.  Profile sweeps and
+# validation-driven selection are enabled explicitly with
+# `scripts/uncertainty-evaluation --select-on-validation`.
+selection:
+  default_octree_profile: production
+  default_uncertainty_profile: baseline
+
+dynamic_masking:
+  enabled: false
+
 datasets:
   kitti360:
     frame_step: 1

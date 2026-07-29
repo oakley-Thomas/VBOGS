@@ -66,6 +66,8 @@ path first, then scale the config back up on the server if needed.
 - [x] Run training to convergence
 - [x] Save checkpoint (`.ply` + MLP weights)
 - [x] Sanity render a held-out view; confirm photometric quality
+- [x] Optional dataset-neutral dynamic-mask preprocessing: mirror static alpha
+  masks into the prepared COLMAP layout and enable Octree-AnyGS's native mask loss
 
 Completed on local dev machine with the conservative `16 GB` preset:
 `render_mode=RGB`, `add_prefilter=false`, `densification=false`,
@@ -84,6 +86,8 @@ Depends on: M1, stereo data source, stereo matcher choice.
 - [x] Apply validity mask (left-right consistency, texture threshold)
 - [x] Concat across frames; save `points_world.npz` with keys `xyz`, `rgb`, `frame_id`
 - [x] Sanity check: visualize point cloud in a viewer; should match scene geometry
+- [x] Apply the shared dynamic-mask artifact before stereo/LiDAR/camera-depth
+  unprojection so confirmed movers never reach anchor bucketing
 
 ### M4a — Point → anchor bucketing [LLM]
 

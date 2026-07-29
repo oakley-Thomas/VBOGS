@@ -33,7 +33,10 @@ The dev overlay bind-mounts the local checkout. Pull-only and Portainer stacks
 do not bake VBOGS into the images; run `vbogs-bootstrap-repo` from
 `vbogs-pipeline` after the stack starts. Server stacks share that bootstrapped
 checkout through the `vbogs-repo` volume so File Browser and all runtime
-services see the same project files.
+services see the same project files. When rebuilding `vbogs-web` locally,
+include `docker/compose/dev.yml` in both the build and `up` commands; using
+`compose.yml` alone mounts the shared volume and an unbootstrapped volume will
+make the web service exit without `scripts/serve_vbogs_web.py`.
 
 ## What Runs Where
 

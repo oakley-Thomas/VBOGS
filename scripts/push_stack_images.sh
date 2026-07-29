@@ -14,12 +14,14 @@ The destination image tags are:
   DOCKERHUB_USERNAME/vbogs-jax:VERSION
   DOCKERHUB_USERNAME/vbogs-vbgs-render:VERSION
   DOCKERHUB_USERNAME/vbogs-pipeline:VERSION
+  DOCKERHUB_USERNAME/vbogs-web:VERSION
 
 Services:
   vbogs-torch
   vbogs-jax
   vbogs-vbgs-render
   vbogs-pipeline
+  vbogs-web
 
 Options:
   --tag-only    Retag images without pushing.

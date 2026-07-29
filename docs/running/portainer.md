@@ -47,6 +47,7 @@ URL `https://github.com/oakley-Thomas/VBOGS.git`:
 | `local/vbogs-jax` | `docker/jax.Dockerfile` |
 | `local/vbogs-vbgs-render` | `docker/vbgs-render.Dockerfile` |
 | `local/vbogs-pipeline` | `docker/pipeline.Dockerfile` |
+| `local/vbogs-web` | `docker/web.Dockerfile` |
 
 The service images install runtime dependencies, but they no longer bake a
 VBOGS checkout into the image. After the stack is running, open a console in

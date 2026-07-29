@@ -46,6 +46,12 @@ from vbogs.ncore_adapter import (
     write_ply,
 )
 from vbogs.dataset_splits import split_frame_indices, split_lookup
+from vbogs.dynamic_masking import (
+    filter_moving_cuboid_points,
+    load_manifest,
+    read_static_mask,
+    write_static_mask,
+)
 
 
 @dataclass(frozen=True)
@@ -108,6 +114,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-max-points", type=int, default=60000)
     parser.add_argument("--max-points-per-lidar-frame", type=int, default=5000)
     parser.add_argument("--random-seed", type=int, default=0)
+    parser.add_argument("--dynamic-mask-root", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -152,6 +159,7 @@ def build_sparse_seed_from_lidar(
     max_points_per_lidar_frame: int,
     random_seed: int,
     frame_indices: Sequence[int] | None = None,
+    dynamic_mask_root: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     lidar_sensor = loader.get_lidar_sensor(lidar_id)
     rng = np.random.default_rng(random_seed)
@@ -165,6 +173,9 @@ def build_sparse_seed_from_lidar(
     all_xyz: list[np.ndarray] = []
     for frame_index in frame_indices:
         xyz = get_lidar_points_world(lidar_sensor, frame_index)
+        xyz = xyz[filter_moving_cuboid_points(
+            xyz, dynamic_mask_root, get_frame_timestamp_us(lidar_sensor, frame_index)
+        )]
         if max_points_per_lidar_frame > 0 and xyz.shape[0] > max_points_per_lidar_frame:
             keep = rng.choice(xyz.shape[0], size=max_points_per_lidar_frame, replace=False)
             xyz = xyz[keep]
@@ -236,6 +247,9 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
     colmap_images: list[ColmapImage] = []
     frame_records: list[dict[str, Any]] = []
     image_id = 1
+    dynamic_mask_root = getattr(args, "dynamic_mask_root", None)
+    if dynamic_mask_root is not None:
+        load_manifest(dynamic_mask_root)
 
     for primary_index in primary_indices:
         timestamp_us = get_frame_timestamp_us(primary_sensor, primary_index)
@@ -265,6 +279,9 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
                 f"{camera_id}_{int(primary_index):010d}_{int(frame_index):010d}.png"
             )
             write_image(images_out / image_name, image_rgb)
+            if dynamic_mask_root is not None:
+                static_mask = read_static_mask(dynamic_mask_root, image_name, image_rgb.shape[:2])
+                write_static_mask(dataset_dir, image_name, static_mask)
             c2w = get_sensor_c2w(sensor, frame_index)
             if record["split"] == "train":
                 colmap_images.append(
@@ -300,6 +317,7 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
             max_points_per_lidar_frame=args.max_points_per_lidar_frame,
             random_seed=args.random_seed,
             frame_indices=train_seed_indices,
+            dynamic_mask_root=dynamic_mask_root,
         )
     else:
         seed_xyz, seed_rgb, seed_metadata = build_random_seed(
@@ -331,6 +349,7 @@ def prepare_dataset_from_loader(args: argparse.Namespace, loader: Any) -> Prepar
         "max_frames": args.max_frames,
         "copy_mode": args.copy_mode,
         "seed_mode": args.seed_mode,
+        "dynamic_mask_root": str(dynamic_mask_root) if dynamic_mask_root else None,
         "seed_metadata": seed_metadata,
         "frame_records": frame_records,
         "intrinsics": {

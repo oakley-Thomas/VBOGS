@@ -6,9 +6,13 @@ from __future__ import annotations
 
 import argparse
 import copy
+import codecs
 import json
+import os
+import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -137,6 +141,7 @@ LOCAL_16GB_CONFIG: Dict[str, Any] = {
 }
 
 DEFAULT_OUTPUT_ROOT = Path("/data/OCTREE-ANYGS")
+TRAINING_PROGRESS_RE = re.compile(r"Training progress.*?(\d+)\s*/\s*(\d+)", re.DOTALL)
 
 
 def parse_args() -> argparse.Namespace:
@@ -261,6 +266,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--progress-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON snapshot path for GUI training progress. This is an "
+            "internal VBOGS orchestration interface."
+        ),
+    )
+    parser.add_argument(
         "--python",
         default=sys.executable,
         help="Python interpreter used to launch Octree-AnyGS/train.py.",
@@ -275,6 +289,12 @@ def parse_args() -> argparse.Namespace:
         "--skip-stack-check",
         action="store_true",
         help="Skip the Torch CUDA/gsplat preflight before launching training.",
+    )
+    parser.add_argument(
+        "--use-masks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Octree-AnyGS alpha masks from <dataset-path>/masks.",
     )
     return parser.parse_args()
 
@@ -317,6 +337,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_params["resolution"] = args.resolution
     model_params["llffhold"] = args.llffhold
     model_params["eval"] = bool(args.eval)
+    model_params["add_mask"] = bool(getattr(args, "use_masks", False))
 
     model_kwargs = model_params["model_config"]["kwargs"]
     if gaussian_type == "implicit3D":
@@ -365,6 +386,66 @@ def resolve_gui_port(gpu: str, explicit_port: int | None) -> int:
         return explicit_port
     gpu_index = parse_gpu_index(gpu)
     return 6009 + gpu_index if gpu_index >= 0 else 6009
+
+
+def write_progress(path: Path | None, *, state: str, current_iterations: int, total_iterations: int) -> None:
+    """Atomically publish a compact, run-local training progress snapshot."""
+
+    if path is None:
+        return
+    payload = {
+        "state": state,
+        "current_iterations": max(0, min(current_iterations, total_iterations)),
+        "total_iterations": total_iterations,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def relay_training_process(
+    cmd: list[str],
+    *,
+    cwd: str,
+    progress_path: Path | None,
+    total_iterations: int,
+) -> None:
+    """Relay upstream output while deriving progress without modifying Octree-AnyGS."""
+
+    write_progress(progress_path, state="starting", current_iterations=0, total_iterations=total_iterations)
+    process = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    assert process.stdout is not None
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    recent = ""
+    current = 0
+    state = "starting"
+    while True:
+        chunk = process.stdout.read1(4096)
+        if not chunk:
+            break
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+        recent = (recent + decoder.decode(chunk))[-8192:]
+        matches = list(TRAINING_PROGRESS_RE.finditer(recent))
+        if matches:
+            match = matches[-1]
+            observed, observed_total = int(match.group(1)), int(match.group(2))
+            if observed_total == total_iterations and observed > current:
+                current = observed
+                state = "finalizing" if current >= total_iterations else "running"
+                write_progress(progress_path, state=state, current_iterations=current, total_iterations=total_iterations)
+        if "Training complete." in recent and state != "finalizing":
+            current = total_iterations
+            state = "finalizing"
+            write_progress(progress_path, state=state, current_iterations=current, total_iterations=total_iterations)
+    process.stdout.close()
+    returncode = process.wait()
+    if returncode:
+        write_progress(progress_path, state="failed", current_iterations=current, total_iterations=total_iterations)
+        raise subprocess.CalledProcessError(returncode, cmd)
+    write_progress(progress_path, state="completed", current_iterations=total_iterations, total_iterations=total_iterations)
 
 
 def main() -> None:
@@ -418,7 +499,12 @@ def main() -> None:
     } if scene_output_root.exists() else set()
 
     print("Launching:", " ".join(cmd))
-    subprocess.run(cmd, cwd=str(octree_root.parent), check=True)
+    relay_training_process(
+        cmd,
+        cwd=str(octree_root.parent),
+        progress_path=args.progress_path,
+        total_iterations=args.iterations,
+    )
 
     if args.run_record is not None:
         after = {

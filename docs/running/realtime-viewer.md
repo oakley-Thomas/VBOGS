@@ -39,7 +39,7 @@ http://localhost:8071
 ```
 
 The compose stack maps
-`${VBOGS_RENDER_VIEWER_HOST_BIND:-0.0.0.0}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}`
+`${VBOGS_RENDER_VIEWER_HOST_BIND:-127.0.0.1}:${VBOGS_RENDER_VIEWER_HOST_PORT:-8071}`
 on the host to port `8070` in `vbogs-vbgs-render`. For a remote Portainer
 server, open:
 

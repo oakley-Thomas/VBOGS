@@ -1,0 +1,39 @@
+slug: kitti360-dev
+name: KITTI-360 development
+description: Conservative single-drive recipe for iterative VBOGS validation.
+base_config: configs/pipeline/dev.yaml
+datasets: [kitti360]
+defaults: {}
+allowed_paths:
+  - prepare.frame_step
+  - prepare.max_frames
+  - prepare.training_cameras
+  - train.resolution
+  - train.iterations
+  - train.gaussian_type
+  - train.base_layer
+  - stereo.matcher
+  - stereo.pixel_step
+  - stereo.max_points_per_frame
+  - bucket.max_points
+  - fit.fit_mode
+  - fit.batch_size
+  - fit.vmap_group_size
+  - render.resolution
+  - render.max_views
+  - nbv.max_candidates
+  - nbv.top_k
+limits:
+  prepare.frame_step: {minimum: 1, maximum: 100}
+  prepare.max_frames: {minimum: 1, maximum: 5000}
+  train.resolution: {minimum: 1, maximum: 8}
+  train.iterations: {minimum: 1000, maximum: 200000}
+  stereo.pixel_step: {minimum: 1, maximum: 16}
+  stereo.max_points_per_frame: {minimum: 1000, maximum: 1000000}
+  bucket.max_points: {minimum: 0, maximum: 100000000}
+  fit.batch_size: {minimum: 1, maximum: 20000}
+  fit.vmap_group_size: {minimum: 1, maximum: 512}
+  render.resolution: {minimum: 1, maximum: 8}
+  render.max_views: {minimum: 0, maximum: 10000}
+  nbv.max_candidates: {minimum: 0, maximum: 100000}
+  nbv.top_k: {minimum: 1, maximum: 100000}

@@ -1,0 +1,59 @@
+# Fixed-configuration paired comparison of dynamic-object masking on NCore.
+# `scripts/experiment-dynamic-masking` overrides max_frames and iterations for
+# the smoke/production profiles; every other setting is held constant.
+dataset:
+  name: nvidia_ncore
+  scene_id: 000da9de-0ee5-465a-9a2d-e7e91d3016bb
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_front_tele_30fov
+  point_source: lidar
+  lidar_id: lidar_top_360fov
+
+pipeline:
+  start_at: prepare
+  stop_after: bundle
+
+prepare:
+  frame_step: 2
+  max_frames: 200
+  copy_mode: copy
+  seed_mode: lidar
+
+train:
+  gpu: "0"
+  resolution: 2
+  iterations: 90000
+  llffhold: 8
+  # NCore preparation writes only train records into COLMAP and preserves
+  # validation/test cameras in metadata for our explicit held-out evaluator.
+  eval: false
+  gaussian_type: explicit3D
+  base_layer: 10
+  visible_threshold: 0.01
+
+points:
+  frame_split: train
+  max_points_per_frame: 100000
+  write_ply: true
+
+bucket:
+  max_points: 10000000
+
+fit:
+  jax_device: 0
+  fit_mode: batched
+  batch_size: 5000
+  vmap_group_size: 64
+  log_every: 500
+
+render:
+  split: both
+  resolution: 2
+  max_views: 0
+
+nbv:
+  candidate_source: test
+  max_candidates: 0
+  top_k: 100000
+  save_top_images: 5

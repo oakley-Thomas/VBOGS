@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import scripts.analyze_uncertainty_evaluation as analyze_uncertainty
 
 from vbogs.uncertainty_evaluation import (
     calibration_summary,
@@ -23,8 +24,15 @@ from vbogs.uncertainty_evaluation import (
     split_fingerprint,
     validate_split_integrity,
     verify_selection_lock,
+    view_score_fields,
 )
-from scripts.analyze_uncertainty_evaluation import report, select_octree, select_uncertainty
+from scripts.analyze_uncertainty_evaluation import (
+    configured_octree,
+    configured_uncertainty,
+    report,
+    select_octree,
+    select_uncertainty,
+)
 
 
 def load_runner_module():
@@ -138,6 +146,35 @@ def test_normalized_errors_omits_constant_metric():
     assert "PSNR" not in calibration_summary(rows)["metrics"]
 
 
+def test_calibration_summary_honors_score_key_and_evaluation_adds_observed_baselines():
+    rows = [
+        {
+            "is_primary": True, "frame_id": index, "PSNR": psnr, "SSIM": ssim, "LPIPS": lpips,
+            "uncertainty_score": legacy, "uncertainty_score_observed": observed,
+            "unobserved_fraction": 0.25,
+        }
+        for index, (psnr, ssim, lpips, legacy, observed) in enumerate(
+            [(30.0, 0.9, 0.1, 3.0, 1.0), (20.0, 0.7, 0.3, 1.0, 3.0)]
+        )
+    ]
+    assert calibration_summary(rows, score_key="uncertainty_score_observed")["mean_spearman"] == pytest.approx(1.0)
+    summary = evaluation_summary(rows)["groups"]["primary"]
+    assert "calibration_observed" in summary
+    assert "frame_id_null" in summary
+    assert summary["unobserved_fraction"]["mean"] == pytest.approx(0.25)
+    rows[1]["uncertainty_score_observed"] = None
+    assert "calibration_observed" not in evaluation_summary(rows)["groups"]["primary"]
+
+
+def test_view_score_fields_handles_zero_mass_and_clamps_coverage():
+    fields = view_score_fields(10.0, 4.0, 2.0, 5.0)
+    assert fields["uncertainty_score_observed"] == pytest.approx(2.0)
+    assert fields["unobserved_fraction"] == pytest.approx(0.6)
+    zero = view_score_fields(0.0, 0.0, 0.0, 0.0)
+    assert zero["uncertainty_score_observed"] == 0.0
+    assert zero["unobserved_fraction"] == 1.0
+
+
 def test_octree_selection_uses_declared_lexicographic_order():
     def candidate(name, order, iteration, psnr, ssim, lpips):
         return {
@@ -188,6 +225,22 @@ def test_uncertainty_selection_uses_ause_then_spearman_then_order():
         [candidate("a", 0, 0.2, 0.9), candidate("b", 1, 0.1, 0.5), candidate("c", 2, 0.1, 0.4)]
     )
     assert selected["profile"] == "b"
+
+
+def test_uncertainty_selection_prefers_observed_calibration_and_falls_back_to_legacy():
+    def candidate(name, order, legacy, observed=None):
+        primary = {"calibration": {"mean_normalized_AUSE": legacy, "mean_spearman": 0.5}}
+        if observed is not None:
+            primary["calibration_observed"] = {
+                "mean_normalized_AUSE": observed,
+                "mean_spearman": 0.5,
+            }
+        return {"profile": name, "profile_order": order, "summary": {"groups": {"primary": primary}}}
+
+    selected = select_uncertainty_candidate(
+        [candidate("legacy", 0, 0.01), candidate("observed", 1, 0.9, observed=0.005)]
+    )
+    assert selected["profile"] == "observed"
 
 
 def test_selection_lock_hashes_files_and_directories(tmp_path):
@@ -277,6 +330,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
                 "SSIM": 0.9,
                 "LPIPS": 0.1,
                 "uncertainty_score": scores[0],
+                "uncertainty_score_observed": scores[0],
+                "unobserved_fraction": 0.25,
+                "frame_id": 0,
             },
             {
                 "view_id": "v1",
@@ -285,6 +341,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
                 "SSIM": 0.7,
                 "LPIPS": 0.3,
                 "uncertainty_score": scores[1],
+                "uncertainty_score_observed": scores[1],
+                "unobserved_fraction": 0.25,
+                "frame_id": 1,
             },
         ]
         evaluation = tmp_path / "validation" / "uncertainty" / name
@@ -306,6 +365,8 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
     select_uncertainty(tmp_path)
     lock = json.loads((tmp_path / "selection.lock.json").read_text(encoding="utf-8"))
     assert lock["uncertainty_profile"] == "good"
+    metrics = (tmp_path / "validation" / "uncertainty_metrics.md").read_text(encoding="utf-8")
+    assert "Observed mean normalized AUSE" in metrics
     with pytest.raises(FileExistsError, match="immutable"):
         select_uncertainty(tmp_path)
 
@@ -317,6 +378,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
             "SSIM": 0.9,
             "LPIPS": 0.1,
             "uncertainty_score": 1.0,
+            "uncertainty_score_observed": 1.0,
+            "unobserved_fraction": 0.25,
+            "frame_id": 0,
         },
         {
             "view_id": "t1",
@@ -325,6 +389,9 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
             "SSIM": 0.7,
             "LPIPS": 0.3,
             "uncertainty_score": 3.0,
+            "uncertainty_score_observed": 3.0,
+            "unobserved_fraction": 0.25,
+            "frame_id": 1,
         },
     ]
     test_root = tmp_path / "test"
@@ -333,9 +400,122 @@ def test_analyzer_selects_validation_candidates_and_writes_immutable_lock(tmp_pa
     (test_root / "summary.json").write_text(
         json.dumps(evaluation_summary(test_rows)), encoding="utf-8"
     )
+    pytest.importorskip("matplotlib")
     report(tmp_path)
     assert (tmp_path / "report.md").exists()
+    report_text = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Observed AUSE" in report_text
+    assert "Frame-id null rho" in report_text
+    assert "Mean unobserved fraction" in report_text
     assert (tmp_path / "plots" / "test_calibration_scatter.png").exists()
+    assert (tmp_path / "plots" / "test_calibration_scatter_legacy.png").exists()
+
+
+def test_analyzer_locks_configured_default_profiles_without_validation(tmp_path, monkeypatch):
+    model = tmp_path / "model"
+    iteration_dir = model / "point_cloud" / "iteration_90000"
+    iteration_dir.mkdir(parents=True)
+    (model / "config.yaml").write_text("model: true\n", encoding="utf-8")
+    (iteration_dir / "point_cloud_anchor.ply").write_bytes(b"model")
+    posterior_root = tmp_path / "uncertainty" / "baseline"
+    posterior_root.mkdir(parents=True)
+    posterior = posterior_root / "anchor_posterior.npz"
+    uncertainty = posterior_root / "U.npy"
+    posterior.write_bytes(b"posterior")
+    np.save(uncertainty, np.asarray([1.0, 2.0], dtype=np.float32))
+    (tmp_path / "experiment_manifest.json").write_text(
+        json.dumps(
+            {
+                "dataset": "nvidia_ncore",
+                "scene_id": "clip",
+                "config_hash": "config-hash",
+                "split_hash": "split-hash",
+                "selection_mode": "configured-default",
+                "dynamic_object_masking": "disabled",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "effective_config.yaml").write_text(
+        """selection:
+  default_octree_profile: production
+  default_uncertainty_profile: baseline
+octree:
+  profiles:
+    - name: production
+fit:
+  profiles:
+    - name: baseline
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "octree_runs.json").write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {"name": "production", "model_path": str(model), "iterations": [10000, 90000]}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "uncertainty_runs.json").write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "baseline",
+                        "posterior_path": str(posterior),
+                        "u_path": str(uncertainty),
+                    },
+                    {
+                        "name": "baseline-kl",
+                        "posterior_path": str(posterior),
+                        "u_path": str(posterior_root / "U_kl.npy"),
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    configured_octree(tmp_path)
+    configured_uncertainty(tmp_path)
+
+    octree = json.loads((tmp_path / "octree_selection.json").read_text(encoding="utf-8"))
+    uncertainty_selection = json.loads(
+        (tmp_path / "uncertainty_selection.json").read_text(encoding="utf-8")
+    )
+    lock = json.loads((tmp_path / "selection.lock.json").read_text(encoding="utf-8"))
+    assert octree["selection_mode"] == "configured-default"
+    assert octree["selected"]["iteration"] == 90000
+    assert uncertainty_selection["selected"]["profile"] == "baseline"
+    assert lock["selection_mode"] == "configured-default"
+    assert lock["dynamic_object_masking"] == "disabled"
+    assert lock["u_path"] == str(uncertainty)
+
+    test_root = tmp_path / "test"
+    test_root.mkdir()
+    rows = [
+        {
+            "view_id": f"test-{index}",
+            "is_primary": True,
+            "PSNR": psnr,
+            "SSIM": ssim,
+            "LPIPS": lpips,
+            "uncertainty_score": score,
+        }
+        for index, (psnr, ssim, lpips, score) in enumerate(
+            ((30.0, 0.9, 0.1, 1.0), (20.0, 0.7, 0.3, 3.0))
+        )
+    ]
+    (test_root / "summary.json").write_text(json.dumps(evaluation_summary(rows)), encoding="utf-8")
+    (test_root / "per_view.json").write_text(json.dumps({"views": rows}), encoding="utf-8")
+    monkeypatch.setattr(analyze_uncertainty, "make_plots", lambda *args: None)
+    report(tmp_path)
+    report_text = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Configured default Octree profile/checkpoint" in report_text
+    assert "Dynamic object masking: `disabled`" in report_text
 
 
 def test_reference_psnr_matches_known_unit_range_value():
@@ -375,8 +555,39 @@ def test_gpu_metric_adapter_accepts_channel_permuted_tensors_when_available():
     assert values["PSNR"] == pytest.approx(20.0, abs=1.0e-5)
 
 
+def test_static_image_metrics_and_mask_loader_when_torch_is_available(tmp_path):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    from PIL import Image
+    from vbogs.dynamic_masking import write_static_mask
+    from scripts.evaluate_uncertainty_views import load_static_mask_for_evaluation, static_metric_values
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root / "Octree-AnyGS"))
+
+    class ZeroLpips:
+        def __call__(self, render, ground_truth):
+            return torch.zeros((render.shape[0],), dtype=render.dtype, device=render.device)
+
+    write_static_mask(tmp_path, "wide/frame.png", np.ones((128, 128), dtype=bool))
+    mask = load_static_mask_for_evaluation(tmp_path, "wide/frame.png", (128, 128), (64, 64))
+    assert mask.shape == (64, 64) and mask.all()
+    render = torch.zeros((3, 64, 64), dtype=torch.float32)
+    values = static_metric_values(render, render.clone(), torch.from_numpy(mask), ZeroLpips())
+    assert values["PSNR_static"] == float("inf")
+    assert values["SSIM_static"] == pytest.approx(1.0)
+    assert values["LPIPS_static"] == pytest.approx(0.0)
+    assert values["static_lpips_tile_count"] == 1
+
+    bad_path = tmp_path / "masks" / "wide" / "bad.png"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(np.full((2, 2), 127, dtype=np.uint8)).save(bad_path)
+    with pytest.raises(ValueError, match="binary"):
+        load_static_mask_for_evaluation(tmp_path, "wide/bad.png", (2, 2), (2, 2))
+
+
 @pytest.mark.parametrize("dataset,scene", [("kitti360", "drive"), ("nvidia_ncore", "clip")])
-def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
+def test_runner_default_smoke_dry_run_uses_fixed_unmasked_profiles(dataset, scene):
     repo_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
         [
@@ -398,9 +609,99 @@ def test_runner_smoke_dry_run_covers_both_datasets(dataset, scene):
         stderr=subprocess.PIPE,
     )
     assert "--frame-split train" in completed.stdout
-    assert "--split validation" in completed.stdout
+    assert "--split validation" not in completed.stdout
     assert "--split test" in completed.stdout
     assert "--no-eval" in completed.stdout
+    assert "--dynamic-mask-root" not in completed.stdout
+    assert completed.stdout.count("scripts/train_octree_anygs.py") == 1
+    assert completed.stdout.count("scripts/fit_anchors.py") == 1
+    assert "/production" in completed.stdout
+    assert "/uncertainty/baseline" in completed.stdout
+    assert "coarse_resolution" not in completed.stdout
+    assert "low_capacity" not in completed.stdout
+    assert "--phase configured-octree" in completed.stdout
+    assert "--phase configured-uncertainty" in completed.stdout
+
+
+def test_runner_validation_selection_is_explicit_opt_in():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/uncertainty-evaluation",
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip",
+            "--run-id",
+            "pytest-validation-dry-run",
+            "--smoke",
+            "--select-on-validation",
+            "--dry-run",
+        ],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert "--split validation" in completed.stdout
+    assert completed.stdout.count("scripts/train_octree_anygs.py") == 1
+    assert completed.stdout.count("scripts/fit_anchors.py") == 3
+    assert "--phase octree" in completed.stdout
+    assert "--phase uncertainty" in completed.stdout
+
+
+def test_runner_rejects_validation_stage_without_opt_in():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/uncertainty-evaluation",
+            "--dataset-name",
+            "nvidia_ncore",
+            "--scene-id",
+            "clip",
+            "--run-id",
+            "pytest-invalid-stage",
+            "--start-at",
+            "octree-validation",
+            "--stop-after",
+            "octree-validation",
+            "--dry-run",
+        ],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 2
+    assert "requires --select-on-validation" in completed.stderr
+
+
+def test_runner_rejects_unknown_configured_default_profile(tmp_path):
+    runner = load_runner_module()
+    config = (Path(__file__).resolve().parents[1] / "configs" / "experiments" / "uncertainty-evaluation.yaml").read_text(
+        encoding="utf-8"
+    )
+    path = tmp_path / "experiment.yaml"
+    path.write_text(
+        config.replace("default_octree_profile: production", "default_octree_profile: missing"),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        config=path,
+        dataset_name="nvidia_ncore",
+        gpu=None,
+        jax_device=None,
+        frame_step=None,
+        max_frames=None,
+        camera_ids=None,
+        smoke=False,
+        select_on_validation=False,
+    )
+    with pytest.raises(ValueError, match="default_octree_profile.*not a octree profile"):
+        runner.effective_config(args)
 
 
 def test_export_uncertainty_ply_colors_anchors(tmp_path):

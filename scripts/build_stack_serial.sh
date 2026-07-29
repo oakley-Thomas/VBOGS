@@ -9,6 +9,7 @@ export VBOGS_TORCH_IMAGE="${VBOGS_TORCH_IMAGE:-local/vbogs-torch}"
 export VBOGS_JAX_IMAGE="${VBOGS_JAX_IMAGE:-local/vbogs-jax}"
 export VBOGS_VBGS_RENDER_IMAGE="${VBOGS_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}"
 export VBOGS_PIPELINE_IMAGE="${VBOGS_PIPELINE_IMAGE:-local/vbogs-pipeline}"
+export VBOGS_WEB_IMAGE="${VBOGS_WEB_IMAGE:-local/vbogs-web}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 export VBOGS_TORCH_MAX_JOBS="${VBOGS_TORCH_MAX_JOBS:-1}"
 export VBOGS_RENDER_MAX_JOBS="${VBOGS_RENDER_MAX_JOBS:-1}"
@@ -25,7 +26,7 @@ usage() {
 Usage: bash scripts/build_stack_serial.sh [OPTIONS] [SERVICE...]
 
 Builds VBOGS images one at a time. When no services are listed, builds:
-  vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline
+  vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline vbogs-web
 
 Options:
   --cuda-arch-list ARCHS          CUDA arch list for both Torch and render images.
@@ -153,7 +154,7 @@ export VBOGS_RENDER_CUDA_ARCH_LIST="$(
 )"
 
 if [ "${#services[@]}" -eq 0 ]; then
-  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline)
+  services=(vbogs-torch vbogs-jax vbogs-vbgs-render vbogs-pipeline vbogs-web)
 fi
 
 for service in "${services[@]}"; do

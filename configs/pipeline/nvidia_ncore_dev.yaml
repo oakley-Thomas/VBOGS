@@ -32,6 +32,13 @@ prepare:
   copy_mode: copy
   seed_mode: lidar
 
+masking:
+  enabled: false
+  mask_root: null
+  weights_path: null
+  score_threshold: 0.7
+  dilation_pixels: 5
+
 train:
   gpu: "0"
   resolution: 4

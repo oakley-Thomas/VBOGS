@@ -114,8 +114,12 @@ def read_colmap_cameras_metadata_only(
     viewer only needs camera metadata to render the trained scene.
     """
 
-    if masks_folder is not None or depths_folder is not None or depths_params is not None:
-        raise ValueError("Metadata-only viewer loading does not support masks or depth maps")
+    if depths_folder is not None or depths_params is not None:
+        raise ValueError("Metadata-only viewer loading does not support depth maps")
+    # Rendering/evaluation loads ground truth separately, so source alpha masks
+    # are not needed by LightweightSceneCamera.  Accept their presence to load
+    # an Octree checkpoint that was trained with add_mask=True; do not open the
+    # potentially large per-view PNGs merely to construct render cameras.
 
     from scene.colmap_loader import qvec2rotmat
     from scene.dataset_readers import CameraInfo
