@@ -20,7 +20,9 @@ import yaml
 from fastapi import Request, WebSocket
 
 from vbogs.dataset_inventory import clips_to_json, list_dataset_clips
+from vbogs.ncore_download import NCoreDownloadError
 from vbogs.web.config import ConfigValidationError, load_presets, resolve_config
+from vbogs.web.ncore_downloads import NCoreDownloadManager
 from vbogs.web.scheduler import Scheduler, subprocess_runner
 from vbogs.web.store import RunStore, TERMINAL_STATUSES, utc_now
 
@@ -277,9 +279,14 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     store = RunStore(db_path)
     presets = load_presets(project_root / "configs" / "gui" / "presets", project_root)
     scheduler = Scheduler(store, gpu_ids(), subprocess_runner)
+    ncore_downloads = NCoreDownloadManager(
+        store,
+        token=os.environ.get("VBOGS_NCORE_HF_TOKEN"),
+    )
     app = FastAPI(title="VBOGS Web Experiment Console")
     app.state.store = store
     app.state.scheduler = scheduler
+    app.state.ncore_downloads = ncore_downloads
     app.state.presets = presets
     app.state.project_root = project_root
     app.state.data_root = data_root
@@ -298,9 +305,11 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     @app.on_event("startup")
     async def startup() -> None:
         scheduler.start()
+        ncore_downloads.start()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        await ncore_downloads.stop()
         await scheduler.stop()
 
     def identity(x_forwarded_user: str | None = Header(default=None)) -> dict[str, Any]:
@@ -339,6 +348,60 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         identity(x_forwarded_user)
         clips = list_dataset_clips(dataset_name="all")
         return json.loads(clips_to_json(clips))
+
+    @app.get("/api/ncore/catalog")
+    async def ncore_catalog(query: str = "", limit: int = 100, x_forwarded_user: str | None = Header(default=None)):
+        principal = identity(x_forwarded_user)
+        try:
+            require_role(principal, "operator")
+            scene_ids = await ncore_downloads.catalog(query=query, limit=limit)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, NCoreDownloadError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        local = {clip.scene_id: clip.status for clip in list_dataset_clips(dataset_name="nvidia_ncore")}
+        return {"clips": [{"scene_id": scene_id, "status": local.get(scene_id, "missing")} for scene_id in scene_ids]}
+
+    @app.get("/api/ncore/downloads")
+    async def ncore_download_list(x_forwarded_user: str | None = Header(default=None)):
+        principal = identity(x_forwarded_user)
+        try:
+            require_role(principal, "operator")
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return store.list_downloads()
+
+    @app.post("/api/ncore/downloads")
+    async def ncore_download_create(request: Request, x_forwarded_user: str | None = Header(default=None)):
+        principal = identity(x_forwarded_user)
+        try:
+            require_role(principal, "operator")
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise WebError("Expected a JSON object")
+            scene_id = str(payload["scene_id"])
+            catalog = await ncore_downloads.catalog(query=scene_id, limit=2)
+            if scene_id not in catalog:
+                raise WebError("Select a clip from the authorized NCore catalog")
+            local = {clip.scene_id: clip.status for clip in list_dataset_clips(dataset_name="nvidia_ncore")}
+            if local.get(scene_id) == "ready":
+                raise WebError("This clip is already ready for the NCore reconstruction pipeline")
+            return JSONResponse(ncore_downloads.enqueue(scene_id=scene_id, owner=principal["user"]), status_code=201)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (KeyError, ValueError, WebError, NCoreDownloadError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/ncore/downloads/{download_id}/log")
+    async def ncore_download_log(download_id: str, x_forwarded_user: str | None = Header(default=None)):
+        principal = identity(x_forwarded_user)
+        try:
+            require_role(principal, "operator")
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if store.get_download(download_id) is None:
+            raise HTTPException(status_code=404, detail="NCore download not found")
+        return {"events": store.download_events(download_id)}
 
     @app.get("/api/slots")
     async def slots(x_forwarded_user: str | None = Header(default=None)):

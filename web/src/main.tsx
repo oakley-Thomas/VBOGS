@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import "./ncore.css";
 import { SceneViewer } from "./SceneViewer";
 
 type Run = {
@@ -18,6 +19,8 @@ type Run = {
   finished_at?: string;
 };
 type Preset = { slug: string; name: string; datasets: string[] };
+type NCoreClip = { scene_id: string; status: "missing" | "partial" | "ready" };
+type NCoreDownload = { id: string; scene_id: string; owner: string; status: string; error?: string; created_at?: string };
 type Navigate = (path: string) => void;
 
 const stages = ["prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle"];
@@ -161,6 +164,69 @@ function Log({ runId, tick }: { runId: string; tick: number }) {
   return <pre>{lines.join("\n") || "No output yet."}</pre>;
 }
 
+function NCoreDownloads({ onDatasetRefresh }: { onDatasetRefresh: () => Promise<void> }) {
+  const [query, setQuery] = useState("");
+  const [clips, setClips] = useState<NCoreClip[]>([]);
+  const [selected, setSelected] = useState("");
+  const [downloads, setDownloads] = useState<NCoreDownload[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [notice, setNotice] = useState("");
+
+  const refreshDownloads = async () => {
+    try {
+      const jobs = await api<NCoreDownload[]>("/ncore/downloads");
+      setDownloads(jobs);
+      const active = jobs.find(job => job.status === "running") || jobs[0];
+      if (active) setEvents((await api<{ events: any[] }>(`/ncore/downloads/${active.id}/log`)).events);
+      else setEvents([]);
+      if (jobs.some(job => job.status === "completed")) await onDatasetRefresh();
+    } catch (error) { setNotice(String(error)); }
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ query, limit: "100" });
+      void api<{ clips: NCoreClip[] }>(`/ncore/catalog?${params}`).then(result => {
+        setClips(result.clips);
+        setNotice("");
+      }).catch(error => setNotice(String(error)));
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    void refreshDownloads();
+    const timer = window.setInterval(() => void refreshDownloads(), 2500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const start = async () => {
+    if (!selected) return;
+    try {
+      const job = await api<NCoreDownload>("/ncore/downloads", { method: "POST", body: JSON.stringify({ scene_id: selected }) });
+      setNotice(`Queued ${job.scene_id}`);
+      setSelected("");
+      await refreshDownloads();
+    } catch (error) { setNotice(String(error)); }
+  };
+  const active = downloads.some(job => ["queued", "running"].includes(job.status));
+
+  return <section className="ncore-downloads">
+    <h2>NCore downloads</h2>
+    <p className="muted">Select one authorized clip. The server downloads all camera, LiDAR, and core components needed for reconstruction.</p>
+    {notice && <p className="notice">{notice}</p>}
+    <label>Search NCore catalog<input value={query} onChange={event => setQuery(event.target.value)} placeholder="Clip UUID" /></label>
+    <label>Available clip<select value={selected} onChange={event => setSelected(event.target.value)}>
+      <option value="">Select a missing or partial clip</option>
+      {clips.map(clip => <option key={clip.scene_id} value={clip.scene_id} disabled={clip.status === "ready"}>{clip.scene_id} — {clip.status}</option>)}
+    </select></label>
+    <button className="primary" type="button" disabled={!selected || active} onClick={() => void start()}>{active ? "Download in progress" : "Download full clip"}</button>
+    <div className="download-history">
+      {downloads.slice(0, 4).map(job => <p key={job.id}><span className={`status ${job.status}`}>{job.status}</span> {job.scene_id}{job.error && <small className="error">{job.error}</small>}</p>)}
+    </div>
+    {events.length > 0 && <pre className="download-log">{events.map(event => event.message).join("\n")}</pre>}
+  </section>;
+}
+
 function Console({ navigate }: { navigate: Navigate }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [recoverableRuns, setRecoverableRuns] = useState<Run[]>([]);
@@ -178,11 +244,14 @@ function Console({ navigate }: { navigate: Navigate }) {
       setNotice(String(error));
     }
   };
+  const refreshDatasets = async () => {
+    try { setDatasets(await api<any[]>("/datasets")); } catch (error) { setNotice(String(error)); }
+  };
 
   useEffect(() => {
     void refresh();
     void api<Preset[]>("/presets").then(setPresets).catch(error => setNotice(String(error)));
-    void api<any[]>("/datasets").then(setDatasets).catch(error => setNotice(String(error)));
+    void refreshDatasets();
     const id = setInterval(() => void refresh(), 5000);
     return () => clearInterval(id);
   }, []);
@@ -212,7 +281,7 @@ function Console({ navigate }: { navigate: Navigate }) {
         <div className="two"><label>Start<select value={form.start_at} onChange={event => setForm({ ...form, start_at: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label><label>Stop<select value={form.stop_after} onChange={event => setForm({ ...form, stop_after: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label></div>
         <label>Advanced safe YAML<textarea placeholder={"train:\n  iterations: 30000"} value={form.advanced_yaml} onChange={event => setForm({ ...form, advanced_yaml: event.target.value })} /></label>
         <button className="primary">Queue run</button>
-      </form>{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
+      </form>{form.dataset === "nvidia_ncore" && <NCoreDownloads onDatasetRefresh={refreshDatasets} />}{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
       <section className="card runs"><div className="card-heading"><div><h2>Active queue</h2><p className="muted">Queued and in-progress runs only.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No queued or active runs." /></section>
       <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />
     </section>

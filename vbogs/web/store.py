@@ -11,6 +11,8 @@ from typing import Any, Iterator
 
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
+DOWNLOAD_TERMINAL_STATUSES = frozenset({"completed", "failed", "interrupted"})
+DOWNLOAD_ACTIVE_STATUSES = frozenset({"queued", "running"})
 
 
 def utc_now() -> str:
@@ -62,6 +64,23 @@ class RunStore:
                     status TEXT NOT NULL DEFAULT 'idle',
                     revision INTEGER NOT NULL DEFAULT 0,
                     error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS ncore_downloads (
+                    id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    scene_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS ncore_download_events (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    download_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    FOREIGN KEY(download_id) REFERENCES ncore_downloads(id)
                 );
                 """
             )
@@ -250,3 +269,95 @@ class RunStore:
                 "SELECT run_id, gpu_id, owner, updated_at, status, revision, error FROM viewer_state WHERE singleton = 1"
             ).fetchone()
         return dict(row) if row else None
+
+    @staticmethod
+    def _download(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row is not None else None
+
+    def create_download(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO ncore_downloads (id, owner, scene_id, status, created_at)
+                   VALUES (?, ?, ?, 'queued', ?)""",
+                (record["id"], record["owner"], record["scene_id"], record["created_at"]),
+            )
+        self.add_download_event(record["id"], "Queued NCore download.")
+        return self.get_download(record["id"]) or record
+
+    def get_download(self, download_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            return self._download(connection.execute(
+                "SELECT * FROM ncore_downloads WHERE id = ?", (download_id,)
+            ).fetchone())
+
+    def list_downloads(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM ncore_downloads ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._download(row) for row in rows if row is not None]
+
+    def active_download_for_scene(self, scene_id: str) -> dict[str, Any] | None:
+        placeholders = ", ".join("?" for _ in DOWNLOAD_ACTIVE_STATUSES)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT * FROM ncore_downloads WHERE scene_id = ? AND status IN ({placeholders}) "
+                "ORDER BY created_at DESC LIMIT 1",
+                [scene_id, *DOWNLOAD_ACTIVE_STATUSES],
+            ).fetchone()
+        return self._download(row)
+
+    def next_queued_download(self) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ncore_downloads WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+        return self._download(row)
+
+    def active_download(self) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ncore_downloads WHERE status = 'running' ORDER BY started_at ASC LIMIT 1"
+            ).fetchone()
+        return self._download(row)
+
+    def transition_download(self, download_id: str, status: str, *, error: str | None = None) -> None:
+        fields = ["status = ?"]
+        values: list[Any] = [status]
+        if status == "running":
+            fields.append("started_at = COALESCE(started_at, ?)")
+            values.append(utc_now())
+        if status in DOWNLOAD_TERMINAL_STATUSES:
+            fields.append("finished_at = ?")
+            values.append(utc_now())
+        if error is not None:
+            fields.append("error = ?")
+            values.append(error)
+        values.append(download_id)
+        with self._transaction() as connection:
+            connection.execute(f"UPDATE ncore_downloads SET {', '.join(fields)} WHERE id = ?", values)
+
+    def add_download_event(self, download_id: str, message: str) -> int:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "INSERT INTO ncore_download_events(download_id, created_at, message) VALUES (?, ?, ?)",
+                (download_id, utc_now(), message),
+            )
+            return int(cursor.lastrowid)
+
+    def download_events(self, download_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT sequence, created_at, message FROM ncore_download_events WHERE download_id = ? "
+                "ORDER BY sequence DESC LIMIT ?", (download_id, limit),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def mark_active_downloads_interrupted(self) -> int:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE ncore_downloads SET status = 'interrupted', finished_at = ?, error = ? "
+                "WHERE status = 'running'",
+                (utc_now(), "Web service restarted; resubmit to resume completed components."),
+            )
+        return cursor.rowcount

@@ -52,6 +52,15 @@ The repository is gated: sign in to Hugging Face, accept the NVIDIA Autonomous
 Vehicle Dataset License Agreement on the dataset page, then create a Hugging
 Face user access token with read access.
 
+### Web Console download helper
+
+For the Web Experiment Console, set `VBOGS_NCORE_HF_TOKEN` as a deployment or
+Portainer secret on the `vbogs-web` service. The console never sends this token
+to browsers or stores it in download records/logs. Operators can then search the
+authorized catalog and download one pipeline-ready full clip at a time from the
+NVIDIA NCore panel. Do not add the token to this repository or to
+`configs/docker/stack.env`.
+
 Run the downloader from the interactive `vbogs-pipeline` container shell. Keep
 the token in your shell or deployment secrets; do not commit it to the repo.
 
