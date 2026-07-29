@@ -17,10 +17,13 @@ from typing import Any, AsyncIterator
 from urllib.parse import urlparse, urlunparse
 
 import yaml
-from fastapi import Request, WebSocket
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from vbogs.dataset_inventory import clips_to_json, list_dataset_clips
 from vbogs.ncore_download import NCoreDownloadError
+from vbogs.osmo360 import MAX_UPLOAD_BYTES, PROFILE as OSMO360_PROFILE, STAGES as OSMO360_STAGES, WORKFLOW as WORKFLOW_OSMO360, validate_scene_id, validate_upload_name
 from vbogs.web.config import ConfigValidationError, load_presets, resolve_config
 from vbogs.web.progress import project_run_progress
 from vbogs.web.ncore_downloads import NCoreDownloadManager
@@ -51,8 +54,9 @@ class ViewerInputs:
     """Renderer inputs proven to belong to one console run."""
 
     model_path: Path
-    uncertainty_path: Path
+    uncertainty_path: Path | None
     source: str
+    rgb_only: bool = False
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -73,6 +77,13 @@ def resolve_viewer_inputs(run: dict[str, Any]) -> ViewerInputs:
         if (model / "config.yaml").is_file() and uncertainty.is_file():
             return ViewerInputs(model, uncertainty, "uncertainty_experiment_export")
         raise WebError("Experiment export is not available yet (missing export/splat or export/uncertainty/U.npy)")
+
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_OSMO360:
+        root = (Path(run["output_path"]) / run["scene_id"]).resolve()
+        model = root / "model"
+        if (model / "config.yaml").is_file():
+            return ViewerInputs(model, None, "osmo360_rgb_export", rgb_only=True)
+        raise WebError("RGB export is not available yet (missing model/config.yaml)")
 
     output_root = (Path(run["output_path"]) / run["scene_id"]).resolve()
     portable_root = output_root / "local_viewer"
@@ -158,12 +169,30 @@ def require_role(identity: dict[str, Any], role: str) -> None:
 
 
 def stages_for(run: dict[str, Any]) -> tuple[str, ...]:
-    return EXPERIMENT_STAGES if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY else STAGES
+    workflow = run.get("workflow", WORKFLOW_PIPELINE)
+    if workflow == WORKFLOW_UNCERTAINTY:
+        return EXPERIMENT_STAGES
+    if workflow == WORKFLOW_OSMO360:
+        return OSMO360_STAGES
+    return STAGES
 
 
 def stage_preconditions(run: dict[str, Any], start_at: str) -> list[Path]:
     if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY:
         return [Path(run["output_path"]) / "experiment_manifest.json"] if start_at != "prepare" else []
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_OSMO360:
+        root = Path(run["workspace_path"])
+        scene = str(run["scene_id"])
+        required = {
+            "validate": [root / "input"],
+            "project": [root / "artifacts" / "input_manifest.json"],
+            "sfm": [root / "artifacts" / "projections" / "projection_manifest.json"],
+            "prepare": [root / "artifacts" / "sfm" / "final_txt" / "images.txt"],
+            "train": [root / "artifacts" / "colmap" / scene / "metadata.json"],
+            "render": [root / "artifacts" / "train_run.json"],
+            "bundle": [root / "artifacts" / "train_run.json"],
+        }
+        return required[start_at]
     root = Path(run["workspace_path"]) / "artifacts"
     scene = run["scene_id"]
     required: dict[str, list[Path]] = {
@@ -335,10 +364,13 @@ def _start_shared_viewer(run: dict[str, Any], gpu: str, inputs: ViewerInputs | N
         capture_output=True,
         text=True,
     )
-    command = "exec " + shlex.join([
-        "python", "scripts/view_octree_anygs.py", "--model-path", str(inputs.model_path),
-        "--u-path", str(inputs.uncertainty_path), "--resolution", "4", "--camera-source", "train",
-    ])
+    viewer_command = ["python", "scripts/view_octree_anygs.py", "--model-path", str(inputs.model_path), "--resolution", "4", "--camera-source", "train"]
+    if inputs.rgb_only:
+        viewer_command.append("--rgb-only")
+    else:
+        assert inputs.uncertainty_path is not None
+        viewer_command += ["--u-path", str(inputs.uncertainty_path)]
+    command = "exec " + shlex.join(viewer_command)
     subprocess.run(
         ["docker", "exec", "-d", "-w", "/workspace/VBOGS", "-e", f"CUDA_VISIBLE_DEVICES={gpu}", container, "sh", "-lc", command],
         check=True,
@@ -372,10 +404,6 @@ async def proxy_renderer_json(method: str, path: str, payload: dict[str, Any] | 
 
 
 def create_app(*, root: Path | None = None, store_path: Path | None = None):
-    from fastapi import FastAPI, Header, HTTPException, WebSocketDisconnect
-    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-    from fastapi.staticfiles import StaticFiles
-
     project_root = (root or repo_root()).resolve()
     data_root = Path(os.environ.get("VBOGS_GUI_DATA_ROOT", project_root / "data" / "gui")).resolve()
     output_root = Path(os.environ.get("VBOGS_GUI_OUTPUT_ROOT", project_root / "outputs" / "gui" / "runs")).resolve()
@@ -397,6 +425,13 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     app.state.output_root = output_root
     app.state.experiment_octree_root = experiment_octree_root
     app.state.viewer_lock = asyncio.Lock()
+    try:
+        upload_max_bytes = int(os.environ.get("VBOGS_OSMO360_UPLOAD_MAX_BYTES", str(MAX_UPLOAD_BYTES)))
+    except ValueError as exc:
+        raise RuntimeError("VBOGS_OSMO360_UPLOAD_MAX_BYTES must be an integer") from exc
+    if upload_max_bytes <= 0 or upload_max_bytes > MAX_UPLOAD_BYTES:
+        raise RuntimeError("VBOGS_OSMO360_UPLOAD_MAX_BYTES must be between 1 and 20 GiB")
+    app.state.osmo360_upload_max_bytes = upload_max_bytes
 
     @app.middleware("http")
     async def proxy_identity(request, call_next):
@@ -599,6 +634,71 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         })
         scheduler.notify()
         return JSONResponse(run, status_code=201)
+
+    @app.post("/api/osmo360/runs")
+    async def create_osmo360_run(
+        video: UploadFile = File(...),
+        scene_id: str = Form(...),
+        profile: str = Form(OSMO360_PROFILE),
+        x_forwarded_user: str | None = Header(default=None),
+    ):
+        """Atomically stage a browser upload and make it schedulable.
+
+        The endpoint never accepts a filesystem path from the browser.  A
+        failed stream leaves no run database record and removes its workspace.
+        """
+        principal = identity(x_forwarded_user)
+        workspace: Path | None = None
+        try:
+            require_role(principal, "operator")
+            if profile != OSMO360_PROFILE:
+                raise WebError("Only the balanced Osmo 360 profile is available")
+            safe_scene_id = validate_scene_id(scene_id)
+            suffix = validate_upload_name(video.filename or "")
+            run_id = f"run-{uuid.uuid4().hex[:12]}"
+            workspace = data_root / "runs" / run_id
+            workspace.mkdir(parents=True, exist_ok=False)
+            upload_dir = workspace / "input"
+            upload_dir.mkdir()
+            target = upload_dir / f"source{suffix}"
+            byte_count = 0
+            digest = __import__("hashlib").sha256()
+            with target.open("xb") as handle:
+                while True:
+                    chunk = await video.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    byte_count += len(chunk)
+                    if byte_count > app.state.osmo360_upload_max_bytes:
+                        raise WebError("Uploaded video exceeds the configured size limit")
+                    handle.write(chunk)
+                    digest.update(chunk)
+            if byte_count == 0:
+                raise WebError("Uploaded video is empty")
+            upload_record = {
+                "filename": video.filename, "stored_as": target.name, "bytes": byte_count,
+                "sha256": digest.hexdigest(), "profile": profile, "submitted_at": utc_now(),
+            }
+            (workspace / "upload.json").write_text(json.dumps(upload_record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            output = output_root / run_id
+            config_path = project_root / "configs" / "pipeline" / "osmo360_balanced.yaml"
+            command = ["scripts/run_osmo360_pipeline.py", "--workspace", str(workspace), "--output-root", str(output), "--scene-id", safe_scene_id]
+            run = store.create_run({
+                "id": run_id, "owner": principal["user"], "dataset": "osmo360", "scene_id": safe_scene_id,
+                "preset": "osmo360-balanced", "workflow": WORKFLOW_OSMO360, "experiment_mode": None,
+                "start_at": "validate", "stop_after": "bundle", "created_at": utc_now(),
+                "config_path": str(config_path), "workspace_path": str(workspace), "output_path": str(output), "command": command,
+            })
+            scheduler.notify()
+            return JSONResponse(run, status_code=201)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (OSError, ValueError, WebError) as exc:
+            if workspace is not None and workspace.exists():
+                shutil.rmtree(workspace)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            await video.close()
 
     @app.get("/api/runs/{run_id}")
     async def run_detail(run_id: str, x_forwarded_user: str | None = Header(default=None)):

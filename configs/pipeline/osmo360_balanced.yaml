@@ -1,0 +1,25 @@
+# Fixed browser profile for a stitched DJI Osmo 360 equirectangular video.
+workflow: osmo360_splat
+profile: balanced
+input:
+  allowed_extensions: [.mp4, .mov]
+  max_bytes: 21474836480
+  min_duration_seconds: 30
+  max_duration_seconds: 720
+projection:
+  crop_size: 1600
+  fov_degrees: 100
+  faces: [front, right, back, left, up, down]
+  min_timestamps: 60
+  max_timestamps: 180
+sfm:
+  min_registered_timestamp_groups: 60
+  min_sparse_points: 5000
+  max_median_reprojection_error_px: 2.0
+train:
+  gaussian_type: implicit3D
+  resolution: 4
+  feat_dim: 16
+  base_layer: 9
+  iterations: 15000
+  eval: false

@@ -14,6 +14,7 @@ PIPELINE_STAGES = (
 EXPERIMENT_STAGES = (
     "prepare", "octree-train", "points", "bucket", "uncertainty-fit", "test", "export", "report",
 )
+OSMO360_STAGES = ("validate", "project", "sfm", "prepare", "train", "render", "bundle")
 
 
 def _events(path: Path) -> list[dict[str, Any]]:
@@ -62,7 +63,12 @@ def _training_snapshot(path: Path) -> dict[str, Any] | None:
 
 
 def _fallback_stages(run: dict[str, Any]) -> list[str]:
-    stages = EXPERIMENT_STAGES if run.get("workflow", "pipeline") == "uncertainty_evaluation" else PIPELINE_STAGES
+    workflow = run.get("workflow", "pipeline")
+    stages = (
+        EXPERIMENT_STAGES if workflow == "uncertainty_evaluation"
+        else OSMO360_STAGES if workflow == "osmo360_splat"
+        else PIPELINE_STAGES
+    )
     try:
         first = stages.index(str(run["start_at"]))
         last = stages.index(str(run["stop_after"]))
@@ -80,6 +86,11 @@ def project_run_progress(run: dict[str, Any]) -> dict[str, Any]:
     active_events = events[last_started:] if last_started >= 0 else []
     declared_stages = active_events[0].get("stages") if active_events else None
     stages = [stage for stage in declared_stages if isinstance(stage, str)] if isinstance(declared_stages, list) else _fallback_stages(run)
+    try:
+        start, stop = stages.index(str(run["start_at"])), stages.index(str(run["stop_after"]))
+        stages = stages[start : stop + 1] if start <= stop else []
+    except (KeyError, ValueError):
+        pass
     completed = {
         str(event.get("stage"))
         for event in active_events

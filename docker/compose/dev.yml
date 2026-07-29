@@ -87,6 +87,21 @@ services:
         source: OCTREE-ANYGS
         target: /data/OCTREE-ANYGS
 
+  vbogs-sfm:
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/VBOGS
+      - type: volume
+        source: vbogs-data
+        target: /workspace/VBOGS/data
+      - type: volume
+        source: vbogs-outputs
+        target: /workspace/VBOGS/outputs
+      - type: volume
+        source: COLMAP
+        target: /data/COLMAP
+
   vbogs-pipeline:
     environment:
       VBOGS_PIPELINE_CONFIG: ${VBOGS_PIPELINE_CONFIG:-configs/pipeline/dev.yaml}

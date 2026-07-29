@@ -112,6 +112,30 @@ services:
         target: /data/OCTREE-ANYGS
     command: sleep infinity
 
+  vbogs-sfm:
+    image: ${VBOGS_SFM_IMAGE:-local/vbogs-sfm}
+    build:
+      context: .
+      dockerfile: docker/sfm.Dockerfile
+    working_dir: /workspace/VBOGS
+    stdin_open: true
+    tty: true
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities:
+          - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONPATH: /workspace/VBOGS
+    volumes:
+      - *vbogs-repo-mount
+      - *vbogs-data-mount
+      - *vbogs-outputs-mount
+      - *vbogs-colmap-mount
+    command: sleep infinity
+
   vbogs-vbgs-render:
     image: ${VBOGS_VBGS_RENDER_IMAGE:-local/vbogs-vbgs-render}
     build:
@@ -153,6 +177,7 @@ services:
     depends_on:
       - vbogs-torch
       - vbogs-jax
+      - vbogs-sfm
     gpus:
       - driver: nvidia
         count: all
@@ -216,6 +241,7 @@ services:
       - vbogs-torch
       - vbogs-jax
       - vbogs-pipeline
+      - vbogs-sfm
     environment:
       PYTHONPATH: /workspace/VBOGS
       VBOGS_GUI_GPU_IDS: ${VBOGS_GUI_GPU_IDS:-0}
@@ -223,6 +249,7 @@ services:
       VBOGS_GUI_ADMINS: ${VBOGS_GUI_ADMINS:-}
       VBOGS_GUI_VIEWERS: ${VBOGS_GUI_VIEWERS:-}
       VBOGS_GUI_RENDER_INTERNAL_URL: ${VBOGS_GUI_RENDER_INTERNAL_URL:-http://vbogs-vbgs-render:8070}
+      VBOGS_OSMO360_UPLOAD_MAX_BYTES: ${VBOGS_OSMO360_UPLOAD_MAX_BYTES:-21474836480}
     ports:
       - "${VBOGS_WEB_HOST_BIND:-127.0.0.1}:${VBOGS_WEB_HOST_PORT:-8090}:8090"
     volumes:

@@ -328,6 +328,46 @@ function NCoreDownloads({ onDatasetRefresh }: { onDatasetRefresh: () => Promise<
   </section>;
 }
 
+function Osmo360Upload({ onQueued }: { onQueued: (run: Run) => void }) {
+  const [sceneId, setSceneId] = useState("");
+  const [video, setVideo] = useState<File | null>(null);
+  const [notice, setNotice] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!video || uploading) return;
+    const data = new FormData();
+    data.set("video", video);
+    data.set("scene_id", sceneId);
+    data.set("profile", "balanced");
+    setUploading(true);
+    setNotice("Uploading video and creating a reconstruction run…");
+    try {
+      const response = await fetch("/api/osmo360/runs", { method: "POST", body: data });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(body.detail || response.statusText);
+      }
+      const run = await response.json() as Run;
+      setNotice(`Run ${run.id} is queued.`);
+      setVideo(null);
+      onQueued(run);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setUploading(false);
+    }
+  };
+  return <section className="attention osmo-upload"><h2>Osmo 360 → RGB splat</h2><p className="muted">Upload a DJI Studio–stitched 2:1 MP4/MOV. The balanced recipe estimates poses, trains Octree-AnyGS, then enables the RGB viewer. No depth or uncertainty fitting is run.</p>
+    {notice && <p className="notice" role="status">{notice}</p>}
+    <form onSubmit={submit} aria-busy={uploading}>
+      <label>Scene name<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={sceneId} onChange={event => setSceneId(event.target.value)} placeholder="living-room-walkthrough" /></label>
+      <label>Stitched equirectangular video<input required type="file" accept="video/mp4,video/quicktime,.mp4,.mov" onChange={event => setVideo(event.target.files?.[0] || null)} /></label>
+      <button className="primary" disabled={!video || !sceneId || uploading}>{uploading ? "Uploading…" : "Upload and queue RGB splat"}</button>
+    </form>
+  </section>;
+}
+
 function Console({ navigate }: { navigate: Navigate }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [recoverableRuns, setRecoverableRuns] = useState<Run[]>([]);
@@ -398,7 +438,7 @@ function Console({ navigate }: { navigate: Navigate }) {
         <label>Mounted scene<select required value={form.scene_id} onChange={event => setForm({ ...form, scene_id: event.target.value })}><option value="">Select a discovered scene</option>{scenes.map(scene => <option key={scene.scene_id} value={scene.scene_id}>{scene.scene_id} — {scene.status}</option>)}</select></label>
         {form.workflow === "uncertainty_evaluation" ? <><label>Experiment mode<select value={form.experiment_mode} onChange={event => setForm({ ...form, experiment_mode: event.target.value })}><option value="default">Standard — fixed production defaults</option><option value="smoke">Smoke — reduced validation run</option></select></label><p className="muted">This experiment keeps dynamic masking disabled and locks the train/test split. Validation-driven selection remains CLI-only.</p></> : <><label>Recipe<select value={form.preset} onChange={event => setForm({ ...form, preset: event.target.value })}>{presets.filter(preset => preset.datasets.includes(form.dataset)).map(preset => <option key={preset.slug} value={preset.slug}>{preset.name}</option>)}</select></label><div className="two"><label>Start<select value={form.start_at} onChange={event => setForm({ ...form, start_at: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label><label>Stop<select value={form.stop_after} onChange={event => setForm({ ...form, stop_after: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label></div><label>Advanced safe YAML<textarea placeholder={"train:\n  iterations: 30000"} value={form.advanced_yaml} onChange={event => setForm({ ...form, advanced_yaml: event.target.value })} /></label></>}
         <button className="primary" disabled={queueing}>{queueing ? "Queueing run…" : form.workflow === "uncertainty_evaluation" ? "Queue uncertainty evaluation" : "Queue run"}</button>
-      </form>{form.dataset === "nvidia_ncore" && <NCoreDownloads onDatasetRefresh={refreshDatasets} />}{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
+      </form><Osmo360Upload onQueued={run => { setRuns(current => [run, ...current.filter(existing => existing.id !== run.id)]); setSelected(run); void refresh(false); }} />{form.dataset === "nvidia_ncore" && <NCoreDownloads onDatasetRefresh={refreshDatasets} />}{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
       <section className="card runs"><div className="card-heading"><div><h2>Active queue</h2><p className="muted">Queued and in-progress runs only.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No queued or active runs." /></section>
       <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />
     </section>
