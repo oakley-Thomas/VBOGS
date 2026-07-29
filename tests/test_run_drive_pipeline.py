@@ -221,6 +221,16 @@ def test_train_step_forwards_gaussian_type():
     assert train_step.command[gaussian_type_index + 1] == "explicit3D"
 
 
+def test_train_step_forwards_internal_progress_path_only_to_train():
+    parser = build_parser({})
+    args = parser.parse_args(["--drive", "drive_sync", "--progress-path", "data/gui/runs/run-a/training_progress.json"])
+    steps = {step.name: step for step in build_steps(args)}
+
+    train = steps["train"].command
+    assert train[train.index("--progress-path") + 1] == "data/gui/runs/run-a/training_progress.json"
+    assert all("--progress-path" not in step.command for name, step in steps.items() if name != "train")
+
+
 def test_train_step_forwards_explicit_port_override():
     parser = build_parser({})
     args = parser.parse_args(

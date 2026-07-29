@@ -66,7 +66,11 @@ container. The **Experiments** page shows only queued and in-progress work.
 Completed training results are kept in the separate **Trained runs** catalog,
 where operators can browse artifacts, compare completed scenes, and open the
 viewer. The active run detail streams pipeline lifecycle events and reads the
-run-local log.
+run-local log. It also shows stage-based overall completion for the selected
+pipeline slice. During Octree-AnyGS training, a nested iteration counter is
+updated from the repo-owned training wrapper; after the iteration loop, it
+reports finalization while rendering and evaluation complete. The console does
+not estimate remaining time.
 
 Queued, cancelled, completed, failed, and interrupted runs can be permanently
 deleted from their detail panel. The operator must type the exact run ID to

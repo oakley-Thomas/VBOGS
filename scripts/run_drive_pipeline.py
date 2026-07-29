@@ -351,6 +351,12 @@ def build_parser(config_defaults: dict | None = None) -> argparse.ArgumentParser
         help="Optional JSONL lifecycle-event path, used by the web scheduler.",
     )
     parser.add_argument(
+        "--progress-path",
+        type=Path,
+        default=None,
+        help="Optional run-local training-progress JSON path, used by the web scheduler.",
+    )
+    parser.add_argument(
         "--cancel-file",
         type=Path,
         default=None,
@@ -1026,6 +1032,7 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
         *( ("--use-masks",) if args.dynamic_mask_enabled else ()),
         *maybe_option("--output-config", artifacts["train_config"]),
         *maybe_option("--run-record", artifacts["train_record"]),
+        *maybe_option("--progress-path", args.progress_path),
         *maybe_option("--port", args.train_port),
         *(("--write-config-only",) if args.write_config_only else ()),
         *(("--skip-stack-check",) if args.skip_stack_check else ()),
@@ -1515,7 +1522,10 @@ def main() -> None:
     if args.upload_google_drive:
         print("Upload: Google Drive after successful stages")
 
-    emit_event(args.event_log, "run_started", dataset=args.dataset_name, scene=scene_id_arg(args), stages=[step.name for step in steps])
+    run_stages = [step.name for step in steps]
+    if args.upload_google_drive:
+        run_stages.append("upload")
+    emit_event(args.event_log, "run_started", dataset=args.dataset_name, scene=scene_id_arg(args), stages=run_stages)
     try:
         for index, step in enumerate(steps):
             print(f"\n=== {step.name} ({step.service}) ===", flush=True)

@@ -22,6 +22,7 @@ from fastapi import Request, WebSocket
 from vbogs.dataset_inventory import clips_to_json, list_dataset_clips
 from vbogs.ncore_download import NCoreDownloadError
 from vbogs.web.config import ConfigValidationError, load_presets, resolve_config
+from vbogs.web.progress import project_run_progress
 from vbogs.web.ncore_downloads import NCoreDownloadManager
 from vbogs.web.scheduler import Scheduler, subprocess_runner
 from vbogs.web.store import RunStore, TERMINAL_STATUSES, utc_now
@@ -468,7 +469,13 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     async def run_detail(run_id: str, x_forwarded_user: str | None = Header(default=None)):
         identity(x_forwarded_user)
         run = run_or_404(run_id)
-        return {**run, "manifest": _read_manifest(run), "events": store.events(run_id), "artifacts": _artifact_index(run)}
+        return {
+            **run,
+            "manifest": _read_manifest(run),
+            "events": store.events(run_id),
+            "artifacts": _artifact_index(run),
+            "progress": project_run_progress(run),
+        }
 
     @app.post("/api/runs/{run_id}/cancel")
     async def cancel(run_id: str, x_forwarded_user: str | None = Header(default=None)):
@@ -497,6 +504,7 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
             raise HTTPException(status_code=422, detail={"message": "Missing resume artifacts", "paths": missing})
         cancel_file = Path(run["workspace_path"]) / "cancel.request"
         cancel_file.unlink(missing_ok=True)
+        (Path(run["workspace_path"]) / "training_progress.json").unlink(missing_ok=True)
         resumed = store.requeue(run_id, start_at=start_at, stop_after=stop_after)
         scheduler.notify()
         return resumed
@@ -554,6 +562,7 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         async def stream() -> AsyncIterator[str]:
             sequence = 0
             byte_offset = 0
+            progress_payload: str | None = None
             while True:
                 for event in store.events(run_id, sequence):
                     sequence = event["sequence"]
@@ -569,6 +578,11 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
                             yield f"event: pipeline\ndata: {json.dumps(event)}\n\n"
                         byte_offset = handle.tell()
                 latest = store.get_run(run_id)
+                if latest:
+                    latest_progress = json.dumps(project_run_progress(latest), sort_keys=True)
+                    if latest_progress != progress_payload:
+                        progress_payload = latest_progress
+                        yield f"event: progress\ndata: {latest_progress}\n\n"
                 if latest and latest["status"] in TERMINAL_STATUSES:
                     yield "event: terminal\ndata: {}\n\n"
                     return

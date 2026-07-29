@@ -21,6 +21,13 @@ type Run = {
 type Preset = { slug: string; name: string; datasets: string[] };
 type NCoreClip = { scene_id: string; status: "missing" | "partial" | "ready" };
 type NCoreDownload = { id: string; scene_id: string; owner: string; status: string; error?: string; created_at?: string };
+type Progress = {
+  state: string;
+  status: string;
+  overall: { completed_stages: number; total_stages: number; percent: number };
+  current_stage: { name: string; index: number; total: number } | null;
+  training: { state: string; current_iterations: number; total_iterations: number; updated_at?: string } | null;
+};
 type Navigate = (path: string) => void;
 
 const stages = ["prepare", "train", "stereo", "bucket", "fit", "inspect", "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle"];
@@ -66,6 +73,39 @@ function RunTable({ runs, selected, onSelect, empty }: { runs: Run[]; selected: 
   </table>;
 }
 
+function ProgressPanel({ progress }: { progress?: Progress }) {
+  if (!progress) return null;
+  const percent = Math.max(0, Math.min(100, progress.overall.percent));
+  const trainingPercent = progress.training
+    ? Math.round((progress.training.current_iterations / progress.training.total_iterations) * 1000) / 10
+    : 0;
+  const stateLabel: Record<string, string> = {
+    queued: "Waiting for a GPU slot", starting: "Starting pipeline", running: "Running",
+    cancelling: "Cancellation requested", cancelled: "Run cancelled", failed: "Run failed",
+    interrupted: "Run interrupted", completed: "Run completed",
+    finalizing: "Training iterations complete; rendering and evaluating",
+  };
+  const stageLabel = progress.current_stage
+    ? `Stage ${progress.current_stage.index} of ${progress.current_stage.total}: ${progress.current_stage.name}`
+    : progress.status === "completed" ? "All selected stages completed" : "No stage is running";
+
+  return <section className="progress-panel" aria-live="polite">
+    <div className="progress-heading"><h3>Progress</h3><strong>{percent}%</strong></div>
+    <p className="muted">{stateLabel[progress.state] || progress.state} · {stageLabel}</p>
+    <div className="progress-track" role="progressbar" aria-label="Overall pipeline progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+      <div className="progress-fill" style={{ width: `${percent}%` }} />
+    </div>
+    <small>{progress.overall.completed_stages} of {progress.overall.total_stages} stages completed</small>
+    {progress.training && <div className="training-progress">
+      <div className="progress-heading"><span>Training</span><strong>{trainingPercent}%</strong></div>
+      <div className="progress-track" role="progressbar" aria-label="Training iteration progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={trainingPercent}>
+        <div className="progress-fill training" style={{ width: `${trainingPercent}%` }} />
+      </div>
+      <small>{progress.training.current_iterations.toLocaleString()} / {progress.training.total_iterations.toLocaleString()} iterations{progress.training.state === "finalizing" ? " · finalizing" : ""}</small>
+    </div>}
+  </section>;
+}
+
 function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: { selected: Run | null; catalogRuns: Run[]; openViewer: (runId: string) => void; onRefresh: () => Promise<void>; onDeleted: () => void }) {
   const [detail, setDetail] = useState<any>(null);
   const [notice, setNotice] = useState("");
@@ -85,6 +125,7 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: 
     const update = () => setTick(value => value + 1);
     stream.onmessage = update;
     stream.addEventListener("pipeline", update);
+    stream.addEventListener("progress", update);
     stream.addEventListener("terminal", update);
     return () => stream.close();
   }, [selected]);
@@ -130,6 +171,7 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: 
     {!selected ? <p>Select a run to inspect it.</p> : <>
       <p><code>{selected.id}</code> · {selected.owner}</p>
       <p>{selected.dataset} / {selected.scene_id} · {selected.start_at} → {selected.stop_after}</p>
+      <ProgressPanel progress={detail?.progress} />
       {selected.error && <p className="error">{selected.error}</p>}
       <div className="actions">
         {["queued", "starting", "running", "cancelling"].includes(selected.status) && <button onClick={() => void action("cancel")}>Cancel</button>}

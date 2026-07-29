@@ -113,13 +113,15 @@ async def subprocess_runner(run: dict, gpu_id: str) -> int:
     workspace = Path(run["workspace_path"])
     log_path = workspace / "pipeline.log"
     event_path = workspace / "pipeline.events.jsonl"
+    progress_path = workspace / "training_progress.json"
     command = [
         "scripts/run_pipeline.sh", "--config", run["config_path"],
         "--gpu", gpu_id, "--jax-device", gpu_id,
         "--artifact-root", str(workspace / "artifacts"),
         "--run-output-root", run["output_path"],
         "--start-at", run["start_at"], "--stop-after", run["stop_after"],
-        "--event-log", str(event_path), "--cancel-file", str(workspace / "cancel.request"),
+        "--event-log", str(event_path), "--progress-path", str(progress_path),
+        "--cancel-file", str(workspace / "cancel.request"),
     ]
     with log_path.open("ab") as handle:
         process = await asyncio.create_subprocess_exec(

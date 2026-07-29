@@ -145,3 +145,60 @@ def test_runs_api_separates_active_queue_from_completed_catalog(tmp_path):
         assert [run["id"] for run in client.get("/api/runs?scope=active", headers=headers).json()] == [active["id"]]
         assert [run["id"] for run in client.get("/api/runs?scope=completed", headers=headers).json()] == [completed["id"]]
         assert client.get("/api/runs?scope=unknown", headers=headers).status_code == 422
+
+
+def test_run_detail_exposes_safe_progress_and_streams_progress_event(tmp_path):
+    from fastapi.testclient import TestClient
+
+    app = web_app.create_app(root=Path(__file__).resolve().parents[1], store_path=tmp_path / "control.sqlite3")
+    run = {
+        **run_record(tmp_path), "dataset": "kitti360", "preset": "kitti360-dev", "start_at": "prepare", "stop_after": "train",
+        "created_at": "2026-01-01T00:00:00+00:00", "config_path": str(tmp_path / "config.yaml"),
+        "command": ["scripts/run_pipeline.sh"],
+    }
+    Path(run["workspace_path"]).mkdir()
+    (Path(run["workspace_path"]) / "pipeline.events.jsonl").write_text(
+        '{"type":"run_started","stages":["prepare","train"]}\n', encoding="utf-8"
+    )
+    app.state.store.create_run(run)
+    app.state.store.transition(run["id"], "completed")
+    headers = {"X-Forwarded-User": "operator@example.test"}
+
+    with TestClient(app) as client:
+        detail = client.get(f"/api/runs/{run['id']}", headers=headers)
+        assert detail.status_code == 200
+        progress = detail.json()["progress"]
+        assert progress["overall"]["percent"] == 100.0
+        assert "workspace_path" not in progress
+
+        stream = client.get(f"/api/runs/{run['id']}/events/stream", headers=headers)
+        assert stream.status_code == 200
+        assert "event: progress" in stream.text
+
+
+def test_resume_clears_stale_training_progress_snapshot(tmp_path):
+    from fastapi.testclient import TestClient
+
+    app = web_app.create_app(root=Path(__file__).resolve().parents[1], store_path=tmp_path / "control.sqlite3")
+    run = {
+        **run_record(tmp_path), "dataset": "kitti360", "preset": "kitti360-dev", "start_at": "train", "stop_after": "train",
+        "created_at": "2026-01-01T00:00:00+00:00", "config_path": str(tmp_path / "config.yaml"),
+        "command": ["scripts/run_pipeline.sh"],
+    }
+    workspace = Path(run["workspace_path"])
+    (workspace / "artifacts" / "colmap" / run["scene_id"]).mkdir(parents=True)
+    (workspace / "artifacts" / "colmap" / run["scene_id"] / "metadata.json").write_text("{}", encoding="utf-8")
+    stale_snapshot = workspace / "training_progress.json"
+    stale_snapshot.write_text('{"state":"running"}', encoding="utf-8")
+    app.state.store.create_run(run)
+    app.state.store.transition(run["id"], "failed")
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run['id']}/resume", headers={"X-Forwarded-User": "operator@example.test"},
+            json={"start_at": "train", "stop_after": "train"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert not stale_snapshot.exists()
