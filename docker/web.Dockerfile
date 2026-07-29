@@ -10,7 +10,7 @@ RUN npm run build
 FROM nvidia/cuda:12.8.0-base-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    docker.io python3 python3-pip python3-yaml && \
+    docker.io python3 python3-numpy python3-pip python3-yaml && \
     rm -rf /var/lib/apt/lists/*
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
     python -m pip install --no-cache-dir "fastapi==0.115.14" "uvicorn[standard]==0.34.3" "httpx==0.28.1" "websockets==15.0.1"

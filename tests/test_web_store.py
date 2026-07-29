@@ -33,6 +33,21 @@ def test_store_persists_queue_events_and_resume(tmp_path):
     assert any(event["type"] == "requeued" for event in store.events("run-123456789abc"))
 
 
+def test_store_persists_uncertainty_workflow_and_keeps_pipeline_default(tmp_path):
+    store = RunStore(tmp_path / "control.sqlite3")
+    pipeline = store.create_run(make_record(tmp_path, "run-pipeline"))
+    experiment = store.create_run({
+        **make_record(tmp_path, "run-experiment"),
+        "workflow": "uncertainty_evaluation", "experiment_mode": "smoke",
+        "preset": "uncertainty-evaluation", "stop_after": "report",
+    })
+
+    assert pipeline["workflow"] == "pipeline"
+    assert pipeline["experiment_mode"] is None
+    assert experiment["workflow"] == "uncertainty_evaluation"
+    assert experiment["experiment_mode"] == "smoke"
+
+
 def test_store_marks_active_runs_interrupted_after_restart(tmp_path):
     store = RunStore(tmp_path / "control.sqlite3")
     store.create_run(make_record(tmp_path))

@@ -1,0 +1,3 @@
+.results-panel{margin-top:1rem;border-top:1px solid #263845;padding-top:1rem}
+.result-plots,.result-renders{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.65rem;margin:.75rem 0}
+.result-plots img,.result-renders img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border:1px solid #263845;border-radius:.35rem}

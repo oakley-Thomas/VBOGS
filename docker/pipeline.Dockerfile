@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
     python3 \
+    python3-numpy \
     python3-yaml \
     rclone \
     unzip \

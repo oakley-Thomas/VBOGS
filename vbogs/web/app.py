@@ -32,6 +32,12 @@ STAGES = (
     "dynamic-mask", "prepare", "train", "stereo", "bucket", "fit", "inspect",
     "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle",
 )
+EXPERIMENT_STAGES = (
+    "prepare", "octree-train", "points", "bucket", "uncertainty-fit", "test", "export", "report",
+)
+WORKFLOW_PIPELINE = "pipeline"
+WORKFLOW_UNCERTAINTY = "uncertainty_evaluation"
+EXPERIMENT_MODES = frozenset({"default", "smoke"})
 DELETABLE_RUN_STATUSES = frozenset({"queued", "cancelled", "completed", "failed", "interrupted"})
 PROXY_USER: ContextVar[str | None] = ContextVar("vbogs_proxy_user", default=None)
 
@@ -59,6 +65,14 @@ def _is_within(path: Path, root: Path) -> bool:
 
 def resolve_viewer_inputs(run: dict[str, Any]) -> ViewerInputs:
     """Resolve a renderable scene without accepting a browser supplied path."""
+
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY:
+        root = Path(run["output_path"]).resolve()
+        model = root / "export" / "splat"
+        uncertainty = root / "export" / "uncertainty" / "U.npy"
+        if (model / "config.yaml").is_file() and uncertainty.is_file():
+            return ViewerInputs(model, uncertainty, "uncertainty_experiment_export")
+        raise WebError("Experiment export is not available yet (missing export/splat or export/uncertainty/U.npy)")
 
     output_root = (Path(run["output_path"]) / run["scene_id"]).resolve()
     portable_root = output_root / "local_viewer"
@@ -143,7 +157,13 @@ def require_role(identity: dict[str, Any], role: str) -> None:
         raise PermissionError(f"The {role} role is required")
 
 
+def stages_for(run: dict[str, Any]) -> tuple[str, ...]:
+    return EXPERIMENT_STAGES if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY else STAGES
+
+
 def stage_preconditions(run: dict[str, Any], start_at: str) -> list[Path]:
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY:
+        return [Path(run["output_path"]) / "experiment_manifest.json"] if start_at != "prepare" else []
     root = Path(run["workspace_path"]) / "artifacts"
     scene = run["scene_id"]
     required: dict[str, list[Path]] = {
@@ -164,7 +184,11 @@ def stage_preconditions(run: dict[str, Any], start_at: str) -> list[Path]:
 
 
 def _read_manifest(run: dict[str, Any]) -> dict[str, Any]:
-    path = Path(run["output_path"]) / run["scene_id"] / "run_manifest.json"
+    path = (
+        Path(run["output_path"]) / "experiment_manifest.json"
+        if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY
+        else Path(run["output_path"]) / run["scene_id"] / "run_manifest.json"
+    )
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -172,8 +196,14 @@ def _read_manifest(run: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def artifact_root(run: dict[str, Any]) -> Path:
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY:
+        return Path(run["output_path"]).resolve()
+    return (Path(run["output_path"]) / run["scene_id"]).resolve()
+
+
 def _artifact_index(run: dict[str, Any], limit: int = 250) -> list[str]:
-    root = (Path(run["output_path"]) / run["scene_id"]).resolve()
+    root = artifact_root(run)
     if not root.is_dir():
         return []
     files: list[str] = []
@@ -185,26 +215,99 @@ def _artifact_index(run: dict[str, Any], limit: int = 250) -> list[str]:
     return files
 
 
-def run_storage_paths(run: dict[str, Any], *, data_root: Path, output_root: Path) -> tuple[Path, Path]:
+def _json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def uncertainty_results(run: dict[str, Any]) -> dict[str, Any]:
+    """Return a bounded, browser-safe summary of a completed experiment."""
+
+    if run.get("workflow", WORKFLOW_PIPELINE) != WORKFLOW_UNCERTAINTY:
+        raise WebError("This run is not an uncertainty evaluation")
+    root = artifact_root(run)
+    test = _json_object(root / "test" / "summary.json")
+    octree = _json_object(root / "octree_selection.json")
+    uncertainty = _json_object(root / "uncertainty_selection.json")
+    metadata = _json_object(root / "export" / "uncertainty" / "uncertainty_metadata.json")
+    plots = [
+        name for name in (
+            "plots/test_calibration_scatter.png", "plots/test_sparsification.png",
+            "plots/test_calibration_scatter_legacy.png", "plots/test_sparsification_legacy.png",
+            "plots/uncertainty_histogram.png",
+        ) if (root / name).is_file()
+    ]
+    renders = [
+        path.relative_to(root).as_posix() for path in sorted((root / "test" / "renders").glob("*"))
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    ][:24] if (root / "test" / "renders").is_dir() else []
+    groups: dict[str, Any] = {}
+    if test and isinstance(test.get("groups"), dict):
+        for name in ("primary", "all"):
+            group = test["groups"].get(name)
+            if not isinstance(group, dict):
+                continue
+            groups[name] = {
+                "view_count": group.get("view_count"), "metrics": group.get("metrics"),
+                "calibration": group.get("calibration"), "calibration_observed": group.get("calibration_observed"),
+                "unobserved_fraction": group.get("unobserved_fraction"),
+            }
+    return {
+        "ready": bool(test), "groups": groups,
+        "octree_selection": octree.get("selected") if octree else None,
+        "uncertainty_selection": uncertainty.get("selected") if uncertainty else None,
+        "uncertainty_metadata": metadata, "plots": plots, "renders": renders,
+        "report": "report.md" if (root / "report.md").is_file() else None,
+        "export_ready": (root / "export" / "splat" / "config.yaml").is_file()
+        and (root / "export" / "uncertainty" / "U.npy").is_file(),
+    }
+
+
+def run_storage_paths(
+    run: dict[str, Any], *, data_root: Path, output_root: Path, project_root: Path | None = None,
+    experiment_octree_root: Path | None = None,
+) -> tuple[Path, ...]:
     """Return the two run-owned storage roots after strict path validation."""
 
     run_id = str(run["id"])
     expected_workspace = data_root.resolve() / "runs" / run_id
-    expected_output = output_root.resolve() / run_id
     workspace = Path(str(run["workspace_path"]))
     output = Path(str(run["output_path"]))
-    if workspace.resolve() != expected_workspace or output.resolve() != expected_output:
-        raise WebError("Run storage paths do not match this GUI run")
-    for path in (workspace, output):
+    if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY:
+        if project_root is None or experiment_octree_root is None:
+            raise WebError("Experiment storage validation requires configured roots")
+        expected_output = project_root.resolve() / "outputs" / "experiments" / "uncertainty-evaluation" / run["dataset"] / run["scene_id"] / run_id
+        expected_work = project_root.resolve() / "data" / "experiments" / "uncertainty-evaluation" / run["dataset"] / run["scene_id"] / run_id
+        expected_octree = experiment_octree_root.resolve() / run["dataset"] / run["scene_id"] / run_id
+        if workspace.resolve() != expected_workspace or output.resolve() != expected_output:
+            raise WebError("Run storage paths do not match this GUI uncertainty experiment")
+        paths = (workspace, output, expected_work, expected_octree)
+    else:
+        expected_output = output_root.resolve() / run_id
+        if workspace.resolve() != expected_workspace or output.resolve() != expected_output:
+            raise WebError("Run storage paths do not match this GUI run")
+        paths = (workspace, output)
+    if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", str(run[key])) for key in ("id", "dataset", "scene_id")):
+        raise WebError("Run storage identifiers are unsafe")
+    for path in paths:
         if path.is_symlink() or (path.exists() and not path.is_dir()):
             raise WebError("Run storage root is not a regular directory")
-    return workspace, output
+    return paths
 
 
-def remove_run_storage(run: dict[str, Any], *, data_root: Path, output_root: Path) -> None:
+def remove_run_storage(
+    run: dict[str, Any], *, data_root: Path, output_root: Path, project_root: Path | None = None,
+    experiment_octree_root: Path | None = None,
+) -> None:
     """Delete only the workspace and output directories owned by one GUI run."""
 
-    for path in run_storage_paths(run, data_root=data_root, output_root=output_root):
+    for path in run_storage_paths(
+        run, data_root=data_root, output_root=output_root, project_root=project_root,
+        experiment_octree_root=experiment_octree_root,
+    ):
         if path.exists():
             shutil.rmtree(path)
 
@@ -276,6 +379,9 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     project_root = (root or repo_root()).resolve()
     data_root = Path(os.environ.get("VBOGS_GUI_DATA_ROOT", project_root / "data" / "gui")).resolve()
     output_root = Path(os.environ.get("VBOGS_GUI_OUTPUT_ROOT", project_root / "outputs" / "gui" / "runs")).resolve()
+    experiment_octree_root = Path(
+        os.environ.get("VBOGS_EXPERIMENT_OCTREE_ROOT", "/data/OCTREE-ANYGS/uncertainty-evaluation")
+    ).resolve()
     db_path = store_path or data_root / "control.sqlite3"
     store = RunStore(db_path)
     presets = load_presets(project_root / "configs" / "gui" / "presets", project_root)
@@ -289,6 +395,7 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     app.state.project_root = project_root
     app.state.data_root = data_root
     app.state.output_root = output_root
+    app.state.experiment_octree_root = experiment_octree_root
     app.state.viewer_lock = asyncio.Lock()
 
     @app.middleware("http")
@@ -435,34 +542,59 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
                 raise WebError("Expected a JSON object")
             dataset = str(payload["dataset"])
             scene_id = str(payload["scene_id"])
-            preset_name = str(payload["preset"])
+            workflow = str(payload.get("workflow", WORKFLOW_PIPELINE))
+            if workflow not in {WORKFLOW_PIPELINE, WORKFLOW_UNCERTAINTY}:
+                raise WebError("workflow must be pipeline or uncertainty_evaluation")
+            workflow_stages = EXPERIMENT_STAGES if workflow == WORKFLOW_UNCERTAINTY else STAGES
             start_at = str(payload.get("start_at", "prepare"))
-            stop_after = str(payload.get("stop_after", "bundle"))
-            if start_at not in STAGES or stop_after not in STAGES or STAGES.index(start_at) > STAGES.index(stop_after):
+            stop_after = str(payload.get("stop_after", "report" if workflow == WORKFLOW_UNCERTAINTY else "bundle"))
+            if start_at not in workflow_stages or stop_after not in workflow_stages or workflow_stages.index(start_at) > workflow_stages.index(stop_after):
                 raise WebError("Invalid pipeline stage slice")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+", scene_id):
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", scene_id) or scene_id in {".", ".."}:
                 raise WebError("Scene identifier contains unsupported characters")
-            preset = presets.get(preset_name)
-            if preset is None:
-                raise WebError("Unknown preset")
-            config = resolve_config(
-                preset, repo_root=project_root, dataset=dataset, scene_id=scene_id,
-                overrides=payload.get("overrides"), advanced_yaml=payload.get("advanced_yaml"),
-            )
+            if workflow == WORKFLOW_UNCERTAINTY:
+                experiment_mode = str(payload.get("experiment_mode", "default"))
+                if experiment_mode not in EXPERIMENT_MODES:
+                    raise WebError("experiment_mode must be default or smoke")
+                if payload.get("overrides") or payload.get("advanced_yaml"):
+                    raise WebError("Uncertainty evaluations do not accept browser configuration overrides")
+                preset_name = "uncertainty-evaluation"
+                config = None
+            else:
+                preset_name = str(payload["preset"])
+                experiment_mode = None
+                preset = presets.get(preset_name)
+                if preset is None:
+                    raise WebError("Unknown preset")
+                config = resolve_config(
+                    preset, repo_root=project_root, dataset=dataset, scene_id=scene_id,
+                    overrides=payload.get("overrides"), advanced_yaml=payload.get("advanced_yaml"),
+                )
         except (KeyError, WebError, ConfigValidationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         run_id = f"run-{uuid.uuid4().hex[:12]}"
         workspace = data_root / "runs" / run_id
-        output = output_root / run_id
+        output = (
+            project_root / "outputs" / "experiments" / "uncertainty-evaluation" / dataset / scene_id / run_id
+            if workflow == WORKFLOW_UNCERTAINTY else output_root / run_id
+        )
         workspace.mkdir(parents=True, exist_ok=False)
-        config_path = workspace / "resolved_config.yaml"
-        config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
-        command = ["scripts/run_pipeline.sh", "--config", str(config_path), "--start-at", start_at, "--stop-after", stop_after]
+        config_path = workspace / ("uncertainty_evaluation.yaml" if workflow == WORKFLOW_UNCERTAINTY else "resolved_config.yaml")
+        if workflow == WORKFLOW_UNCERTAINTY:
+            shutil.copy2(project_root / "configs" / "experiments" / "uncertainty-evaluation.yaml", config_path)
+            config_path.chmod(0o444)
+            command = ["scripts/uncertainty-evaluation", "--config", str(config_path), "--dataset-name", dataset, "--scene-id", scene_id, "--run-id", run_id]
+            if experiment_mode == "smoke":
+                command.append("--smoke")
+        else:
+            config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
+            command = ["scripts/run_pipeline.sh", "--config", str(config_path), "--start-at", start_at, "--stop-after", stop_after]
         request_record = {"submitted_at": utc_now(), "submitted_by": principal["user"], "request": payload}
         (workspace / "request.json").write_text(json.dumps(request_record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         run = store.create_run({
             "id": run_id, "owner": principal["user"], "dataset": dataset, "scene_id": scene_id,
-            "preset": preset_name, "start_at": start_at, "stop_after": stop_after, "created_at": utc_now(),
+            "preset": preset_name, "workflow": workflow, "experiment_mode": experiment_mode,
+            "start_at": start_at, "stop_after": stop_after, "created_at": utc_now(),
             "config_path": str(config_path), "workspace_path": str(workspace), "output_path": str(output), "command": command,
         })
         scheduler.notify()
@@ -478,6 +610,7 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
             "events": store.events(run_id),
             "artifacts": _artifact_index(run),
             "progress": project_run_progress(run),
+            "results": uncertainty_results(run) if run.get("workflow", WORKFLOW_PIPELINE) == WORKFLOW_UNCERTAINTY else None,
         }
 
     @app.post("/api/runs/{run_id}/cancel")
@@ -500,7 +633,8 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
         payload = await request.json()
         start_at = str(payload.get("start_at", run["start_at"]))
         stop_after = str(payload.get("stop_after", run["stop_after"]))
-        if start_at not in STAGES or stop_after not in STAGES or STAGES.index(start_at) > STAGES.index(stop_after):
+        stages = stages_for(run)
+        if start_at not in stages or stop_after not in stages or stages.index(start_at) > stages.index(stop_after):
             raise HTTPException(status_code=422, detail="Invalid pipeline stage slice")
         missing = [str(path) for path in stage_preconditions(run, start_at) if not path.exists()]
         if missing:
@@ -531,7 +665,10 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
             if run["status"] not in DELETABLE_RUN_STATUSES:
                 raise HTTPException(status_code=409, detail="Run status changed before deletion completed")
             try:
-                run_storage_paths(run, data_root=data_root, output_root=output_root)
+                run_storage_paths(
+                    run, data_root=data_root, output_root=output_root, project_root=project_root,
+                    experiment_octree_root=experiment_octree_root,
+                )
             except WebError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             active_viewer = store.viewer()
@@ -542,7 +679,10 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
                     raise HTTPException(status_code=503, detail=f"Could not stop shared viewer: {exc}") from exc
                 store.clear_viewer()
             try:
-                remove_run_storage(run, data_root=data_root, output_root=output_root)
+                remove_run_storage(
+                    run, data_root=data_root, output_root=output_root, project_root=project_root,
+                    experiment_octree_root=experiment_octree_root,
+                )
             except OSError as exc:
                 raise HTTPException(status_code=500, detail=f"Could not delete run storage: {exc}") from exc
             deleted = store.delete_run(run_id, allowed_statuses=DELETABLE_RUN_STATUSES)
@@ -606,11 +746,19 @@ def create_app(*, root: Path | None = None, store_path: Path | None = None):
     async def artifact(run_id: str, artifact_path: str, x_forwarded_user: str | None = Header(default=None)):
         identity(x_forwarded_user)
         run = run_or_404(run_id)
-        root_path = (Path(run["output_path"]) / run["scene_id"]).resolve()
+        root_path = artifact_root(run)
         candidate = (root_path / artifact_path).resolve()
         if root_path not in candidate.parents or not candidate.is_file():
             raise HTTPException(status_code=404, detail="Artifact not found")
         return FileResponse(candidate)
+
+    @app.get("/api/runs/{run_id}/results")
+    async def results(run_id: str, x_forwarded_user: str | None = Header(default=None)):
+        identity(x_forwarded_user)
+        try:
+            return uncertainty_results(run_or_404(run_id))
+        except WebError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/compare")
     async def compare(request: Request, x_forwarded_user: str | None = Header(default=None)):

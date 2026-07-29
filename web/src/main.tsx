@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import "./ncore.css";
+import "./results.css";
 import { SceneViewer } from "./SceneViewer";
 
 type Run = {
@@ -13,6 +14,8 @@ type Run = {
   preset: string;
   start_at: string;
   stop_after: string;
+  workflow?: "pipeline" | "uncertainty_evaluation";
+  experiment_mode?: "default" | "smoke" | null;
   gpu_id?: string;
   error?: string;
   created_at?: string;
@@ -106,6 +109,29 @@ function ProgressPanel({ progress }: { progress?: Progress }) {
   </section>;
 }
 
+function UncertaintyResults({ runId, results }: { runId: string; results: any }) {
+  if (!results) return null;
+  const primary = results.groups?.primary;
+  const metric = (name: string) => primary?.metrics?.[name]?.mean;
+  const observed = primary?.calibration_observed;
+  return <section className="results-panel">
+    <h3>Uncertainty evaluation</h3>
+    {!results.ready ? <p className="muted">The held-out evaluation report is not available yet.</p> : <>
+      <div className="comparison">
+        <article><strong>{metric("PSNR") ?? "—"}</strong><small>Primary PSNR</small></article>
+        <article><strong>{metric("SSIM") ?? "—"}</strong><small>Primary SSIM</small></article>
+        <article><strong>{metric("LPIPS") ?? "—"}</strong><small>Primary LPIPS</small></article>
+        <article><strong>{observed?.mean_normalized_AUSE ?? "—"}</strong><small>Observed AUSE</small></article>
+        <article><strong>{observed?.mean_spearman ?? "—"}</strong><small>Observed Spearman</small></article>
+      </div>
+      <p className="muted">Octree: {results.octree_selection?.profile ?? "—"} / {results.octree_selection?.iteration ?? "—"} · Uncertainty: {results.uncertainty_selection?.profile ?? "—"}</p>
+      <div className="artifacts">{results.report && <a href={`/api/runs/${runId}/artifacts/${results.report}`} target="_blank" rel="noreferrer">Report</a>}{results.export_ready && <a href={`/api/runs/${runId}/artifacts/export/export_manifest.json`} target="_blank" rel="noreferrer">Export manifest</a>}</div>
+      {results.plots?.length > 0 && <div className="result-plots">{results.plots.map((plot: string) => <a key={plot} href={`/api/runs/${runId}/artifacts/${plot}`} target="_blank" rel="noreferrer"><img src={`/api/runs/${runId}/artifacts/${plot}`} alt={plot.split("/").pop()} /></a>)}</div>}
+      {results.renders?.length > 0 && <details><summary>Held-out renders ({results.renders.length})</summary><div className="result-renders">{results.renders.map((image: string) => <a key={image} href={`/api/runs/${runId}/artifacts/${image}`} target="_blank" rel="noreferrer"><img src={`/api/runs/${runId}/artifacts/${image}`} alt={image.split("/").pop()} /></a>)}</div></details>}
+    </>}
+  </section>;
+}
+
 function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: { selected: Run | null; catalogRuns: Run[]; openViewer: (runId: string) => void; onRefresh: () => Promise<void>; onDeleted: () => void }) {
   const [detail, setDetail] = useState<any>(null);
   const [notice, setNotice] = useState("");
@@ -170,7 +196,7 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: 
     {notice && <p className="notice">{notice}</p>}
     {!selected ? <p>Select a run to inspect it.</p> : <>
       <p><code>{selected.id}</code> · {selected.owner}</p>
-      <p>{selected.dataset} / {selected.scene_id} · {selected.start_at} → {selected.stop_after}</p>
+      <p>{selected.dataset} / {selected.scene_id} · {selected.workflow === "uncertainty_evaluation" ? `uncertainty evaluation (${selected.experiment_mode || "default"})` : `${selected.start_at} → ${selected.stop_after}`}</p>
       <ProgressPanel progress={detail?.progress} />
       {selected.error && <p className="error">{selected.error}</p>}
       <div className="actions">
@@ -191,10 +217,11 @@ function RunDetail({ selected, catalogRuns, openViewer, onRefresh, onDeleted }: 
         <strong>{run.id}</strong><small>{run.scene_id} · {run.preset}</small>
         <p>{run.manifest?.points?.num_points ?? "—"} points · {run.manifest?.frame_counts?.num_frames ?? "—"} frames</p>
       </article>)}</section>}
+      {selected.workflow === "uncertainty_evaluation" && <UncertaintyResults runId={selected.id} results={detail?.results} />}
       <h3>Timeline</h3>
       <ul>{detail?.events?.map((event: any) => <li key={event.sequence}><code>{event.type}</code> <small>{event.created_at}</small></li>)}</ul>
       <h3>Artifacts</h3>
-      <div className="artifacts">{detail?.artifacts?.filter((file: string) => /\.(png|jpe?g|json|zip)$/i.test(file)).slice(0, 12).map((file: string) => <a key={file} href={`/api/runs/${selected.id}/artifacts/${file}`} target="_blank" rel="noreferrer">{file}</a>)}</div>
+      <div className="artifacts">{detail?.artifacts?.filter((file: string) => /\.(png|jpe?g|json|zip|md)$/i.test(file)).slice(0, 12).map((file: string) => <a key={file} href={`/api/runs/${selected.id}/artifacts/${file}`} target="_blank" rel="noreferrer">{file}</a>)}</div>
       {selected.status !== "completed" && <><h3>Recent log</h3><Log runId={selected.id} tick={tick} /></>}
     </>}
   </section>;
@@ -311,7 +338,7 @@ function Console({ navigate }: { navigate: Navigate }) {
   const [queueing, setQueueing] = useState(false);
   const queueingRef = useRef(false);
   const refreshVersionRef = useRef(0);
-  const [form, setForm] = useState({ dataset: "kitti360", scene_id: "", preset: "kitti360-dev", start_at: "prepare", stop_after: "bundle", advanced_yaml: "" });
+  const [form, setForm] = useState({ dataset: "kitti360", scene_id: "", preset: "kitti360-dev", workflow: "pipeline", experiment_mode: "default", start_at: "prepare", stop_after: "bundle", advanced_yaml: "" });
   const refresh = async (reportError = true) => {
     const refreshVersion = ++refreshVersionRef.current;
     try {
@@ -366,12 +393,11 @@ function Console({ navigate }: { navigate: Navigate }) {
     {notice && <p className="notice" role="status">{notice}</p>}
     <section className="grid">
       <aside className="card"><h2>New run</h2><form onSubmit={submit} aria-busy={queueing}>
+        <label>Workflow<select value={form.workflow} onChange={event => setForm({ ...form, workflow: event.target.value, start_at: "prepare", stop_after: event.target.value === "uncertainty_evaluation" ? "report" : "bundle", advanced_yaml: "" })}><option value="pipeline">Pipeline development run</option><option value="uncertainty_evaluation">Uncertainty evaluation</option></select></label>
         <label>Dataset<select value={form.dataset} onChange={event => setForm({ ...form, dataset: event.target.value, preset: event.target.value === "nvidia_ncore" ? "ncore-dev" : "kitti360-dev" })}><option value="kitti360">KITTI-360</option><option value="nvidia_ncore">NVIDIA NCore</option></select></label>
         <label>Mounted scene<select required value={form.scene_id} onChange={event => setForm({ ...form, scene_id: event.target.value })}><option value="">Select a discovered scene</option>{scenes.map(scene => <option key={scene.scene_id} value={scene.scene_id}>{scene.scene_id} — {scene.status}</option>)}</select></label>
-        <label>Recipe<select value={form.preset} onChange={event => setForm({ ...form, preset: event.target.value })}>{presets.filter(preset => preset.datasets.includes(form.dataset)).map(preset => <option key={preset.slug} value={preset.slug}>{preset.name}</option>)}</select></label>
-        <div className="two"><label>Start<select value={form.start_at} onChange={event => setForm({ ...form, start_at: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label><label>Stop<select value={form.stop_after} onChange={event => setForm({ ...form, stop_after: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label></div>
-        <label>Advanced safe YAML<textarea placeholder={"train:\n  iterations: 30000"} value={form.advanced_yaml} onChange={event => setForm({ ...form, advanced_yaml: event.target.value })} /></label>
-        <button className="primary" disabled={queueing}>{queueing ? "Queueing run…" : "Queue run"}</button>
+        {form.workflow === "uncertainty_evaluation" ? <><label>Experiment mode<select value={form.experiment_mode} onChange={event => setForm({ ...form, experiment_mode: event.target.value })}><option value="default">Standard — fixed production defaults</option><option value="smoke">Smoke — reduced validation run</option></select></label><p className="muted">This experiment keeps dynamic masking disabled and locks the train/test split. Validation-driven selection remains CLI-only.</p></> : <><label>Recipe<select value={form.preset} onChange={event => setForm({ ...form, preset: event.target.value })}>{presets.filter(preset => preset.datasets.includes(form.dataset)).map(preset => <option key={preset.slug} value={preset.slug}>{preset.name}</option>)}</select></label><div className="two"><label>Start<select value={form.start_at} onChange={event => setForm({ ...form, start_at: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label><label>Stop<select value={form.stop_after} onChange={event => setForm({ ...form, stop_after: event.target.value })}>{stages.map(stage => <option key={stage}>{stage}</option>)}</select></label></div><label>Advanced safe YAML<textarea placeholder={"train:\n  iterations: 30000"} value={form.advanced_yaml} onChange={event => setForm({ ...form, advanced_yaml: event.target.value })} /></label></>}
+        <button className="primary" disabled={queueing}>{queueing ? "Queueing run…" : form.workflow === "uncertainty_evaluation" ? "Queue uncertainty evaluation" : "Queue run"}</button>
       </form>{form.dataset === "nvidia_ncore" && <NCoreDownloads onDatasetRefresh={refreshDatasets} />}{recoverableRuns.length > 0 && <section className="attention"><h2>Needs attention</h2><p className="muted">Stopped runs can be resumed.</p><div className="attention-list">{recoverableRuns.map(run => <button key={run.id} onClick={() => setSelected(run)} className={selected?.id === run.id ? "selected" : ""}>{run.id}<small><span className={`status ${run.status}`}>{run.status}</span> · {run.scene_id}</small></button>)}</div></section>}</aside>
       <section className="card runs"><div className="card-heading"><div><h2>Active queue</h2><p className="muted">Queued and in-progress runs only.</p></div><button onClick={() => void refresh()}>Refresh</button></div><RunTable runs={runs} selected={selected} onSelect={setSelected} empty="No queued or active runs." /></section>
       <RunDetail selected={selected} catalogRuns={[]} openViewer={runId => navigate(`/runs/${encodeURIComponent(runId)}/viewer`)} onRefresh={refresh} onDeleted={() => setSelected(null)} />
