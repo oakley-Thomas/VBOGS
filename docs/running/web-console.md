@@ -59,6 +59,23 @@ Recipes live in `configs/gui/presets/`. They explicitly list the only fields
 accepted from the guided form or advanced YAML panel. Paths, Docker settings,
 and upload/credential settings are never accepted from the browser.
 
+## Uncertainty evaluations
+
+Choose **Uncertainty evaluation** in the new-run form to queue the dedicated
+hash-locked experiment rather than the general pipeline. The guided form only
+accepts a mounted scene and either **Standard** (the fixed production defaults)
+or **Smoke** (the reduced end-to-end configuration); it intentionally does not
+accept advanced YAML, dynamic-masking controls, or validation-driven profile
+selection. Those experiments preserve the train/test split and write their
+canonical report under `outputs/experiments/uncertainty-evaluation/`.
+
+Completed uncertainty evaluations show held-out reconstruction and calibration
+metrics, generated plots, report/export links, and a bounded gallery of test
+renders in the run detail. **View scene** opens the exported splat with its
+per-anchor uncertainty in the shared GPU viewer. Cancellation and resume use
+the experiment's completed-stage markers, and deletion validates then removes
+only that run's GUI workspace, report/work roots, and Octree root.
+
 Each GPU named by `VBOGS_GUI_GPU_IDS` has one FIFO pipeline slot. Runs can be
 cancelled or resumed from a valid later stage; cancellation signals the
 recorded process group of the active stage only, not a shared service

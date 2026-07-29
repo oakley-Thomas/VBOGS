@@ -34,6 +34,8 @@ class RunStore:
                     dataset TEXT NOT NULL,
                     scene_id TEXT NOT NULL,
                     preset TEXT NOT NULL,
+                    workflow TEXT NOT NULL DEFAULT 'pipeline',
+                    experiment_mode TEXT,
                     start_at TEXT NOT NULL,
                     stop_after TEXT NOT NULL,
                     gpu_id TEXT,
@@ -84,6 +86,13 @@ class RunStore:
                 );
                 """
             )
+            run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+            for name, definition in (
+                ("workflow", "TEXT NOT NULL DEFAULT 'pipeline'"),
+                ("experiment_mode", "TEXT"),
+            ):
+                if name not in run_columns:
+                    connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(viewer_state)")}
             for name, definition in (
                 ("status", "TEXT NOT NULL DEFAULT 'idle'"),
@@ -124,12 +133,13 @@ class RunStore:
         with self._transaction() as connection:
             connection.execute(
                 """INSERT INTO runs (
-                    id, owner, status, dataset, scene_id, preset, start_at, stop_after,
+                    id, owner, status, dataset, scene_id, preset, workflow, experiment_mode, start_at, stop_after,
                     gpu_id, created_at, config_path, workspace_path, output_path, command_json
-                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)""",
                 (
                     record["id"], record["owner"], record["dataset"], record["scene_id"],
-                    record["preset"], record["start_at"], record["stop_after"], record["created_at"],
+                    record["preset"], record.get("workflow", "pipeline"), record.get("experiment_mode"),
+                    record["start_at"], record["stop_after"], record["created_at"],
                     record["config_path"], record["workspace_path"], record["output_path"],
                     json.dumps(record["command"]),
                 ),

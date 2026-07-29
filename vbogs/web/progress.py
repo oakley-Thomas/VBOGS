@@ -11,6 +11,9 @@ PIPELINE_STAGES = (
     "dynamic-mask", "prepare", "train", "stereo", "bucket", "fit", "inspect",
     "uncertainty", "map-viz", "render", "nbv", "nbv-viz", "bundle",
 )
+EXPERIMENT_STAGES = (
+    "prepare", "octree-train", "points", "bucket", "uncertainty-fit", "test", "export", "report",
+)
 
 
 def _events(path: Path) -> list[dict[str, Any]]:
@@ -59,12 +62,13 @@ def _training_snapshot(path: Path) -> dict[str, Any] | None:
 
 
 def _fallback_stages(run: dict[str, Any]) -> list[str]:
+    stages = EXPERIMENT_STAGES if run.get("workflow", "pipeline") == "uncertainty_evaluation" else PIPELINE_STAGES
     try:
-        first = PIPELINE_STAGES.index(str(run["start_at"]))
-        last = PIPELINE_STAGES.index(str(run["stop_after"]))
+        first = stages.index(str(run["start_at"]))
+        last = stages.index(str(run["stop_after"]))
     except (KeyError, ValueError):
         return []
-    return list(PIPELINE_STAGES[first : last + 1]) if first <= last else []
+    return list(stages[first : last + 1]) if first <= last else []
 
 
 def project_run_progress(run: dict[str, Any]) -> dict[str, Any]:

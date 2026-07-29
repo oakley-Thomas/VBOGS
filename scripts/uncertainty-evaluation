@@ -27,7 +27,9 @@ from scripts.run_drive_pipeline import (
     JAX_SERVICE,
     TORCH_SERVICE,
     current_container_project,
+    emit_event,
     require_container_runtime,
+    run_command,
     resolve_service_container,
 )
 from vbogs.uncertainty_evaluation import (
@@ -88,6 +90,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-step", type=int, default=None)
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--camera-id", action="append", dest="camera_ids", default=None)
+    parser.add_argument(
+        "--event-log", type=Path, default=None,
+        help="Optional JSONL lifecycle-event path, used by the web scheduler.",
+    )
+    parser.add_argument(
+        "--cancel-file", type=Path, default=None,
+        help="Optional cancellation marker. When present, safely stops the active stage group.",
+    )
     return parser.parse_args()
 
 
@@ -171,10 +181,13 @@ def container_path(path: Path) -> str:
 
 
 class ServiceRunner:
-    def __init__(self, *, dry_run: bool):
+    def __init__(self, *, dry_run: bool, event_log: Path | None = None, cancel_file: Path | None = None):
         self.dry_run = dry_run
         self.project = current_container_project() if not dry_run else ""
         self._containers: dict[str, str] = {}
+        self.event_log = event_log
+        self.cancel_file = cancel_file
+        self.stage: str | None = None
 
     def run(self, service: str, command: Sequence[str]) -> None:
         if self.dry_run:
@@ -185,10 +198,18 @@ class ServiceRunner:
                 container = resolve_service_container(service, project=self.project, dry_run=False)
                 self._containers[service] = container
             prefix = ["docker", "exec", "-i", "-w", "/workspace/VBOGS", container]
-        full = [*prefix, *command]
-        print("+ " + shlex.join(full), flush=True)
-        if not self.dry_run:
-            subprocess.run(full, check=True)
+        full_command: Sequence[str] = command
+        pid_file: Path | None = None
+        if self.cancel_file is not None:
+            stage = self.stage or "stage"
+            pid_file = self.cancel_file.parent / f"experiment-{stage}.pid"
+            full_command = (
+                "python", "scripts/run_pipeline_stage.py", "--pid-file", str(pid_file), "--", *command,
+            )
+        run_command(
+            [*prefix, *full_command], dry_run=self.dry_run, event_log=self.event_log,
+            stage=self.stage, cancel_file=self.cancel_file, pid_file=pid_file, exec_prefix_value=prefix,
+        )
 
 
 class Experiment:
@@ -220,7 +241,9 @@ class Experiment:
             / self.run_id
         )
         self.metadata_path = Path("/data/COLMAP") / args.scene_id / "metadata.json"
-        self.runner = ServiceRunner(dry_run=args.dry_run)
+        self.runner = ServiceRunner(
+            dry_run=args.dry_run, event_log=args.event_log, cancel_file=args.cancel_file,
+        )
         self._octree_index: dict[str, Any] | None = None
         self._selected_octree: dict[str, Any] | None = None
         self._uncertainty_index: dict[str, Any] | None = None
@@ -966,15 +989,26 @@ loading and reads poses and intrinsics from `prepared/sparse/0`. Re-export with
         stop = stages.index(self.args.stop_after)
         if start > stop:
             raise ValueError("--start-at must not come after --stop-after")
-        for stage in stages[start : stop + 1]:
-            if self.args.resume and self.is_complete(stage):
-                print(f"=== {stage}: already complete ===")
-                continue
-            print(f"\n=== {stage} ===", flush=True)
-            self.run_stage(stage)
-            if not self.args.dry_run:
-                self.mark(stage)
-        print(f"\nExperiment root: {self.root}")
+        selected_stages = stages[start : stop + 1]
+        emit_event(self.args.event_log, "run_started", dataset=self.args.dataset_name, scene=self.args.scene_id, stages=selected_stages)
+        try:
+            for stage in selected_stages:
+                if self.args.resume and self.is_complete(stage):
+                    print(f"=== {stage}: already complete ===")
+                    emit_event(self.args.event_log, "stage_completed", stage=stage, resumed=True)
+                    continue
+                print(f"\n=== {stage} ===", flush=True)
+                self.runner.stage = stage
+                emit_event(self.args.event_log, "stage_started", stage=stage)
+                self.run_stage(stage)
+                if not self.args.dry_run:
+                    self.mark(stage)
+                emit_event(self.args.event_log, "stage_completed", stage=stage)
+            print(f"\nExperiment root: {self.root}")
+            emit_event(self.args.event_log, "run_completed")
+        except Exception as exc:
+            emit_event(self.args.event_log, "run_failed", error=str(exc))
+            raise
 
 
 def main() -> None:
