@@ -90,10 +90,7 @@ services:
     command: sleep infinity
 
   vbogs-sfm:
-    image: ${VBOGS_SFM_IMAGE:-local/vbogs-sfm}
-    build:
-      context: .
-      dockerfile: docker/sfm.Dockerfile
+    image: ${VBOGS_SFM_IMAGE:-oakleyth/vbogs-sfm:latest}
     working_dir: /workspace/VBOGS
     stdin_open: true
     tty: true
