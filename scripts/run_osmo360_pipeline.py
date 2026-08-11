@@ -190,9 +190,14 @@ def run_sfm(args: argparse.Namespace, artifacts: Path, sfm_container: str) -> No
     database = workspace / "database.db"
     sparse = workspace / "sparse"
     workspace.mkdir(parents=True, exist_ok=True)
+    # COLMAP 4 requires the mapper's output root to exist.  It creates the
+    # numbered model subdirectory beneath it, which `largest_model` selects.
+    sparse.mkdir(parents=True, exist_ok=True)
     common = ["--database_path", str(database), "--image_path", str(images)]
-    checked(container_command(sfm_container, ["colmap", "feature_extractor", *common, "--ImageReader.single_camera_per_folder", "1", "--SiftExtraction.use_gpu", "1"], gpu=args.gpu), dry_run=args.dry_run)
-    checked(container_command(sfm_container, ["colmap", "sequential_matcher", "--database_path", str(database), "--SequentialMatching.overlap", "6", "--SequentialMatching.loop_detection", "1", "--SiftMatching.use_gpu", "1"], gpu=args.gpu), dry_run=args.dry_run)
+    # COLMAP 4 moved GPU controls to the generic feature-extraction and
+    # feature-matching option groups.
+    checked(container_command(sfm_container, ["colmap", "feature_extractor", *common, "--ImageReader.single_camera_per_folder", "1", "--FeatureExtraction.use_gpu", "1"], gpu=args.gpu), dry_run=args.dry_run)
+    checked(container_command(sfm_container, ["colmap", "sequential_matcher", "--database_path", str(database), "--SequentialMatching.overlap", "6", "--SequentialMatching.loop_detection", "1", "--FeatureMatching.use_gpu", "1"], gpu=args.gpu), dry_run=args.dry_run)
     checked(container_command(sfm_container, ["colmap", "mapper", *common, "--output_path", str(sparse)], gpu=args.gpu), dry_run=args.dry_run)
     selected = largest_model(sparse) if not args.dry_run else sparse / "0"
     text_model = workspace / "model_txt"
