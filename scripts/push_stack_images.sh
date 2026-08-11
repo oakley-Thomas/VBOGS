@@ -12,6 +12,7 @@ Tag and push the VBOGS images produced by:
 The destination image tags are:
   DOCKERHUB_USERNAME/vbogs-torch:VERSION
   DOCKERHUB_USERNAME/vbogs-jax:VERSION
+  DOCKERHUB_USERNAME/vbogs-sfm:VERSION
   DOCKERHUB_USERNAME/vbogs-vbgs-render:VERSION
   DOCKERHUB_USERNAME/vbogs-pipeline:VERSION
   DOCKERHUB_USERNAME/vbogs-web:VERSION
@@ -19,6 +20,7 @@ The destination image tags are:
 Services:
   vbogs-torch
   vbogs-jax
+  vbogs-sfm
   vbogs-vbgs-render
   vbogs-pipeline
   vbogs-web

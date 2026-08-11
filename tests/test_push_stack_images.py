@@ -43,10 +43,12 @@ def run_push_script(
         "VBOGS_IMAGE_TAG",
         "VBOGS_LOCAL_TORCH_IMAGE",
         "VBOGS_LOCAL_JAX_IMAGE",
+        "VBOGS_LOCAL_SFM_IMAGE",
         "VBOGS_LOCAL_VBGS_RENDER_IMAGE",
         "VBOGS_LOCAL_PIPELINE_IMAGE",
         "VBOGS_TORCH_PUSH_IMAGE",
         "VBOGS_JAX_PUSH_IMAGE",
+        "VBOGS_SFM_PUSH_IMAGE",
         "VBOGS_VBGS_RENDER_PUSH_IMAGE",
         "VBOGS_PIPELINE_PUSH_IMAGE",
     ):
@@ -71,10 +73,12 @@ def test_push_script_tags_and_pushes_default_stack(tmp_path: Path):
     assert "Retag and push complete." in completed.stdout
     assert "tag local/vbogs-torch acme/vbogs-torch:v2.0.0" in log_lines
     assert "tag local/vbogs-jax acme/vbogs-jax:v2.0.0" in log_lines
+    assert "tag local/vbogs-sfm acme/vbogs-sfm:v2.0.0" in log_lines
     assert "tag local/vbogs-vbgs-render acme/vbogs-vbgs-render:v2.0.0" in log_lines
     assert "tag local/vbogs-pipeline acme/vbogs-pipeline:v2.0.0" in log_lines
     assert "push acme/vbogs-torch:v2.0.0" in log_lines
     assert "push acme/vbogs-jax:v2.0.0" in log_lines
+    assert "push acme/vbogs-sfm:v2.0.0" in log_lines
     assert "push acme/vbogs-vbgs-render:v2.0.0" in log_lines
     assert "push acme/vbogs-pipeline:v2.0.0" in log_lines
 
